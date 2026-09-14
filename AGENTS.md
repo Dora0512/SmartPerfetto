@@ -28,10 +28,10 @@ other agent adapters should point here without duplicating the rules.
   and existing tests. Scripts, configuration, probes, and current runtime
   evidence establish project facts; documentation records intended contracts.
   Resolve discrepancies explicitly rather than treating old reports as live proof.
-- For non-trivial or history-dependent work, search available memory/history
-  first. If memory MCP is unavailable or unhelpful, use read-only local Codex
-  summaries, then thread records and their rollouts. Reuse relevant prior work
-  after checking current truth; clarify whether to extend or re-review only
+- When the task depends on prior decisions or results, search available
+  memory/history. Stop when enough relevant context is found; consult local
+  summaries or rollouts only to resolve a remaining historical question. Reuse
+  prior work after checking current truth; clarify whether to extend or re-review only
   when the current request leaves that choice unresolved.
 - Read Skills and detailed rules relevant to the task. If a rule or Skill causes
   a pause, cite the exact file and instruction and explain the unresolved need;
@@ -50,11 +50,11 @@ other agent adapters should point here without duplicating the rules.
   concrete and reviewable. Do not repeatedly request existing authorization
   or add approval steps for hypothetical risks; actual scope and permission
   boundaries still apply.
-- Clarify unresolved material goals, design choices, scope, or acceptance
-  criteria using the required `grilling` flow: establish facts yourself, ask
-  one decision at a time with a recommendation, then confirm the agreed scope.
-  Honor an explicit request to skip it. Settled requirements, status queries,
-  and small self-contained edits do not need another clarification round.
+- Ask one focused question only when an unresolved decision materially affects
+  the goal, scope, acceptance criteria, or an irreversible action. Establish
+  facts yourself and decide routine reversible details within the authorized
+  scope. Use the full `grilling` flow only when explicitly requested. Existing
+  authorization does not need another final confirmation.
 - For non-trivial changes, state the touched files, change order, dependencies,
   and risks; apply the independent review gate below, then Execute -> Verify ->
   Revise. Review architecture and affected contracts, not just the local diff.
@@ -147,9 +147,9 @@ cd backend && npm run build
   bundled runtimes/native modules, signing, and notarization changes as
   portable-impacting work; follow the PR and release gates in
   `.claude/rules/testing.md` and `.claude/rules/release.md`.
-- For non-trivial feature or bug work, use `gitnexus-impact-analysis` during
-  planning and run GitNexus change detection before commit. Follow
-  `.claude/rules/git.md` and cross-check graph results against source and tests.
+- Use GitNexus impact analysis and pre-commit change detection for the changes
+  defined in `.claude/rules/git.md`; cross-check graph results against source
+  and tests.
 - Before syncing, rebasing, merging, or upgrading official Perfetto code,
   trace processor prebuilts, SQL docs, stdlib indexes, or committed Perfetto UI
   prebuilds, read `.claude/rules/perfetto-sync.md`.
@@ -159,8 +159,10 @@ cd backend && npm run build
 
 ## Independent Review Gate
 
-For non-trivial tasks such as multi-file edits, architecture changes, or complex
-logic, use Plan -> independent read-only review -> Revise -> Execute.
+Use Plan -> independent read-only review -> Revise -> Execute for changes with
+material architecture, security, release, shared-state, or public-contract risk.
+File count alone does not trigger this gate. For other non-trivial work, state
+a concise plan and review the resulting diff; delegate only when useful.
 
 - If the primary agent is not Codex and a Codex review tool is available, prefer
   Codex read-only review.
@@ -168,9 +170,11 @@ logic, use Plan -> independent read-only review -> Revise -> Execute.
   read-only reviewer sub-agent/tool.
 - Use review tools actually available in the current environment; do not assume
   a particular model, plugin, machine path, or tool schema.
-- If no stable reviewer is available, or the reviewer times out twice, use a
-  structured self-review plus post-diff review, note the fallback, and rely on
+- If no stable reviewer is available, use structured self-review plus post-diff
+  review, note the fallback, and rely on
   the relevant verification tier from `.claude/rules/testing.md`.
+- Retry a reviewer only when evidence suggests a transient failure; do not
+  wait for repeated timeouts solely to qualify for the fallback.
 - Reviewers must not edit files.
 - When delegation or parallel work can help a non-trivial task, read
   `.claude/rules/agent-orchestration.md`; it extends this gate without
@@ -195,47 +199,23 @@ Read the relevant detailed rule before touching that area:
 Run the smallest verification tier that proves the change. Before opening or
 landing a PR, run `npm run verify:pr` from the repository root.
 
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+## GitNexus navigation
 
-This project is indexed by GitNexus as **SmartPerfetto** (52880 symbols, 160116 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+Use `.claude/rules/git.md` for impact-analysis scope, safe index refresh,
+pre-commit checks, and unavailable-tool fallback. Keep that policy in one place;
+do not restore generic generated `Always Do` / `Never Do` boilerplate here.
+Index maintenance uses `--index-only` to preserve this authored guide.
 
-> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+For a relevant dependency question, use `impact` or `context`; use `query` for
+an unfamiliar execution flow and `rg` for exact text or paths. Read only the
+resources needed to resolve the question. Tool output is evidence to cross-check,
+not a substitute for source or proof of a regression.
 
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit changes without running `detect_changes()` to check affected scope.
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/SmartPerfetto/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/SmartPerfetto/clusters` | All functional areas |
-| `gitnexus://repo/SmartPerfetto/processes` | All execution flows |
-| `gitnexus://repo/SmartPerfetto/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-
-<!-- gitnexus:end -->
+| Task | Skill |
+| --- | --- |
+| Understand execution flows | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Assess dependencies | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace a bug across modules | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename or restructure shared code | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tool schemas and resources | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index maintenance | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |

@@ -7,15 +7,17 @@ description: "Use when the user asks about GitNexus itself — available tools, 
 
 Quick reference for all GitNexus MCP tools, resources, and the knowledge graph schema.
 
-## Always Start Here
+## On-demand navigation
 
-For any task involving code understanding, debugging, impact analysis, or refactoring:
+Use this reference for the tool or schema question at hand. Follow the current
+project's scope rules; reading this guide does not require running a workflow.
+Read repository context only when its coverage or execution flows matter, and
+load a companion skill only if the task needs that workflow. Known paths and
+exact strings can be inspected directly.
 
-1. **Read `gitnexus://repo/{name}/context`** — codebase overview + check index freshness
-2. **Match your task to a skill below** and **read that skill file**
-3. **Follow the skill's workflow and checklist**
-
-> If step 1 warns the index is stale, run `node .gitnexus/run.cjs analyze` in the terminal first.
+Refresh only when missing or stale coverage prevents the needed analysis, using
+`node .gitnexus/run.cjs analyze --index-only`. If no usable graph is available,
+continue with scoped source and reference searches and report material gaps.
 
 ## Skills
 
@@ -34,13 +36,13 @@ For any task involving code understanding, debugging, impact analysis, or refact
 | ---------------- | ------------------------------------------------------------------------ |
 | `query`          | Process-grouped code intelligence — execution flows related to a concept |
 | `context`        | 360-degree symbol view — categorized refs, processes it participates in  |
-| `impact`         | Symbol blast radius — what breaks at depth 1/2/3 with confidence         |
+| `impact`         | Upstream dependencies at depth 1/2/3; verify compatibility         |
 | `trace`          | Shortest path between two symbols — "how does A reach B?" in one call     |
 | `detect_changes` | Git-diff impact — what do your current changes affect                    |
 | `rename`         | Multi-file coordinated rename with confidence-tagged edits               |
 | `cypher`         | Raw graph queries (read `gitnexus://repo/{name}/schema` first)           |
-| `explain`        | Persisted taint findings — source→sink data flows (needs `analyze --pdg`) |
-| `pdg_query`      | Control/data dependence — what gates X (CDG) / where Y flows (REACHING_DEF); needs `analyze --pdg` |
+| `explain`        | Persisted taint findings — source→sink data flows (needs `analyze --index-only --pdg`) |
+| `pdg_query`      | Control/data dependence — what gates X (CDG) / where Y flows (REACHING_DEF); needs `analyze --index-only --pdg` |
 | `check`          | Check graph invariants such as circular imports                          |
 | `route_map`      | API route map — which components/hooks fetch which endpoints, and the handler files that serve them |
 | `shape_check`    | Response-shape drift — keys each route returns vs keys its consumers access (flags MISMATCH) |
@@ -83,7 +85,7 @@ Notes: `offset` ≥ `total` returns an empty page (with `total` still reported).
 
 ### Taint findings (`explain`)
 
-`explain` returns taint findings recorded by `gitnexus analyze --pdg` — intra-procedural `TAINTED` edges plus cross-function `TAINT_PATH` hops where the interprocedural taint phase found a function-level source→sink chain. Each finding includes a sink category (command-injection, code-injection, path-traversal, sql-injection, xss), source/sink lines, and the ordered hop path with the variable carried on each hop.
+`explain` returns taint findings recorded by `gitnexus analyze --index-only --pdg` — intra-procedural `TAINTED` edges plus cross-function `TAINT_PATH` hops where the interprocedural taint phase found a function-level source→sink chain. Each finding includes a sink category (command-injection, code-injection, path-traversal, sql-injection, xss), source/sink lines, and the ordered hop path with the variable carried on each hop.
 
 - `explain {}` — enumerate all findings for the repo (bounded by `limit`, deterministic order)
 - `explain { target: "src/vuln.ts" }` — findings in a file (suffix path match accepted)
@@ -93,7 +95,7 @@ A repo indexed without `--pdg` returns a clear "no taint layer" note. Caveats: c
 
 ### Control & data dependence (`pdg_query`)
 
-`pdg_query` reads the control/data-dependence layers `gitnexus analyze --pdg` records (CDG + REACHING_DEF, basic-block granular) — the control/data analog of `explain`. It is **always anchored** (a `target` file path or symbol, resolved like `context`) and has two modes:
+`pdg_query` reads the control/data-dependence layers `gitnexus analyze --index-only --pdg` records (CDG + REACHING_DEF, basic-block granular) — the control/data analog of `explain`. It is **always anchored** (a `target` file path or symbol, resolved like `context`) and has two modes:
 
 - `pdg_query { mode: "controls", target: "..." }` — CDG: "under what condition does X run?". Each edge is a controlling predicate block → dependent block with the branch sense (`'T'`/`'F'`) in `reason`; an edge into an early `return`/`throw` is flagged `guard: true` (guard-clause discovery — the sense depends on the predicate, so don't filter guards by a fixed label).
 - `pdg_query { mode: "flows", target: "...", variable?: "..." }` — REACHING_DEF def→use edges within the function; pass `variable` to trace one binding.

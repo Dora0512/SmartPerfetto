@@ -47,13 +47,19 @@ an unregistered suite never runs in `verify:pr`.
 When adding a test file, register it in the matching `test:*` script in the same
 change, and make sure that script is reachable from `test:gate`. For a new
 subsystem, add a directory-scoped `test:<subsystem>` script and wire it into
-`test:gate` rather than listing files one by one. Verify with:
+`test:gate` rather than listing files one by one. During development, verify
+registration from the repository root:
 
 ```bash
-cd backend && npm run test:gate
+npm run check:test-registration
 ```
 
-A suite that is green locally but absent from `test:gate` counts as untested.
+Then run the owning `test:*` entrypoint for the new or changed suite. Keep the
+full `npm run verify:pr` gate before opening or landing a PR; reuse its passing
+result only under the unchanged-evidence conditions above.
+
+A suite that is green locally but absent from `test:gate` remains unguarded by
+the project gate and cannot satisfy integration acceptance.
 
 Asking people to remember this did not work: when the rule was first written,
 237 of 573 backend suites — 41% — were unreachable from any `test:*`/`verify:*`

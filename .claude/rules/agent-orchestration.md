@@ -39,7 +39,8 @@ repository authority model.
 
 ## Gates
 
-Before executing non-trivial work, follow the repository gate:
+Before executing work that meets the risk-based independent review gate in
+`AGENTS.md`, follow these steps:
 
 1. Plan the change, including touched files, order, dependencies, and risks.
 2. Obtain an independent read-only review of the plan when a stable reviewer is
@@ -47,19 +48,22 @@ Before executing non-trivial work, follow the repository gate:
 3. Revise the plan based on valid findings.
 4. Execute within the accepted scope.
 
-Simple tasks may skip this gate. If risk increases, pause implementation long
-enough to run the gate from the new risk level.
+Other tasks may use a concise plan and self-review. If newly discovered risk
+meets the gate, review that decision before the dependent implementation.
 
-After implementation, run a fresh read-only final review for multi-agent
-implementation, code or runtime changes, security-sensitive work, release or
-packaging changes, public contracts, or any other non-trivial high-risk diff.
+After implementation, run a fresh read-only final review for security-sensitive
+work, release or packaging changes, material public-contract or shared-state
+changes, or a high-risk combined diff from multiple agents.
 The final review must be fresh: it cannot reuse a pre-implementation verdict.
-Any later fix invalidates the old final verdict and requires a new review when
-the risk class still applies.
+Later fixes require review of the changed portions and affected conclusions
+when the risk class still applies. Preserve findings supported by unchanged
+evidence; reopen the full review only if the fix changes its underlying scope
+or assumptions.
 
-If an independent reviewer times out twice or no stable reviewer exists, use the
-fallback in `AGENTS.md`: structured self-review plus post-diff review. Record
-that fallback plainly; do not call it a successful independent review.
+If no stable reviewer exists, use the fallback in `AGENTS.md`: structured
+self-review plus post-diff review. Retry only a plausibly transient failure;
+repeated timeouts are not a prerequisite. Record the fallback plainly; do not
+call it a successful independent review.
 
 ## Baseline and Dirty Tree
 
@@ -76,8 +80,8 @@ not revert, format, stage, or rewrite them.
 
 At handoff and acceptance, recheck overlap against the live worktree. Stage only
 the files owned by the current task. Run GitNexus `detect_changes` with staged
-scope when code is changed. Use whole-tree or all-scope checks only when the
-entire dirty tree is explicitly part of the task.
+scope when the change meets `.claude/rules/git.md`. Use whole-tree or all-scope
+checks only when the entire dirty tree is explicitly part of the task.
 
 ## Task Packet
 
@@ -134,8 +138,8 @@ Send fixes back to the original worker when its ownership and context are still
 valid. If ownership changed, context expired, or the fix crosses boundaries, the
 primary agent must reassign explicitly or repair directly within its authority.
 
-Any correction after a final review invalidates that review verdict. Rerun the
-final review when the remaining diff still meets the review gate.
+After a correction, re-review the changed portions and affected conclusions
+under the Gates section; a correction alone does not require full re-review.
 
 ## Reviewer Contract
 

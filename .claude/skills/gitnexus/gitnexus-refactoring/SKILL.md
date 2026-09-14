@@ -13,7 +13,12 @@ description: "Use when the user wants to rename, extract, split, move, or restru
 - "Move this to a new file"
 - Any task involving renaming, extracting, splitting, or restructuring code
 
-## Workflow
+Follow project scope rules. Use only the steps needed for the current question;
+known paths and exact text can be read or searched directly. Reuse current
+context and stop when the relevant source and dependencies answer the question.
+If graph tools are unavailable, use scoped source and reference searches.
+
+## Suggested workflow
 
 ```
 1. impact({target: "X", direction: "upstream"})  → Map all dependents
@@ -22,7 +27,7 @@ description: "Use when the user wants to rename, extract, split, move, or restru
 4. Plan update order: interfaces → implementations → callers → tests
 ```
 
-> If "Index is stale" → run `node .gitnexus/run.cjs analyze` in terminal.
+> Refresh with `node .gitnexus/run.cjs analyze --index-only` only if stale coverage prevents the needed analysis; otherwise use the relevant source directly.
 
 ## Checklists
 
@@ -81,7 +86,7 @@ impact({target: "validateUser", direction: "upstream"})
 **detect_changes** — verify your changes after refactoring:
 
 ```
-detect_changes({scope: "all"})
+detect_changes({scope: "staged"})
 → Changed: 8 files, 12 symbols
 → Affected processes: LoginFlow, TokenRefresh
 → Risk: MEDIUM
@@ -115,7 +120,7 @@ RETURN caller.name, caller.filePath ORDER BY caller.filePath
 3. rename({symbol_name: "validateUser", new_name: "authenticateUser", dry_run: false})
    → Applied 12 edits across 8 files
 
-4. detect_changes({scope: "all"})
+4. detect_changes({scope: "staged"})
    → Affected: LoginFlow, TokenRefresh
    → Risk: MEDIUM — run tests for these flows
 ```

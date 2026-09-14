@@ -27,25 +27,37 @@ Never push SmartPerfetto submodule changes to upstream `origin`.
 ## GitNexus Impact Analysis
 
 Treat GitNexus as an architecture and change-impact radar, not as the source of
-truth. Use the `gitnexus-impact-analysis` Skill for non-trivial feature, bug,
-shared-service, cross-runtime, schema, provider, session, report, Skill,
-Strategy, and AI Assistant UI work.
+truth. Use the `gitnexus-impact-analysis` Skill for changes to shared behavior,
+dependencies, module boundaries, schemas, or public contracts, and when a
+non-trivial bug's impact is uncertain. This includes relevant runtime, provider,
+session, report, Skill/Strategy, and AI Assistant UI changes. Docs, comments,
+and small local edits that preserve behavior and dependencies do not need a
+graph query or refresh merely because a symbol is touched.
 
 During planning:
 
-1. Check `gitnexus status`. If the index is missing or stale, run
+1. Check `gitnexus status` when graph analysis is needed. If its relevant
+   coverage is missing or stale, run
    `gitnexus analyze --index-only --default-branch main`. Do not run
    `gitnexus setup` or allow analysis to rewrite agent files or install Skills.
-2. Run upstream impact analysis for the key symbol with depth 3, tests included,
-   and confidence 0.8 or higher. Review direct dependants first, then affected
+2. Run upstream impact analysis for the key changed symbol with depth 3, tests
+   included, and confidence 0.8 or higher. Review direct dependants first, then affected
    processes and modules.
 3. Cross-check the graph with `rg`, the relevant source, existing tests, and the
    product surfaces in `.claude/rules/product-surface.md`.
 
-Before commit, stage only the task-owned files and run GitNexus change detection
-with `scope: staged`. Use `scope: all` only when the whole dirty worktree is
+Before committing a change in this scope, stage only the task-owned files and
+run GitNexus change detection with `scope: staged`. Use `scope: all` only when the whole dirty worktree is
 intentionally in scope. Review affected processes and high-risk symbols, then
-run the verification tier from `.claude/rules/testing.md`.
+run the verification tier from `.claude/rules/testing.md`. A direct dependency
+is a compatibility question, not proof that the caller breaks. Report HIGH or
+CRITICAL graph results and verify the relevant behavior before editing.
+
+If GitNexus is unavailable, cannot index the affected surface, or still fails
+after a justified refresh, inspect direct references, source, and affected tests
+instead. Report the gap and residual uncertainty; do not turn this task into an
+index repair or installation project. Unresolved material impact still requires
+investigation or a focused question before the dependent change.
 
 Prefer the GitNexus MCP `impact` and `detect_changes` tools. If MCP is not
 available, use:

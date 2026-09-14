@@ -13,7 +13,12 @@ description: "Use when the user asks how code works, wants to understand archite
 - "Where is the database logic?"
 - Understanding code you haven't seen before
 
-## Workflow
+Follow project scope rules. Use only the steps needed for the current question;
+known paths and exact text can be read or searched directly. Reuse current
+context and stop when the relevant source and dependencies answer the question.
+If graph tools are unavailable, use scoped source and reference searches.
+
+## Suggested workflow
 
 ```
 1. READ gitnexus://repos                          → Discover indexed repos
@@ -23,7 +28,7 @@ description: "Use when the user asks how code works, wants to understand archite
 5. READ gitnexus://repo/{name}/process/{name}      → Trace full execution flow
 ```
 
-> If step 2 says "Index is stale" → run `node .gitnexus/run.cjs analyze` in terminal.
+> Refresh with `node .gitnexus/run.cjs analyze --index-only` only if stale coverage prevents the needed analysis; otherwise use the relevant source directly.
 
 ## Checklist
 

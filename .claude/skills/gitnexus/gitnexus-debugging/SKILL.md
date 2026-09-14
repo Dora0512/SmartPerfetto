@@ -13,7 +13,12 @@ description: "Use when the user is debugging a bug, tracing an error, or asking 
 - "This endpoint returns 500"
 - Investigating bugs, errors, or unexpected behavior
 
-## Workflow
+Follow project scope rules. Use only the steps needed for the current question;
+known paths and exact text can be read or searched directly. Reuse current
+context and stop when the relevant source and dependencies answer the question.
+If graph tools are unavailable, use scoped source and reference searches.
+
+## Suggested workflow
 
 ```
 1. query({search_query: "<error or symptom>"})            → Find related execution flows
@@ -22,7 +27,7 @@ description: "Use when the user is debugging a bug, tracing an error, or asking 
 4. cypher({statement: "MATCH path..."})                 → Custom traces if needed
 ```
 
-> If "Index is stale" → run `node .gitnexus/run.cjs analyze` in terminal.
+> Refresh with `node .gitnexus/run.cjs analyze --index-only` only if stale coverage prevents the needed analysis; otherwise use the relevant source directly.
 
 ## Checklist
 

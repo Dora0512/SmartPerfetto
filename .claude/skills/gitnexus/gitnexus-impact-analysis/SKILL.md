@@ -1,97 +1,40 @@
 ---
 name: gitnexus-impact-analysis
-description: "Use when the user wants to know what will break if they change something, or needs safety analysis before editing code. Examples: \"Is it safe to change X?\", \"What depends on this?\", \"What will break?\""
+description: Check dependency and execution-flow impact for shared behavior, interface changes, or an explicit impact-analysis request.
 ---
 
-# Impact Analysis with GitNexus
+# Impact analysis with GitNexus
 
-## When to Use
+Follow the current project's scope and verification rules. Use graph analysis
+for shared behavior, dependency, interface, or module-boundary changes, or an
+uncertain cross-module bug. Docs, comments, and small local edits preserving
+behavior and dependencies do not need graph analysis merely because a symbol
+is touched.
 
-- "Is it safe to change this function?"
-- "What will break if I modify X?"
-- "Show me the blast radius"
-- "Who uses this code?"
-- Before making non-trivial code changes
-- Before committing — to understand what your changes affect
+Use `impact` on the key changed symbol to find upstream dependencies. Review
+direct callers first and read relevant source to determine compatibility:
 
-## Workflow
-
-```
-1. impact({target: "X", direction: "upstream"})  → What depends on this
-2. READ gitnexus://repo/{name}/processes                   → Check affected execution flows
-3. detect_changes()                               → Map current git changes to affected flows
-4. Assess risk and report to user
+```text
+impact({target: "symbolName", direction: "upstream", minConfidence: 0.8, maxDepth: 3})
 ```
 
-> If "Index is stale" → run `node .gitnexus/run.cjs analyze` in terminal.
+A direct dependency is not proof of breakage. Judge risk by the actual behavior
+and contracts changed, not a fixed symbol count. Report HIGH or CRITICAL graph
+results and cross-check them before the dependent edit; do not dismiss a risk
+that remains unexplained.
 
-## Checklist
+Read a specific affected process or use `context` only when its call chain
+resolves a remaining question. Do not load every process by default. Before
+committing changes in this scope, inspect task-owned staged changes:
 
-```
-- [ ] impact({target, direction: "upstream"}) to find dependents
-- [ ] Review d=1 items first (these WILL BREAK)
-- [ ] Check high-confidence (>0.8) dependencies
-- [ ] READ processes to check affected execution flows
-- [ ] detect_changes() for pre-commit check
-- [ ] Assess risk level and report to user
-```
-
-## Understanding Output
-
-| Depth | Risk Level       | Meaning                  |
-| ----- | ---------------- | ------------------------ |
-| d=1   | **WILL BREAK**   | Direct callers/importers |
-| d=2   | LIKELY AFFECTED  | Indirect dependencies    |
-| d=3   | MAY NEED TESTING | Transitive effects       |
-
-## Risk Assessment
-
-| Affected                       | Risk     |
-| ------------------------------ | -------- |
-| <5 symbols, few processes      | LOW      |
-| 5-15 symbols, 2-5 processes    | MEDIUM   |
-| >15 symbols or many processes  | HIGH     |
-| Critical path (auth, payments) | CRITICAL |
-
-## Tools
-
-**impact** — the primary tool for symbol blast radius:
-
-```
-impact({
-  target: "validateUser",
-  direction: "upstream",
-  minConfidence: 0.8,
-  maxDepth: 3
-})
-
-→ d=1 (WILL BREAK):
-  - loginHandler (src/auth/login.ts:42) [CALLS, 100%]
-  - apiMiddleware (src/api/middleware.ts:15) [CALLS, 100%]
-
-→ d=2 (LIKELY AFFECTED):
-  - authRouter (src/routes/auth.ts:22) [CALLS, 95%]
-```
-
-**detect_changes** — git-diff based impact analysis:
-
-```
+```text
 detect_changes({scope: "staged"})
-
-→ Changed: 5 symbols in 3 files
-→ Affected: LoginFlow, TokenRefresh, APIMiddlewarePipeline
-→ Risk: MEDIUM
 ```
 
-## Example: "What breaks if I change validateUser?"
-
-```
-1. impact({target: "validateUser", direction: "upstream"})
-   → d=1: loginHandler, apiMiddleware (WILL BREAK)
-   → d=2: authRouter, sessionManager (LIKELY AFFECTED)
-
-2. READ gitnexus://repo/my-app/processes
-   → LoginFlow and TokenRefresh touch validateUser
-
-3. Risk: 2 direct callers, 2 processes = MEDIUM
-```
+Preserve unrelated dirty changes. Reuse relevant graph results when the source
+and index have not changed. Refresh an index only when its missing or stale
+coverage matters, using the project's runner with `analyze --index-only` so
+maintained agent instructions are preserved. Do not run setup as a prerequisite.
+If the graph is unavailable or remains unreliable after a justified refresh,
+use direct references, source and affected tests; report uncertainty and resolve
+material impact before proceeding. Stop once the task's impact is understood.

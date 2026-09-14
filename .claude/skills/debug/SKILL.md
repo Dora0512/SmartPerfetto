@@ -1,6 +1,12 @@
-# Debug Skill
+---
+name: debug
+description: Diagnose generated-file failures and fix their maintained source.
+---
 
-1. First check if the failing file is auto-generated (look for generation headers)
-2. If generated, find and fix the generator script instead
-3. Run build to verify fix
-4. Check for similar issues in related files
+# Debug generated files
+
+Check whether the failing file is generated. If so, fix its generator or template
+and regenerate the affected output. Otherwise, diagnose the source directly.
+
+Use the smallest applicable verification tier in the current project's rules.
+Check related files only when the established root cause could affect them.
