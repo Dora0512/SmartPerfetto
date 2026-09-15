@@ -314,11 +314,13 @@ async function main() {
   assert.equal(reportJson.claimVerificationResult.schemaVersion, 'claim_verifier@1');
   assert(Array.isArray(reportJson.identityResolutions), 'report json should include identityResolutions sidecar');
 
-    const reportMdPath = path.join(outputDir, 'report.md');
-    runCli('report export md', ['report', 'export', sessionId, '--format', 'md', '--out', reportMdPath]);
-    const reportMd = fs.readFileSync(reportMdPath, 'utf-8');
-    assert.match(reportMd, /SmartPerfetto CLI Report/);
-    assert.match(reportMd, /## Claim Verification/);
+  const reportMdPath = path.join(outputDir, 'report.md');
+  runCli('report export md', ['report', 'export', sessionId, '--format', 'md', '--out', reportMdPath]);
+  const reportMd = fs.readFileSync(reportMdPath, 'utf-8');
+  assert.match(reportMd, /SmartPerfetto CLI Report/);
+  // Latest evidence renders with the latest conclusion; earlier turns render their own once.
+  assert.equal(reportMd.match(/^## (?:Evidence details|证据详情)$/gm)?.length, reportJson.config.turnCount);
+  assert.match(reportMd, /^### (?:Claim verification|声明核验)$/m);
 
   const reportHtmlPath = path.join(outputDir, 'report.html');
   runCli('report export html', ['report', 'export', sessionId, '--format', 'html', '--out', reportHtmlPath]);
@@ -339,7 +341,8 @@ async function main() {
     runCli('report export turn md', ['report', 'export', sessionId, '--turn', '1', '--format', 'md', '--out', turnReportMdPath]);
     const turnReportMd = fs.readFileSync(turnReportMdPath, 'utf-8');
     assert.match(turnReportMd, /SmartPerfetto CLI Turn Report/);
-    assert.match(turnReportMd, /## Claim Verification/);
+    assert.equal(turnReportMd.match(/^## (?:Evidence details|证据详情)$/gm)?.length, 1);
+    assert.match(turnReportMd, /^### (?:Claim verification|声明核验)$/m);
 
   const refTracePath = path.join(workRoot, 'reference.perfetto-trace');
   fs.copyFileSync(tracePath, refTracePath);
