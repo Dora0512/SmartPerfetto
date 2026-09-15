@@ -295,6 +295,9 @@ jobs:
             ['smartperfetto', ['--help']],
             ['smp', ['doctor', '--format', 'json']],
           ];
+          // Without credentials doctor reports the unconfigured AI runtime and
+          // exits 1; package health is asserted from its JSON report below.
+          const reportsFailureAsData = new Set(['smp:doctor --format json']);
           const outputs = new Map();
           for (const [binName, args] of commands) {
             const relativeBin = packageJson.bin[binName];
@@ -306,18 +309,52 @@ jobs:
               [join(packageRoot, relativeBin), ...args],
               {cwd: installRoot, encoding: 'utf8', env: process.env},
             );
-            if (result.status !== 0) {
+            const key = `${binName}:${args.join(' ')}`;
+            const allowedStatuses = reportsFailureAsData.has(key) ? [0, 1] : [0];
+            if (!allowedStatuses.includes(result.status)) {
               process.stderr.write(result.stderr);
               throw new Error(`${binName} ${args.join(' ')} failed`);
             }
-            outputs.set(`${binName}:${args.join(' ')}`, result.stdout);
+            outputs.set(key, {status: result.status, stdout: result.stdout, stderr: result.stderr});
           }
 
-          const version = outputs.get('smp:--version')?.trim();
+          const version = outputs.get('smp:--version')?.stdout.trim();
           if (version !== process.env.VERSION) {
             throw new Error(`public CLI version mismatch: ${version}`);
           }
-          const doctor = JSON.parse(outputs.get('smp:doctor --format json'));
+          const doctorRun = outputs.get('smp:doctor --format json');
+          const failDoctor = (message) => {
+            process.stderr.write(doctorRun.stderr);
+            throw new Error(message);
+          };
+          let doctor;
+          try {
+            doctor = JSON.parse(doctorRun.stdout);
+          } catch (error) {
+            failDoctor(`public CLI doctor did not print a JSON report: ${error.message}`);
+          }
+          if (!Array.isArray(doctor.checks)) failDoctor('public CLI doctor report has no checks');
+          // The only accepted failure is the default Claude runtime without credentials.
+          const defaultRuntimeWithoutCredentials = doctor.aiPolicy?.aiEnabled === true &&
+            doctor.runtime?.kind === 'claude-agent-sdk' &&
+            doctor.runtime?.source === 'default' &&
+            doctor.runtimeDiagnostics?.configured === false;
+          // Same rule as doctor's own report.ok; capture-tool warnings are not failures.
+          const failedChecks = doctor.checks
+            .filter((check) => check.status === 'error')
+            .filter((check) => !(check.name === 'runtime' && defaultRuntimeWithoutCredentials));
+          if (failedChecks.length > 0) {
+            const details = failedChecks.map((check) => `${check.name} (${check.message})`).join('; ');
+            failDoctor(`public CLI doctor failed package checks: ${details}`);
+          }
+          // Emitted only for the enabled default Claude runtime; absence fails closed.
+          const sdkBinary = doctor.checks.find((check) => check.name === 'claude_sdk_binary');
+          if (sdkBinary?.status !== 'ok') {
+            failDoctor('public CLI Claude Agent SDK native binary is unavailable');
+          }
+          if (doctorRun.status !== (doctor.ok ? 0 : 1)) {
+            failDoctor('public CLI doctor exit status does not match its report');
+          }
           if (!doctor.node?.ok) throw new Error('public CLI does not accept Node.js 24');
           if (!doctor.traceProcessor?.exists || !doctor.traceProcessor?.executable) {
             throw new Error('public CLI trace_processor_shell is unavailable');
