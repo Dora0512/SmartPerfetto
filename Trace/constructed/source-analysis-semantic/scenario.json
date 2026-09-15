@@ -102,12 +102,44 @@
       "end_state": "S"
     },
     {
+      "type": "sched-running",
+      "at_ns": "120000000",
+      "duration_ns": "8000000",
+      "thread": "main",
+      "cpu": 0,
+      "end_state": "D"
+    },
+    {
+      "type": "sched-running",
+      "at_ns": "148000000",
+      "duration_ns": "14000000",
+      "thread": "main",
+      "cpu": 0,
+      "end_state": "S"
+    },
+    {
       "type": "atrace-slice",
       "at_ns": "120000000",
       "duration_ns": "42000000",
       "process": "app",
       "thread": "main",
       "name": "StartupHooks.initializeOnMainThread#before-first-frame-sync-policy"
+    },
+    {
+      "type": "sched-running",
+      "at_ns": "199000000",
+      "duration_ns": "3000000",
+      "thread": "main",
+      "cpu": 0,
+      "end_state": "S"
+    },
+    {
+      "type": "atrace-slice",
+      "at_ns": "200000000",
+      "duration_ns": "1000000",
+      "process": "app",
+      "thread": "main",
+      "name": "StartupHooks.onFirstFrame#synthetic-first-frame-boundary"
     }
   ]
 }

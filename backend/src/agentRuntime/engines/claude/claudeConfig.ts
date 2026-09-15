@@ -9,6 +9,7 @@ import { getRegisteredScenes } from '../../../agentv3/strategyLoader';
 import { DEFAULT_OUTPUT_LANGUAGE, localize, outputLanguageDisplayName, parseOutputLanguage, type OutputLanguage } from '../../../agentv3/outputLanguage';
 import { mergeIsolatedProviderEnv } from '../../../services/providerManager/envIsolation';
 import type { ProviderScope } from '../../../services/providerManager';
+import { providerConfigurationHelp } from '../../../services/providerManager/providerConfigurationHelp';
 import { collectEnvCredentialSources, hasConcreteEnvValue, isEnabledEnvFlag, redactUrlForDiagnostics } from '../../envCredentialSources';
 import { resolveAgentRuntimeBudgetConfig } from '../../../config';
 import {
@@ -284,13 +285,13 @@ export function detectVertex(env: Record<string, string | undefined> = process.e
 
 /**
  * Returns true when any supported Claude credential source is present:
- * direct API key, proxy base URL, or AWS Bedrock.
+ * explicit API key/auth token, AWS Bedrock, or Google Vertex configuration.
+ * A proxy URL and local Claude Code login do not establish SDK credentials.
  */
 export function hasClaudeCredentials(env: Record<string, string | undefined> = process.env): boolean {
   return !!(
     hasConcreteEnvValue(env.ANTHROPIC_API_KEY) ||
     hasConcreteEnvValue(env.ANTHROPIC_AUTH_TOKEN) ||
-    hasConcreteEnvValue(env.ANTHROPIC_BASE_URL) ||
     detectBedrock(env).enabled ||
     detectVertex(env).configured
   );
@@ -345,7 +346,9 @@ export function getClaudeRuntimeDiagnostics(
       baseUrlConfigured: !!bedrock.baseUrl,
     },
     vertex,
-    configHint: hasConcreteEnvValue(env.ANTHROPIC_BASE_URL)
+    configHint: !hasClaudeCredentials(env)
+      ? providerConfigurationHelp(parseOutputLanguage(env.SMARTPERFETTO_OUTPUT_LANGUAGE))
+      : hasConcreteEnvValue(env.ANTHROPIC_BASE_URL)
       ? 'Using Anthropic-compatible proxy. Ensure the mapped model supports streaming and tool/function calling.'
       : 'Set ANTHROPIC_API_KEY for Anthropic direct access, or ANTHROPIC_BASE_URL plus ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN for a third-party Anthropic-compatible provider.',
     sdkBinary: getClaudeSdkBinaryDiagnostics(env),
@@ -356,6 +359,12 @@ export function getClaudeRuntimeDiagnostics(
 function isNativeBinaryMissing(messageLower: string): boolean {
   if (messageLower.includes('claude code native binary not found')) return true;
   return messageLower.includes('claude-agent-sdk-') && messageLower.includes('/claude');
+}
+
+function hasHttpAuthStatus(messageLower: string): boolean {
+  return /\bhttp(?:\s+status)?\s*[:=]?\s*(?:401|403)\b/.test(messageLower) ||
+    /\b(?:status(?:\s*code)?|code)\s*(?:[:=]\s*|\s+)(?:401|403)\b/.test(messageLower) ||
+    /\b(?:401\s+unauthorized|403\s+forbidden)\b/.test(messageLower);
 }
 
 const NATIVE_BINARY_HINT_EXAMPLE = '/app/backend/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude';
@@ -495,18 +504,15 @@ export function explainClaudeRuntimeError(
     isClaudeQuotaError(message) ||
     lower.includes('not logged in') ||
     lower.includes('unauthorized') ||
-    lower.includes('401') ||
+    lower.includes('invalid api key') ||
+    lower.includes('invalid_api_key') ||
+    lower.includes('authentication_error') ||
+    hasHttpAuthStatus(lower) ||
     lower.includes('process exited with code 1');
 
   if (!quotaOrAuth) return message;
 
-  return `${message}\n\n` +
-    'SmartPerfetto is currently using the Claude Agent SDK runtime. ' +
-    'If your Claude subscription/API quota is unavailable, configure an Anthropic-compatible proxy instead: ' +
-    'set ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, CLAUDE_MODEL, and CLAUDE_LIGHT_MODEL in the env file for your run mode, then restart the backend. ' +
-    'Docker uses the repository-root .env; local source runs use backend/.env by default. ' +
-    'Provider Manager active profiles take priority over env fallback. ' +
-    'Provider switchers such as CC Switch manage Claude Code/Codex/Gemini CLI configs, but SmartPerfetto does not automatically read Codex CLI or Gemini CLI credentials.' +
+  return `${message}\n\n${providerConfigurationHelp(outputLanguage)}` +
     credentialSourceHintText(credentialSourceHint, outputLanguage);
 }
 

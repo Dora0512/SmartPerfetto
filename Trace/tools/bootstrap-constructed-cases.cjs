@@ -18,28 +18,192 @@ const runtimeRevision = fs.readFileSync(
 if (!runtimeRevision) throw new Error('scripts/trace-processor-pin.env has no PERFETTO_VERSION');
 
 const SOURCE_ANALYSIS_FIXTURE_PATH = 'backend/tests/e2e/context-fixtures/app/StartupHooks.kt';
+const SOURCE_MARKER_AT_NS = 120000000;
+const SOURCE_MARKER_DURATION_NS = 42000000;
+const SOURCE_FIRST_RUN_NS = 8000000;
+const SOURCE_SECOND_RUN_AT_NS = 148000000;
+const SOURCE_SECOND_RUN_NS = 14000000;
+const SOURCE_FIRST_FRAME_AT_NS = 200000000;
+const SOURCE_FIRST_FRAME_DURATION_NS = 1000000;
 
-function loadSourceAnalysisGroundTruth() {
-  const sourcePath = path.join(repoRoot, SOURCE_ANALYSIS_FIXTURE_PATH);
-  const source = fs.readFileSync(sourcePath, 'utf8');
-  const marker = source.match(/TRACE_SOURCE_MARKER\s*=\s*"([^"]+)"/)?.[1];
-  const lines = source.split(/\r?\n/);
-  const symbolLine = lines.findIndex((line) => /fun\s+initializeOnMainThread\s*\(/.test(line)) + 1;
-  if (!marker || symbolLine <= 0) {
-    throw new Error(`Invalid source-analysis fixture contract: ${SOURCE_ANALYSIS_FIXTURE_PATH}`);
+function maskKotlinCommentsAndStrings(source) {
+  if (source.includes('"""')) {
+    throw new Error('Invalid source-analysis fixture syntax: Kotlin raw strings are not allowed');
+  }
+  let output = '';
+  let state = 'code';
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (state === 'code') {
+      if (char === '/' && next === '/') { output += '  '; index += 1; state = 'line-comment'; continue; }
+      if (char === '/' && next === '*') { output += '  '; index += 1; state = 'block-comment'; continue; }
+      if (char === '"') { output += ' '; state = 'string'; continue; }
+      if (char === "'") { output += ' '; state = 'char'; continue; }
+      output += char;
+      continue;
+    }
+    if (char === '\n') { output += '\n'; if (state === 'line-comment') state = 'code'; continue; }
+    if (state === 'block-comment' && char === '*' && next === '/') {
+      output += '  '; index += 1; state = 'code'; continue;
+    }
+    if ((state === 'string' || state === 'char') && char === '\\') {
+      output += '  '; index += 1; continue;
+    }
+    if (state === 'string' && char === '"' || state === 'char' && char === "'") {
+      output += ' '; state = 'code'; continue;
+    }
+    output += ' ';
+  }
+  if (state === 'block-comment' || state === 'string' || state === 'char') {
+    throw new Error(`Invalid source-analysis fixture syntax: unterminated ${state}`);
+  }
+  return output;
+}
+
+function uniqueLine(lines, pattern, label) {
+  const matches = lines.flatMap((line, index) => pattern.test(line) ? [index + 1] : []);
+  if (matches.length !== 1) {
+    throw new Error(`Invalid source-analysis fixture contract: expected one executable ${label}`);
+  }
+  return matches[0];
+}
+
+function functionSpan(lines, signature, label) {
+  const start = uniqueLine(lines, signature, `${label} function`);
+  return blockSpanFromLine(lines, start, label);
+}
+
+function blockSpanFromLine(lines, start, label) {
+  let depth = 0;
+  let opened = false;
+  for (let line = start; line <= lines.length; line += 1) {
+    for (const char of lines[line - 1]) {
+      if (!opened && char !== '{') continue;
+      if (char === '{') { depth += 1; opened = true; }
+      if (char === '}') depth -= 1;
+      if (depth < 0) throw new Error(`Invalid source-analysis fixture contract: malformed ${label}`);
+    }
+    if (opened && depth === 0) return {start, end: line};
+  }
+  throw new Error(`Invalid source-analysis fixture contract: unterminated ${label}`);
+}
+
+function uniqueLineInside(lines, pattern, span, label) {
+  const matches = lines.flatMap((line, index) => {
+    const lineNumber = index + 1;
+    return lineNumber >= span.start && lineNumber <= span.end && pattern.test(line) ? [lineNumber] : [];
+  });
+  if (matches.length !== 1) {
+    throw new Error(`Invalid source-analysis fixture contract: expected one executable ${label} inside its owner`);
+  }
+  return matches[0];
+}
+
+function functionSpanInside(lines, signature, owner, label) {
+  const start = uniqueLineInside(lines, signature, owner, `${label} function`);
+  const span = blockSpanFromLine(lines, start, label);
+  if (span.end > owner.end) {
+    throw new Error(`Invalid source-analysis fixture contract: ${label} escapes its owner`);
+  }
+  return span;
+}
+
+function parseSourceAnalysisGroundTruth(source) {
+  const rawLines = source.split(/\r?\n/);
+  const lines = maskKotlinCommentsAndStrings(source).split(/\r?\n/);
+  const readMarker = (name) => {
+    const line = uniqueLine(lines, new RegExp(`\\bconst\\s+val\\s+${name}\\s*=`), `${name} constant`);
+    const value = rawLines[line - 1].match(new RegExp(`\\b${name}\\s*=\\s*"([^"]+)"\\s*$`))?.[1];
+    if (!value) throw new Error(`Invalid source-analysis fixture contract: ${name} value`);
+    return value;
+  };
+  const marker = readMarker('TRACE_SOURCE_MARKER');
+  const firstFrameMarker = readMarker('FIRST_FRAME_TRACE_MARKER');
+  const traceImportLine = uniqueLine(lines, /^\s*import\s+android\.os\.Trace\s*$/, 'android.os.Trace import');
+  const fileImportLine = uniqueLine(lines, /^\s*import\s+java\.io\.File\s*$/, 'java.io.File import');
+  const startupObject = functionSpan(lines, /\bobject\s+StartupHooks\s*\{/, 'StartupHooks object');
+  const applicationObject = functionSpan(lines, /\bobject\s+Application\s*\{/, 'Application object');
+  const initialize = functionSpanInside(lines,
+    /\bfun\s+initializeOnMainThread\s*\(\s*policyFile\s*:\s*File\s*\)\s*\{/,
+    startupObject,
+    'initializeOnMainThread');
+  const helper = functionSpanInside(lines,
+    /\bprivate\s+fun\s+readStartupPolicySynchronously\s*\(\s*policyFile\s*:\s*File\s*\)\s*:\s*String\s*\{/,
+    startupObject,
+    'readStartupPolicySynchronously');
+  const sourceFirstFrame = functionSpanInside(lines, /\bfun\s+onFirstFrame\s*\(\s*\)\s*\{/,
+    startupObject, 'StartupHooks.onFirstFrame');
+  const applicationOnCreate = functionSpanInside(lines,
+    /\bfun\s+onCreate\s*\(\s*filesDir\s*:\s*File\s*\)\s*\{/,
+    applicationObject, 'Application.onCreate');
+  const applicationOnFirstFrame = functionSpanInside(lines, /\bfun\s+onFirstFrame\s*\(\s*\)\s*\{/,
+    applicationObject, 'Application.onFirstFrame');
+  const beginLine = uniqueLineInside(lines, /\bTrace\.beginSection\s*\(\s*TRACE_SOURCE_MARKER\s*\)/,
+    initialize,
+    'TRACE_SOURCE_MARKER begin');
+  const tryLine = uniqueLineInside(lines, /^\s*try\s*\{/, initialize, 'initialize try block');
+  const policyLine = uniqueLineInside(lines,
+    /\bval\s+startupPolicy\s*=\s*readStartupPolicySynchronously\s*\(\s*policyFile\s*\)/,
+    initialize,
+    'synchronous policy assignment');
+  const finallyLine = uniqueLineInside(lines, /\}\s*finally\s*\{/, initialize, 'initialize finally block');
+  const finallySpan = blockSpanFromLine(lines, finallyLine, 'initialize finally block');
+  const readLine = uniqueLineInside(lines, /\bpolicyFile\.readText\s*\(\s*\)/, helper, 'File.readText call');
+  const endLines = lines.flatMap((line, index) => /\bTrace\.endSection\s*\(\s*\)/.test(line) ? [index + 1] : []);
+  const initializeEndLines = endLines.filter(line => line >= initialize.start && line <= initialize.end);
+  const endLine = initializeEndLines[0];
+  if (initializeEndLines.length !== 1) {
+    throw new Error('Invalid source-analysis fixture contract: expected one initialize Trace.endSection');
+  }
+  const fileConstructionLine = uniqueLineInside(lines,
+    /\bval\s+policyFile\s*=\s*File\s*\(\s*filesDir\s*,/,
+    applicationOnCreate, 'Application policy File construction');
+  const callerLine = uniqueLineInside(lines,
+    /\bStartupHooks\.initializeOnMainThread\s*\(\s*policyFile\s*\)/,
+    applicationOnCreate,
+    'Application startup caller');
+  const firstFrameBegin = uniqueLineInside(lines,
+    /\bTrace\.beginSection\s*\(\s*FIRST_FRAME_TRACE_MARKER\s*\)/,
+    sourceFirstFrame,
+    'synthetic first-frame begin');
+  const firstFrameEndLines = endLines.filter(line => line >= sourceFirstFrame.start && line <= sourceFirstFrame.end);
+  if (firstFrameEndLines.length !== 1 || firstFrameEndLines[0] <= firstFrameBegin) {
+    throw new Error('Invalid source-analysis fixture contract: expected one synthetic first-frame Trace.endSection');
+  }
+  const firstFrameCaller = uniqueLineInside(lines, /\bStartupHooks\.onFirstFrame\s*\(\s*\)/,
+    applicationOnFirstFrame,
+    'Application first-frame caller');
+  if (!(traceImportLine < startupObject.start && fileImportLine < startupObject.start &&
+      beginLine < tryLine && tryLine < policyLine && policyLine < finallyLine && finallyLine < endLine &&
+      endLine <= finallySpan.end && fileConstructionLine < callerLine)) {
+    throw new Error('Invalid source-analysis fixture contract: marker must enclose synchronous policy read');
   }
   return {
     marker,
+    firstFrameMarker,
     relativeSourcePath: SOURCE_ANALYSIS_FIXTURE_PATH,
     symbol: 'StartupHooks.initializeOnMainThread',
-    lineRange: {start: symbolLine, end: symbolLine},
+    lineRange: {start: initialize.start, end: helper.end},
     callChain: [
       'Application.onCreate',
       'StartupHooks.initializeOnMainThread',
-      'synchronous startup policy check',
+      'StartupHooks.readStartupPolicySynchronously',
+      'File.readText',
     ],
-    actionableSeam: 'Move synchronous startup policy work after the first-frame boundary.',
+    actionableSeam: 'Move readStartupPolicySynchronously outside the selected startup marker, then measure the synthetic first-frame boundary.',
+    compatibility: {
+      buildLink: 'synthetic_constructed_pair_only',
+      causalStatus: 'candidate',
+      baseAndroidStartupLinked: false,
+    },
+    sourceLines: {beginLine, policyLine, readLine, endLine, callerLine, firstFrameBegin, firstFrameCaller},
   };
+}
+
+function loadSourceAnalysisGroundTruth() {
+  return parseSourceAnalysisGroundTruth(fs.readFileSync(
+    path.join(repoRoot, SOURCE_ANALYSIS_FIXTURE_PATH), 'utf8'));
 }
 
 const sourceAnalysisGroundTruth = loadSourceAnalysisGroundTruth();
@@ -758,14 +922,19 @@ function scenarioForFamily(family) {
     );
   }
   if (family.id === 'source-analysis-semantic') {
-    familySignals.push({
-      type: 'atrace-slice',
-      at_ns: '120000000',
-      duration_ns: '42000000',
-      process: 'app',
-      thread: 'main',
-      name: sourceAnalysisGroundTruth.marker,
-    });
+    familySignals.push(
+      {type: 'sched-running', at_ns: String(SOURCE_MARKER_AT_NS), duration_ns: String(SOURCE_FIRST_RUN_NS),
+        thread: 'main', cpu: 0, end_state: 'D'},
+      {type: 'sched-running', at_ns: String(SOURCE_SECOND_RUN_AT_NS), duration_ns: String(SOURCE_SECOND_RUN_NS),
+        thread: 'main', cpu: 0, end_state: 'S'},
+      {type: 'atrace-slice', at_ns: String(SOURCE_MARKER_AT_NS), duration_ns: String(SOURCE_MARKER_DURATION_NS),
+        process: 'app', thread: 'main', name: sourceAnalysisGroundTruth.marker},
+      {type: 'sched-running', at_ns: '199000000', duration_ns: '3000000',
+        thread: 'main', cpu: 0, end_state: 'S'},
+      {type: 'atrace-slice', at_ns: String(SOURCE_FIRST_FRAME_AT_NS),
+        duration_ns: String(SOURCE_FIRST_FRAME_DURATION_NS), process: 'app', thread: 'main',
+        name: sourceAnalysisGroundTruth.firstFrameMarker},
+    );
   }
   return {
     schema_version: 1,
@@ -888,7 +1057,15 @@ function main() {
             occurrence: true,
             process: 'com.smartperfetto.fixture',
             thread: 'main',
-            durationNs: 42000000,
+            atNs: SOURCE_MARKER_AT_NS,
+            durationNs: SOURCE_MARKER_DURATION_NS,
+            selectedThreadStateNs: {Running: SOURCE_FIRST_RUN_NS + SOURCE_SECOND_RUN_NS,
+              D: SOURCE_SECOND_RUN_AT_NS - SOURCE_MARKER_AT_NS - SOURCE_FIRST_RUN_NS,
+              total: SOURCE_MARKER_DURATION_NS},
+            firstFrame: {marker: sourceAnalysisGroundTruth.firstFrameMarker,
+              process: 'com.smartperfetto.fixture', thread: 'main',
+              atNs: SOURCE_FIRST_FRAME_AT_NS, durationNs: SOURCE_FIRST_FRAME_DURATION_NS,
+              markerEndsBeforeStart: SOURCE_MARKER_AT_NS + SOURCE_MARKER_DURATION_NS < SOURCE_FIRST_FRAME_AT_NS},
           },
           trace: {
             baseCaseId: family.base,
@@ -961,4 +1138,21 @@ function main() {
   }
 }
 
-main();
+const CLI_USAGE = 'Usage: node Trace/tools/bootstrap-constructed-cases.cjs\n';
+
+function runCli(argv = process.argv.slice(2), io = {stdout: process.stdout, stderr: process.stderr}, run = main) {
+  if (argv.length === 0) {
+    run();
+    return 0;
+  }
+  if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) {
+    io.stdout.write(CLI_USAGE);
+    return 0;
+  }
+  io.stderr.write('Error: unsupported arguments. Use --help for usage.\n');
+  return 1;
+}
+
+if (require.main === module) process.exitCode = runCli();
+
+module.exports = {main, parseSourceAnalysisGroundTruth, runCli};

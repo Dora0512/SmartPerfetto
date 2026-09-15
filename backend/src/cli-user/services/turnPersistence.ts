@@ -42,6 +42,15 @@ import {
   projectSafeSourceProvenance,
   type SafeSourceProvenanceProjection,
 } from '../../services/codebase/sourceClaimVerifier';
+import {analysisConfidenceIsGrounded} from '../../agentv3/analysisTermination';
+import {deriveDeliveryVerdict, summarizeClaimVerification} from '../../services/analysisInvestigationPresentation';
+import {
+  buildCliAnalysisEvidenceBundle,
+  latestCliAnalysisEvidencePath,
+  rebindCliAnalysisEvidenceTurnMarkdown,
+  turnCliAnalysisEvidencePath,
+  type CliAnalysisEvidenceOutput,
+} from './analysisResultPresentation';
 
 export interface CommitTurnInput {
   paths: CliPaths;
@@ -67,7 +76,7 @@ export interface CommitTurnInput {
   indexEntry: CliSessionIndexEntry;
 }
 
-export function commitTurnOutputs(input: CommitTurnInput): void {
+export function commitTurnOutputs(input: CommitTurnInput): CliAnalysisEvidenceOutput {
   const { paths, sp, renderer, sessionId, turn, query, config, reportAppendix } = input;
   const outputLanguage = parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
   const rawConclusion = input.result.result.conclusion || '';
@@ -95,8 +104,8 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
       )
     : input.turnMarkdown;
   const sourceProvenance = inputSourceProvenance ?? sourceProvenanceForResult(result);
-  const turnMarkdown = sourceProvenance
-    ? appendSourceProvenanceMarkdown(baseTurnMarkdown, sourceProvenance, outputLanguage)
+  const turnMarkdown = reportAppendix?.markdown
+    ? `${baseTurnMarkdown}\n\n${reportAppendix.markdown}`
     : baseTurnMarkdown;
   // A run that stopped early is neither cleanly completed nor failed; filing it
   // as `completed` made `smp list` show a truncated comparison exactly like a
@@ -112,9 +121,17 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
   const conclusion = result.result.conclusion || '';
   const turnPrefix = path.join(sp.turnsDir, String(turn).padStart(3, '0'));
   const cliTurnPath = `${turnPrefix}.md`;
+  const evidenceBundle = buildCliAnalysisEvidenceBundle({
+    sessionId,
+    turn,
+    conclusion,
+    turnMarkdown,
+    result: result.result,
+    sourceProvenance,
+  });
 
   writeConclusion(sp, conclusion);
-  writeTurnMarkdown(sp, turn, reportAppendix?.markdown ? `${turnMarkdown}\n\n${reportAppendix.markdown}` : turnMarkdown);
+  writeTurnMarkdown(sp, turn, turnMarkdown);
 
   let turnReportPath: string | undefined;
   const privateSafeReportHtml = result.privateKnowledge && result.reportHtml
@@ -135,8 +152,12 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
     : `(report generation failed${result.reportError ? `: ${result.reportError}` : ''})`;
   assertCliReceiptPath(result, cliTurnPath);
   writeAnalysisQualitySidecars(sp, turn, result, sourceProvenance);
+  writeJsonFile(sp, turnCliAnalysisEvidencePath(sp, turn), evidenceBundle);
 
   writeConfig(sp, config);
+  // Latest is a pointer-by-value. Write it last so a partial failure cannot
+  // pair a previous turn's evidence with the newly written conclusion.
+  writeJsonFile(sp, latestCliAnalysisEvidencePath(sp), evidenceBundle);
 
   appendTranscriptTurn(sp.transcript, {
     turn,
@@ -168,16 +189,11 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
       investigationEvidence: result.result.deliveryAssurance?.investigationEvidence ?? 'not_checked',
     },
     confidence: result.result.confidence,
+    confidenceGrounded: analysisConfidenceIsGrounded(result.result),
     rounds: result.result.rounds,
     durationMs: result.result.totalDurationMs,
-    claimVerification: result.result.claimVerificationResult
-      ? {
-        status: result.result.claimVerificationResult.status,
-        checkedClaimCount: result.result.claimVerificationResult.checkedClaimCount,
-        unsupportedClaimCount: result.result.claimVerificationResult.unsupportedClaimCount,
-        issueCount: result.result.claimVerificationResult.issues?.length || 0,
-      }
-      : undefined,
+    claimVerification: summarizeClaimVerification(result.result.claimVerificationResult),
+    analysisEvidence: evidenceBundle,
   });
   renderer.printCompletion({
     reportPath: reportPathForUser,
@@ -189,7 +205,9 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
     ...(result.result.terminationMessage ? { terminationMessage: result.result.terminationMessage } : {}),
     ...(result.result.partial ? { partial: true } : {}),
     ...(result.result.terminationReason ? { terminationReason: result.result.terminationReason } : {}),
+    deliveryVerdict: deriveDeliveryVerdict(result.result),
   });
+  return evidenceBundle;
 }
 
 export function commitSourceSupplementOutput(input: {
@@ -198,6 +216,7 @@ export function commitSourceSupplementOutput(input: {
   sessionId: string;
   turn: number;
   supplement: AnalysisSourceSupplementOutcome;
+  analysisEvidence: CliAnalysisEvidenceOutput;
 }): void {
   const outputLanguage = parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
   const safeSupplement = {
@@ -213,11 +232,15 @@ export function commitSourceSupplementOutput(input: {
     `${safeSupplement.metrics.searchCalls} 次搜索 / ${safeSupplement.metrics.readCalls} 次读取 / ${safeSupplement.metrics.durationMs}ms`,
     `${safeSupplement.metrics.searchCalls} searches / ${safeSupplement.metrics.readCalls} reads / ${safeSupplement.metrics.durationMs}ms`,
   );
-  writeTurnMarkdown(
-    input.sp,
-    input.turn,
-    `${current}\n\n## ${heading}\n\n${safeSupplement.message}\n\n_${metrics}_\n`,
+  const turnMarkdown = `${current}\n\n## ${heading}\n\n${safeSupplement.message}\n\n_${metrics}_\n`;
+  const reboundEvidence = rebindCliAnalysisEvidenceTurnMarkdown(
+    input.analysisEvidence,
+    turnMarkdown,
   );
+  writeTurnMarkdown(input.sp, input.turn, turnMarkdown);
+  writeJsonFile(input.sp, turnCliAnalysisEvidencePath(input.sp, input.turn), reboundEvidence);
+  // Latest remains a pointer-by-value and is written after the per-turn pair.
+  writeJsonFile(input.sp, latestCliAnalysisEvidencePath(input.sp), reboundEvidence);
   writeJsonFile(input.sp, path.join(input.sp.dir, 'source-supplement.json'), safeSupplement);
   writeJsonFile(input.sp, `${turnPrefix}.source-supplement.json`, safeSupplement);
   input.renderer.onEvent({
@@ -284,44 +307,6 @@ function writeSourceProvenanceSidecars(
   writeJsonFile(sp, `${turnPrefix}.source-use-decision.json`, provenance.sourceUseDecision);
   writeJsonFile(sp, latestBindingsPath, provenance.sourceClaimBindings);
   writeJsonFile(sp, `${turnPrefix}.source-claim-bindings.json`, provenance.sourceClaimBindings);
-}
-
-function appendSourceProvenanceMarkdown(
-  markdown: string,
-  provenance: SafeSourceProvenanceProjection,
-  outputLanguage: OutputLanguage,
-): string {
-  const decision = provenance.sourceUseDecision;
-  const lines = [
-    localize(outputLanguage, '## 源码使用凭据', '## Source provenance'),
-    '',
-    `- schema: \`${decision.schemaVersion}\``,
-    `- mode: \`${decision.codeAwareMode}\``,
-    `- status: \`${decision.status}\``,
-    `- selected: ${markdownCodeList(decision.selectedCodebaseIds)}`,
-    `- queried: ${markdownCodeList(decision.queriedCodebaseIds)}`,
-    `- used: ${markdownCodeList(decision.usedCodebaseIds)}`,
-    ...(decision.reasonCode ? [`- reason: \`${decision.reasonCode}\``] : []),
-    ...(typeof decision.coverageComplete === 'boolean'
-      ? [`- coverageComplete: \`${decision.coverageComplete}\``]
-      : []),
-    ...(decision.incompleteReasons?.length
-      ? [`- incomplete: ${markdownCodeList(decision.incompleteReasons)}`]
-      : []),
-  ];
-  if (provenance.sourceClaimBindings.length > 0) {
-    lines.push('', localize(outputLanguage, '### 机制绑定', '### Mechanism bindings'), '');
-    for (const binding of provenance.sourceClaimBindings.slice(0, 20)) {
-      lines.push(
-        `- \`${binding.claimId}\` · \`${binding.mechanismStatus}\` · source=${markdownCodeList(binding.sourceReferenceIds)} · trace=${markdownCodeList(binding.traceEvidenceRefIds)}`,
-      );
-    }
-  }
-  return `${markdown.replace(/\s+$/u, '')}\n\n${lines.join('\n')}\n`;
-}
-
-function markdownCodeList(values: readonly string[]): string {
-  return values.length > 0 ? values.map(value => `\`${value}\``).join(', ') : '-';
 }
 
 function assertCliReceiptPath(result: RunTurnOutput, cliTurnPath: string): void {

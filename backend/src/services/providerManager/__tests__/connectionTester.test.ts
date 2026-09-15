@@ -36,6 +36,67 @@ describe('Provider connection tester', () => {
     for (const key of envKeys) delete process.env[key];
   });
 
+  it.each([401, 403])('guides rejected Anthropic and OpenAI credentials to Web settings (%s)', async (status) => {
+    globalThis.fetch = jest.fn(async () => jsonResponse({}, status)) as any;
+    for (const provider of [openAIProvider(), {
+      ...openAIProvider(), type: 'anthropic' as const,
+      connection: {apiKey: 'invalid-test-key'},
+    }]) {
+      const result = await testProviderConnection(provider);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(String(status));
+      expect(result.error).toContain('Providers');
+      expect(result.error!.indexOf('Providers')).toBeLessThan(result.error!.indexOf('backend/.env'));
+      expect(result.error).not.toContain('invalid-test-key');
+    }
+  });
+
+  it.each(['pi', 'opencode', 'bedrock'])(
+    'provides configuration recovery for a missing %s configuration', async (kind) => {
+      const provider = kind === 'pi' ? customPiProvider({connection: {agentRuntime: 'pi-agent-core'}})
+        : kind === 'opencode' ? customOpenCodeProvider({connection: {agentRuntime: 'opencode'}})
+        : {...openAIProvider(), type: 'bedrock' as const, connection: {}};
+      const result = await testProviderConnection(provider);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Providers');
+      expect(result.error).toContain('~/.smartperfetto/env');
+    },
+  );
+
+  it('provides configuration locations when an Anthropic key is missing', async () => {
+    globalThis.fetch = jest.fn() as any;
+    const result = await testProviderConnection({
+      ...openAIProvider(), type: 'anthropic', connection: {},
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Providers');
+    expect(result.error).toContain('~/.smartperfetto/env');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['pi', 'opencode'])('does not expose malformed %s model JSON', async (kind) => {
+    const secret = `sk-${kind}-model-secret`;
+    const provider = kind === 'pi'
+      ? customPiProvider({
+        connection: {
+          agentRuntime: 'pi-agent-core',
+          piAgentCoreModelJson: `{"apiKey":"${secret}",`,
+        },
+      })
+      : customOpenCodeProvider({
+        connection: {
+          agentRuntime: 'opencode',
+          openCodeModelJson: `{"apiKey":"${secret}",`,
+        },
+      });
+
+    const result = await testProviderConnection(provider);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('model JSON is invalid');
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
   it('returns a bounded failure when an error response body never finishes', async () => {
     process.env.PROVIDER_TEST_REQUEST_TIMEOUT_MS = '100';
     process.env.PROVIDER_TEST_TOTAL_TIMEOUT_MS = '500';
@@ -53,7 +114,7 @@ describe('Provider connection tester', () => {
     const result = await testProviderConnection(openAIProvider());
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Responses API model probe failed: 500');
+    expect(result.error).toContain('Responses API model probe failed: 500');
     expect(Date.now() - started).toBeLessThan(1000);
     expect(cancel).toHaveBeenCalled();
   });
@@ -69,7 +130,7 @@ describe('Provider connection tester', () => {
     const result = await testProviderConnection(openAIProvider());
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Provider connection test timed out after 0.08s');
+    expect(result.error).toContain('Provider connection test timed out after 0.08s');
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
@@ -89,7 +150,7 @@ describe('Provider connection tester', () => {
     const result = await testProviderConnection(customOpenAIProvider());
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Model or endpoint not found (Chat Completions API, 404)');
+    expect(result.error).toContain('Model or endpoint not found (Chat Completions API, 404)');
     expect(calls).toEqual(['https://example.test/v1/chat/completions']);
   });
 
@@ -193,7 +254,7 @@ describe('Provider connection tester', () => {
     const result = await testProviderConnection(ollamaProvider());
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('model load failed');
+    expect(result.error).toContain('model load failed');
     expect(calls).toEqual([
       'http://localhost:11434/api/tags',
       'http://localhost:11434/v1/chat/completions',
@@ -347,13 +408,16 @@ describe('Provider connection tester', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('rejects a custom Qoder provider without a PAT or CLI path', async () => {
+  it('accepts a custom Qoder provider that relies on the installed SDK and local qodercli login', async () => {
     const result = await testProviderConnection(customQoderProvider({
       connection: { agentRuntime: 'qoder-agent-sdk' },
     }));
 
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('Qoder Agent SDK requires a Personal Access Token or Qoder CLI path');
+    expect(result).toMatchObject({
+      success: true,
+      modelVerified: false,
+      error: 'Qoder provider configuration is syntactically valid; analysis will verify the installed SDK and local qodercli login.',
+    });
   });
 });
 

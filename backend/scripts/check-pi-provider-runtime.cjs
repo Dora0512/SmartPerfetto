@@ -49,6 +49,8 @@ import {
   PiAgentCoreRuntime,
   loadPiAgentCoreModule,
 } from './src/agentRuntime/engines/pi/piAgentCoreRuntime.ts';
+import {renderConclusionContractSidecar} from './src/agent/core/conclusionContract.ts';
+import {inspectCandidateProtocol} from './src/services/canonicalAnalysisResult.ts';
 
 const {Agent} = await loadPiAgentCoreModule();
 
@@ -156,7 +158,10 @@ function createRuntimeProvider(options) {
       model: runtimeFaux.getModel(),
       models: runtimeModels,
       streamFn: (runtimeModel, context, requestOptions) => {
-        requests.push({messages: structuredClone(context.messages)});
+        requests.push({
+          messages: structuredClone(context.messages),
+          tools: (context.tools ?? []).map(tool => tool.name),
+        });
         return runtimeModels.streamSimple(runtimeModel, context, requestOptions);
       },
     }),
@@ -202,10 +207,29 @@ function runtimeIntentResponse() {
   }));
 }
 
+function declaredRuntimeAnswer(body) {
+  return body + '\n' + renderConclusionContractSidecar({
+    schemaVersion: 'conclusion_contract_v1',
+    mode: 'need_input',
+    conclusions: [],
+    clusters: [],
+    evidenceChain: [],
+    claims: [],
+    uncertainties: [],
+    nextSteps: [],
+  });
+}
+
+function runtimeQuestion(marker) {
+  return marker + ': which interval should be inspected?';
+}
+
 function assertCompletedRuntime(result, conclusion) {
   try {
     assert.equal(result.success, true);
-    assert.equal(result.conclusion, conclusion);
+    const protocol = inspectCandidateProtocol(result.conclusion);
+    assert.equal(protocol.status, 'valid');
+    assert.equal(protocol.canonicalBody.trim(), conclusion.trim());
     assert.equal(result.turnIntent?.status, 'resolved');
     assert.equal(result.completion?.status, 'completed');
   } finally {
@@ -215,7 +239,7 @@ function assertCompletedRuntime(result, conclusion) {
 
 const firstRuntimeProvider = createRuntimeProvider();
 firstRuntimeProvider.runtimeFaux.setResponses([
-  runtimeIntentResponse(), fauxAssistantMessage('runtime-first'),
+  runtimeIntentResponse(), fauxAssistantMessage(declaredRuntimeAnswer(runtimeQuestion('runtime-first'))),
 ]);
 const firstRuntime = createRuntime(firstRuntimeProvider.loader);
 const firstRuntimeResult = await firstRuntime.analyze(
@@ -224,7 +248,7 @@ const firstRuntimeResult = await firstRuntime.analyze(
   'trace-pi-real',
   {analysisMode: 'fast'},
 );
-assertCompletedRuntime(firstRuntimeResult, 'runtime-first');
+assertCompletedRuntime(firstRuntimeResult, runtimeQuestion('runtime-first'));
 assert.equal(firstRuntimeProvider.runtimeFaux.state.callCount, 2);
 const runtimeSnapshot = firstRuntime.takeSnapshot(
   'session-real-runtime',
@@ -236,7 +260,7 @@ assert.ok(runtimeSnapshot.engineState.pi.opaque?.messageCount > 0);
 
 const resumedRuntimeProvider = createRuntimeProvider();
 resumedRuntimeProvider.runtimeFaux.setResponses([
-  runtimeIntentResponse(), fauxAssistantMessage('runtime-resumed'),
+  runtimeIntentResponse(), fauxAssistantMessage(declaredRuntimeAnswer(runtimeQuestion('runtime-resumed'))),
 ]);
 const resumedRuntime = createRuntime(resumedRuntimeProvider.loader);
 resumedRuntime.restoreFromSnapshot(
@@ -250,7 +274,7 @@ const resumedRuntimeResult = await resumedRuntime.analyze(
   'trace-pi-real',
   {analysisMode: 'fast'},
 );
-assertCompletedRuntime(resumedRuntimeResult, 'runtime-resumed');
+assertCompletedRuntime(resumedRuntimeResult, runtimeQuestion('runtime-resumed'));
 assert.equal(resumedRuntimeProvider.runtimeFaux.state.callCount, 2);
 const resumedSnapshot = resumedRuntime.takeSnapshot(
   'session-real-runtime',
@@ -275,7 +299,7 @@ for (const request of resumedRuntimeProvider.requests) {
 }
 
 resumedRuntimeProvider.runtimeFaux.setResponses([
-  runtimeIntentResponse(), fauxAssistantMessage('private-runtime'),
+  runtimeIntentResponse(), fauxAssistantMessage(declaredRuntimeAnswer(runtimeQuestion('private-runtime'))),
 ]);
 const privateRuntimeResult = await resumedRuntime.analyze(
   'Analyze with private source context.',
@@ -287,7 +311,7 @@ const privateRuntimeResult = await resumedRuntime.analyze(
     codebaseIds: ['private-codebase'],
   },
 );
-assertCompletedRuntime(privateRuntimeResult, 'private-runtime');
+assertCompletedRuntime(privateRuntimeResult, runtimeQuestion('private-runtime'));
 assert.equal(resumedRuntimeProvider.runtimeFaux.state.callCount, 4);
 const privateRuntimeSnapshot = resumedRuntime.takeSnapshot(
   'session-real-runtime',
@@ -303,6 +327,48 @@ assert.equal(
     : undefined,
   undefined,
 );
+
+const missingDeclarationBody = runtimeQuestion('runtime-missing-declaration');
+const repairedDeclarationCandidate = declaredRuntimeAnswer(missingDeclarationBody);
+const declarationRuntimeProvider = createRuntimeProvider();
+declarationRuntimeProvider.runtimeFaux.setResponses([
+  runtimeIntentResponse(),
+  fauxAssistantMessage(missingDeclarationBody),
+  fauxAssistantMessage(repairedDeclarationCandidate),
+]);
+const declarationRuntime = createRuntime(declarationRuntimeProvider.loader);
+const declarationResult = await declarationRuntime.analyze(
+  'Give a concise trace status.',
+  'session-real-declaration-repair',
+  'trace-pi-real',
+  {analysisMode: 'fast', runId: 'pi-real-declaration-repair'},
+);
+assert.equal(declarationRuntimeProvider.runtimeFaux.state.callCount, 3);
+assert.equal(declarationRuntimeProvider.requests.length, 3);
+assert.deepEqual(declarationRuntimeProvider.requests[2].tools, []);
+const declarationPrompt = declarationRuntimeProvider.requests[2].messages.at(-1)?.content?.[0]?.text;
+assert.equal(typeof declarationPrompt, 'string');
+assert.match(declarationPrompt, /missing_declaration/);
+assert.ok(declarationPrompt.includes(JSON.stringify({
+  schemaVersion: 1,
+  kind: 'original_native_candidate',
+  body: missingDeclarationBody,
+})));
+assert.equal(declarationResult.completion?.runId, 'pi-real-declaration-repair');
+assert.equal(declarationResult.completion?.attemptId, '2');
+const repairedProtocol = inspectCandidateProtocol(declarationResult.conclusion);
+assert.equal(repairedProtocol.status, 'valid');
+assert.equal(repairedProtocol.canonicalBody.trim(), missingDeclarationBody);
+const declarationFinalizationContext = takeFinalizationContext(declarationResult);
+assert.ok(declarationFinalizationContext);
+try {
+  assert.equal(
+    declarationFinalizationContext.getNativeDeclaration(declarationResult, new AbortController().signal)?.raw,
+    repairedDeclarationCandidate,
+  );
+} finally {
+  declarationFinalizationContext.dispose();
+}
 
 async function withRuntimeDeadline(promise, message) {
   let timer;

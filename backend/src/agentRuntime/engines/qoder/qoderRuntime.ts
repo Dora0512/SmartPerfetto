@@ -82,10 +82,16 @@ import {
   type RuntimePerformanceOutcome,
   type RuntimePerformanceRun,
 } from '../../runtimePerformance';
-import {createAnalysisRunSpec} from '../../analysisRunSpec';
+import {createAnalysisRunSpec, type AnalysisRunSelection} from '../../analysisRunSpec';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
 import {resolveRuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
+import {
+  acceptNativeDeclarationCompletion,
+  buildNativeDeclarationCompletionPrompt,
+  nativeDeclarationBodyCanFitOutput,
+  requestNativeDeclarationCompletion,
+} from '../../runtimeConclusionProtocol';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext} from '../../analysisHistory';
 import {resolveKnowledgeScope} from '../../../services/scopedKnowledgeStore';
 import {INTENT_TRANSPORT_CLEANUP_TIMEOUT_MS, runIntentTransport} from '../../intentTransport';
@@ -358,6 +364,7 @@ interface QoderActiveSession {
   timeoutMs?: number;
   deadlineMs?: number;
   strategyRegistry?: ReadonlyStrategyRegistrySnapshot;
+  analysisRunSelection?: AnalysisRunSelection;
   artifactStore?: ArtifactStore;
   delivery?: {result: AnalysisResult} & ReturnType<typeof bindQoderDelivery>;
   dispatchText?: (input: IntentTransportInput) => Promise<IntentTransportResult>;
@@ -501,6 +508,7 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
           attachFinalizationContext(result, {
             runId: executionLease.key.runId!, sessionId, deadlineMs: sessionState.deadlineMs,
             turnIntent: sessionState.turnIntent, strategyRegistry: sessionState.strategyRegistry,
+            selection: sessionState.analysisRunSelection,
             traceIdentity: {currentTraceId: traceId, referenceTraceId: normalizedOptions.referenceTraceId},
             deliveryContext: sessionState.delivery.context, protocolProjection: sessionState.delivery.protocolProjection,
             sourceUse: sessionState.sourceUse?.getSourceUseDecision(),
@@ -743,6 +751,7 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
         quickPathPerTurnMs: this.config.quickPerTurnMs,
       },
     });
+    sessionState.analysisRunSelection = analysisRunSpec.selection;
 
     // Build comparison context before assembling the shared system prompt so
     // both the model and the MCP tools receive the same dual-trace contract.
@@ -1247,6 +1256,48 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
             executionLease.throwIfAborted();
             // Failed delivery retains the original answer and the cap receipt.
           }
+        }
+      }
+      const declarationOutputLimit = 128 * 1024;
+      const declarationRequest = requestNativeDeclarationCompletion({
+        intent: turnIntent,
+        completion: {status: sdkResultMeta.status},
+        candidate: originalAnswer,
+        remainingDeliveryTurns: sdkResultMeta.reason !== 'turn_limit' &&
+          sessionState.rounds < turnBudget.totalTurns ? turnBudget.deliveryTurns : 0,
+      });
+      if (declarationRequest && nativeDeclarationBodyCanFitOutput(originalAnswer, declarationOutputLimit) &&
+          sessionState.deadlineMs !== undefined && Date.now() < sessionState.deadlineMs) {
+        await settleQoderWork(Promise.resolve().then(() => sdkQuery.close()));
+        sessionState.sdkQuery = undefined;
+        q = undefined;
+        executionLease.throwIfAborted();
+        sessionState.rounds += 1;
+        try {
+          assertAuthorized();
+          const repaired = await dispatchQoderText({
+            prompt: buildNativeDeclarationCompletionPrompt({request: declarationRequest, intent: turnIntent, outputLanguage}),
+            systemPrompt: finalSystemPrompt,
+            signal: executionLease.signal,
+            deadlineMs: sessionState.deadlineMs,
+            outputByteLimit: declarationOutputLimit,
+          }, {...this.config, lightModel: undefined},
+          async () => {assertAuthorized(); return sdk;},
+          async () => {assertAuthorized(); return auth;});
+          assertAuthorized();
+          if (repaired.status === 'ok' && acceptNativeDeclarationCompletion({
+            request: declarationRequest, completion: {status: 'completed'}, candidate: repaired.text,
+            outputByteLimit: declarationOutputLimit,
+          })) {
+            sdkFinalBodySupplied = true;
+            sdkFinalResultText = repaired.text;
+            closeoutAccepted = true;
+            acceptedAttemptId = 'declaration-completion:1';
+            acceptedFinishReason = repaired.finishReason;
+          }
+        } catch {
+          executionLease.throwIfAborted();
+          // A failed declaration completion cannot replace the original candidate.
         }
       }
       // Native completion and authorship are established before any privacy

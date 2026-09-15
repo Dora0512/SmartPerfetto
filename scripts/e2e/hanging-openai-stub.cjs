@@ -27,7 +27,11 @@ async function readJsonRequest(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-function validateRequest(request, body, apiKey) {
+function classifyRequest(body) {
+  return body?.stream === true ? 'analysis' : 'classification';
+}
+
+function validateRequest(request, body, apiKey, kind) {
   const errors = [];
   const model = typeof body?.model === 'string' ? body.model : undefined;
   const stream = body?.stream === true;
@@ -36,13 +40,17 @@ function validateRequest(request, body, apiKey) {
     errors.push('body must be an object');
   }
   if (!model) errors.push('model must be a non-empty string');
-  if (!stream) errors.push('stream must be true');
-  if (body?.stream_options?.include_usage !== true) {
-    errors.push('stream_options.include_usage must be true');
+  if (kind === 'analysis') {
+    if (body?.stream_options?.include_usage !== true) {
+      errors.push('stream_options.include_usage must be true');
+    }
+    if (body?.parallel_tool_calls !== false) errors.push('parallel_tool_calls must be false');
+    if (!toolsValid) errors.push('tools must be an array');
+  } else {
+    if (body?.temperature !== 0) errors.push('classification temperature must be zero');
+    if (toolsValid) errors.push('classification must not send tools');
   }
-  if (body?.parallel_tool_calls !== false) errors.push('parallel_tool_calls must be false');
   if (!Array.isArray(body?.messages)) errors.push('messages must be an array');
-  if (!toolsValid) errors.push('tools must be an array');
   if (request.headers.authorization !== `Bearer ${apiKey}`) {
     errors.push('authorization must use the local E2E bearer token');
   }
@@ -87,9 +95,11 @@ async function startHangingOpenAIStub(logPath, apiKey) {
       return;
     }
 
-    const validation = validateRequest(request, body, apiKey);
+    const kind = classifyRequest(body);
+    const validation = validateRequest(request, body, apiKey, kind);
     const record = {
       id,
+      kind,
       path: requestUrl.pathname,
       ...(validation.model ? {model: validation.model} : {}),
       stream: validation.stream,
@@ -114,6 +124,23 @@ async function startHangingOpenAIStub(logPath, apiKey) {
       closed += 1;
       response.writeHead(400, {'Content-Type': 'application/json'});
       response.end(JSON.stringify({error: 'Unexpected OpenAI-compatible request shape'}));
+      return;
+    }
+
+    if (kind === 'classification') {
+      record.closedAt = new Date().toISOString();
+      closed += 1;
+      response.writeHead(200, {'Content-Type': 'application/json'});
+      response.end(JSON.stringify({
+        choices: [{
+          message: {content: JSON.stringify({
+            complexity: 'full',
+            reason: 'E2E exercises the full dual-trace workflow',
+          })},
+          finish_reason: 'stop',
+        }],
+      }));
+      appendLog(logPath, {id, event: 'classification_completed'});
       return;
     }
 

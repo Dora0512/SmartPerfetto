@@ -52,6 +52,15 @@ For parallel regression jobs, give each case a different
 seconds for locks; separate directories isolate test state and do not replace
 investigation of persistent contention.
 
+Session markers: `✓` delivered with checks passed or not applicable; `~`
+delivered but checks did not complete (for example an invalid conclusion
+declaration or a timed-out semantic review) — do not treat it as verified; `!`
+the run did not finish, or claims contradicted the evidence and quality checks
+failed; `✗` failed. The claim-verification line under the conclusion gives the
+verified count and reason. Without findings, confidence is a fixed baseline and
+the text output omits it. JSON/NDJSON `complete` events carry `deliveryVerdict`
+(`completed`/`unverified`/`partial`/`failed`).
+
 Incomplete runs display their termination reason and available diagnostics,
 distinguishing absent narrative from narrative that failed quality checks.
 JSON/NDJSON also retain `terminationMessage` and `hasConclusion`.
@@ -121,21 +130,28 @@ smp provider test system
 smp provider test <providerId> --format json
 ```
 
-CLI configuration and Web UI configuration are separate entry points. For
-first-time CLI setup, run `smp config init`, then edit the printed env file,
+CLI configuration and Web UI configuration are separate by default. The CLI
+Provider store is `<CLI home>/runtime/data/providers.json`, normally
+`~/.smartperfetto/runtime/data/providers.json`; a source Web backend defaults to
+`backend/data/providers.json`. A Web Provider change applies to the CLI only
+when both processes explicitly use the same `SMARTPERFETTO_BACKEND_DATA_DIR`.
+
+For first-time CLI setup, run `smp config init`, then edit the printed env file,
 usually `~/.smartperfetto/env`. When `--env-file` is not passed, the CLI loads:
 
 1. `backend/.env` from the package or source backend directory.
 2. `~/.smartperfetto/env`, which overrides earlier values.
 
-If you pass `--env-file /path/to/env`, the CLI reads only that file. As with
-Web/Docker setup, enable only one provider source for first setup: local Claude
-login, one Claude-compatible env block, or one OpenAI-compatible env block.
+If you pass `--env-file /path/to/env`, the CLI reads only that file. Enable only
+one CLI provider source for first setup: an active profile already present in
+the current CLI store, one Claude-compatible env block, or one OpenAI-compatible
+env block. `smp provider list` and `smp provider test <providerId>` inspect that
+CLI store; the CLI does not currently add, edit, or activate profiles.
 
 Runtime checks follow the actually selected provider/runtime:
 
-- Claude Agent SDK accepts API keys, Anthropic-compatible proxies, Bedrock,
-  Vertex, and local Claude login fallback.
+- Claude Agent SDK requires an API key/auth token or Bedrock/Vertex configuration.
+  A proxy URL or Claude Code login alone fails preflight, doctor, and system provider tests.
 - OpenAI Agents SDK requires `OPENAI_API_KEY` or a local
   `localhost` / `127.0.0.1` / `0.0.0.0` OpenAI-compatible endpoint.
 - Ollama providers use the OpenAI-compatible runtime.
@@ -374,9 +390,19 @@ CLI files are stored under:
 The source sidecars exist only when the turn has canonical safe source
 provenance. Latest files are replaced by later turns; a source-free turn clears
 stale latest sidecars but preserves historical per-turn files. JSON, Markdown,
-and HTML retain only safe decisions, relative `CodeRef` values, and mechanism
-bindings—never absolute roots, snippets, search queries, or free-text binding
-reasons.
+and HTML can retain authorized `provider_send` source quotations in the analysis
+body and formal claims. The two source metadata sidecars contain only safe
+decisions, relative `CodeRef` values and mechanism bindings, without absolute
+roots, snippets, search queries or free-text binding reasons. Output projection
+continues to protect credentials, private canaries and absolute roots.
+
+`conclusion.md` and `turns/NNN.md` retain the body records. Separate
+`analysis-evidence.json` and `turns/NNN.analysis-evidence.json` files bind display
+data to the same session, turn and candidate body. Terminal output, `show` and
+Markdown export show all claims, references, verification issues and source
+bindings; JSON/NDJSON also carry structured details. A malformed or mismatched
+bundle is reported as unavailable without borrowing verification from another
+turn. These files are for display and do not issue evidence or rerun verification.
 
 `ui-action-proposals.json` stores evidence links and UI proposal metadata for
 reports and later turns only. The CLI does not automatically execute timeline

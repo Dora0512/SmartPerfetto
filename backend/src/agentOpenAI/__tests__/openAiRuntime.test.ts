@@ -30,6 +30,7 @@ import * as mcpModule from '../../agentv3/claudeMcpServer';
 import {getSourceLookupCodeReferences} from '../../services/codebase/sourceLookupTools';
 import {projectCodeAwareStreamingUpdate} from '../../services/security/codeAwareStreamingUpdateProjection';
 import * as contextAuthorization from '../../services/resolvedAnalysisContext';
+import * as localizedStrategyTemplate from '../../agentv3/localizedStrategyTemplate';
 import {resolveKnowledgeScope} from '../../services/scopedKnowledgeStore';
 import {renderConclusionContractSidecar, type ConclusionContract} from '../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
@@ -50,7 +51,7 @@ function createOpenAiConfigForTest(): OpenAIAgentConfig {
     baseURL: 'https://provider.invalid/v1', protocol: 'responses', cwd: process.cwd(),
     maxOutputTokens: 1024, maxTurns: 3, quickMaxTurns: 2, quickTargetTurns: 1,
     fullPathPerTurnMs: 60_000, fullRequestTimeoutMs: 60_000, streamIdleTimeoutMs: 60_000,
-    maxHistoryBytes: 4 * 1024 * 1024, quickPathPerTurnMs: 30_000,
+    maxRunTimeoutMs: 120_000, maxHistoryBytes: 4 * 1024 * 1024, quickPathPerTurnMs: 30_000,
     classifierTimeoutMs: 10_000, outputLanguage: 'zh-CN'};
 }
 function classify(value: AnalysisTurnIntentDecision = decision) {
@@ -380,6 +381,138 @@ describe('OpenAI cancellation and bounded recovery', () => {
     expect(result.conclusion).toBe(''); expect(result.partial).toBe(true);
   });
 
+  describe('run budget on a slow but producing endpoint (Round 60 SP-E2E-08)', () => {
+    // base budget 100 ms × 3 turns = 300 ms; maximum 3 s; delivery reserve 500 ms
+    const slowConfig = () => ({...createOpenAiConfigForTest(), quickPathPerTurnMs: 100, quickMaxTurns: 3,
+      maxRunTimeoutMs: 3_000, streamIdleTimeoutMs: 60_000});
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const toolOutput = (callId: string) => ({type: 'run_item_stream_event', name: 'tool_output',
+      item: {rawItem: {callId, name: 'execute_sql', output: '{"success":true}'}}});
+    const hang = () => new Promise<never>(() => undefined);
+    function streamOf(events: () => AsyncGenerator<any>, text = '') {
+      return {currentTurn: 1, finalOutput: text, history: [{role: 'assistant', content: text}], lastResponseId: 'slow',
+        state: {}, completed: Promise.resolve(), [Symbol.asyncIterator]: events};
+    }
+    function prepareWithReturnedData(runtime: any) {
+      return prepareStub(runtime).mockImplementation(async (...args: any[]) => {
+        const invocation = {toolCallId: 'slow-sql', toolName: 'execute_sql', params: {}, extra: {}};
+        await args[4].toolObserver({...invocation, phase: 'started'});
+        await args[4].toolObserver({...invocation, phase: 'completed', result: {
+          content: [{type: 'text', text: JSON.stringify({columns: ['dur'], rows: [[195]], success: true})}]}});
+        return {systemPrompt: 'test system prompt', tools: [], allowedTools: [], hypotheses: [],
+          sessionContext: args[4].sessionContext, previousTurns: args[4].previousTurns,
+          sessionMapKey: args[4].analysisRunSpec.identity.sessionMapKey};
+      });
+    }
+    const budgetLine = (warn: jest.SpiedFunction<typeof console.warn>) =>
+      warn.mock.calls.map(call => String(call[0])).find(line => line.startsWith('[OpenAIRuntime] run budget:')) ?? '';
+
+    it('keeps investigating past the base budget while tool results keep returning', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+      const run = mockRun(streamOf(async function* () {
+        yield {type: 'raw_model_stream_event', data: {type: 'response_started'}};
+        for (let i = 0; i < 4; i++) { await sleep(150); yield toolOutput(`slow-${i}`); }
+        yield responseDone('slow answer');
+      }, 'slow answer'));
+      const result = await runtime.analyze('query', 'slow-progress', 'trace', {analysisMode: 'fast', providerId: null});
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(result.completion).toMatchObject({status: 'completed'});
+      expect(result.conclusion).toBe('slow answer');
+      expect(budgetLine(warn)).toMatch(/progressExtensions=[1-9].*timeoutDelivery=not_needed/);
+    });
+
+    it('extends at the deadline while the provider is still writing output', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+      const run = mockRun(streamOf(async function* () {
+        yield {type: 'raw_model_stream_event', data: {type: 'response_started'}};
+        for (let i = 0; i < 10; i++) {
+          await sleep(60);
+          yield {type: 'raw_model_stream_event', data: {type: 'model', event: {choices: [{index: 0, delta: {reasoning_content: 'thinking'}}]}}};
+        }
+        yield responseDone('long final answer');
+      }, 'long final answer'));
+      const result = await runtime.analyze('query', 'slow-output', 'trace', {analysisMode: 'fast', providerId: null});
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(result.completion).toMatchObject({status: 'completed'});
+    });
+
+    it('delivers a limited answer from returned data when the budget runs out', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const runtime = createOpenAiRuntimeForTest(); prepareWithReturnedData(runtime);
+      const run = mockRun().mockResolvedValueOnce(streamOf(async function* () {
+        yield {type: 'raw_model_stream_event', data: {type: 'response_started'}};
+        yield toolOutput('slow-0');
+        await hang();
+      }) as any).mockResolvedValueOnce(sdkStream('Main thread waited 195 ms; the owner is not established.'));
+      const startedAt = Date.now();
+      const result = await runtime.analyze('query', 'timeout-delivery', 'trace', {analysisMode: 'fast', providerId: null});
+      expect(run).toHaveBeenCalledTimes(2);
+      expect((run.mock.calls[1][0] as any).tools).toEqual([]);
+      expect(run.mock.calls[1][2]).toMatchObject({maxTurns: 1});
+      expect(run.mock.calls[1][2]).not.toHaveProperty('previousResponseId');
+      const prompt = (run.mock.calls[1][1] as any[])[0].content;
+      expect(prompt).toContain('本轮调查已耗尽预算（timeout：');
+      expect(prompt).toContain('"rows":[[195]]');
+      expect(result).toMatchObject({partial: true, terminationReason: 'timeout',
+        conclusion: 'Main thread waited 195 ms; the owner is not established.',
+        completion: {status: 'incomplete', reason: 'timeout'}});
+      expect(result.terminationMessage).toContain('调查时间预算已耗尽');
+      const context = finalization.takeFinalizationContext(result)!;
+      finalizationContexts.push(context);
+      // no semantic call after an exhausted budget, but evidence reads keep a reserve
+      expect(context.hasSemanticTransport).toBe(false);
+      expect(context.deadlineMs).toBeLessThanOrEqual(startedAt + 3_000);
+      expect(context.deadlineMs - Date.now()).toBeGreaterThanOrEqual(50);
+      expect(budgetLine(warn)).toContain('timeoutDelivery=delivered');
+    });
+
+    it('restores the empty result when the delivery call also runs out of time', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const runtime = createOpenAiRuntimeForTest(); prepareWithReturnedData(runtime);
+      const run = mockRun().mockResolvedValueOnce(streamOf(async function* () {
+        yield {type: 'raw_model_stream_event', data: {type: 'response_started'}};
+        yield toolOutput('slow-0');
+        await hang();
+      }) as any).mockImplementationOnce(() => hang());
+      const result = await runtime.analyze('query', 'timeout-delivery-failed', 'trace', {analysisMode: 'fast', providerId: null});
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({conclusion: '', partial: true, completion: {status: 'incomplete', reason: 'timeout'}});
+      expect(budgetLine(warn)).toContain('timeoutDelivery=restored');
+    });
+
+    it('does not start a delivery call when nothing returned', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+      const run = mockRun(); run.mockImplementation(() => hang());
+      const result = await runtime.analyze('query', 'timeout-nothing', 'trace', {analysisMode: 'fast', providerId: null});
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({conclusion: '', completion: {status: 'incomplete', reason: 'timeout'}});
+      expect(budgetLine(warn)).toContain('timeoutDelivery=no_returned_data');
+    });
+
+    it.each([
+      [{type: 'raw_model_stream_event', data: {type: 'output_text_delta', delta: 'a'}}, true],
+      [{type: 'raw_model_stream_event', data: {type: 'output_text_delta', delta: ''}}, false],
+      [{type: 'raw_model_stream_event', data: {type: 'model', event: {choices: [{index: 0, delta: {reasoning_content: 'r'}}]}}}, true],
+      [{type: 'raw_model_stream_event', data: {type: 'model', event: {choices: [{index: 0, delta: {tool_calls: [{index: 0, function: {arguments: '{"a"'}}]}}]}}}, true],
+      [{type: 'raw_model_stream_event', data: {type: 'model', event: {choices: [{index: 0, delta: {content: ''}}]}}}, false],
+      [{type: 'raw_model_stream_event', data: {type: 'model', event: {choices: []}}}, false],
+      [{type: 'raw_model_stream_event', data: {type: 'model', event: {type: 'response.output_text.delta', delta: 'x'}}}, true],
+      [{type: 'raw_model_stream_event', data: {type: 'model', event: {type: 'response.in_progress'}}}, false],
+      [{type: 'raw_model_stream_event', data: {type: 'response_started'}}, false],
+      [{type: 'agent_updated_stream_event', agent: {name: 'x'}}, false],
+    ])('counts only provider output as stream activity: %j', (event, expected) => {
+      expect(__testing.openAiStreamEventCarriesOutput(event)).toBe(expected);
+    });
+  });
+
   it('uses 49 investigation turns plus one no-tool summary inside a 50-turn budget', async () => {
     jest.mocked(configModule.loadOpenAIConfig).mockReturnValue({...createOpenAiConfigForTest(), quickMaxTurns: 50});
     const history = [{role: 'user', content: 'Investigate the trace.'},
@@ -548,6 +681,97 @@ describe('OpenAI bounded output-limit recovery', () => {
     conclusions: [{rank: 1, statement: 'The marker is present.'}], clusters: [], evidenceChain: [],
     claims: [], uncertainties: [], nextSteps: []} as ConclusionContract);
 
+  it('uses the reserved no-tool turn to complete a full undeclared candidate without rewriting it', async () => {
+    const body = `开头🙂\n${'中English🙂'.repeat(1300)}\n结尾`;
+    const {runtime, updates} = createRuntimeWithUpdates(); prepareStub(runtime);
+    const run = mockRun()
+      .mockResolvedValueOnce({...recoverableStream(body, 'completed'), async *[Symbol.asyncIterator]() {
+        yield {type: 'raw_model_stream_event', data: {type: 'response_started'}};
+        yield {type: 'raw_model_stream_event', data: {type: 'output_text_delta', delta: 'INITIAL_VISIBLE'}};
+        yield responseDone(body, 'completed');
+      }})
+      .mockResolvedValueOnce({...recoverableStream(`${body}\n${protocolSidecar}`, 'completed'), async *[Symbol.asyncIterator]() {
+        yield {type: 'raw_model_stream_event', data: {type: 'response_started'}};
+        yield {type: 'raw_model_stream_event', data: {type: 'output_text_delta', delta: 'REPAIR_MUST_NOT_STREAM'}};
+        yield responseDone(`${body}\n${protocolSidecar}`, 'completed');
+      }});
+    const result = await runtime.analyze('query', 'missing-declaration-recovery', 'trace', {providerId: null});
+    expect(run).toHaveBeenCalledTimes(2);
+    expect((run.mock.calls[1][0] as any).tools).toEqual([]);
+    expect(JSON.stringify(run.mock.calls[1][1])).toContain(JSON.stringify(body).slice(1, -1));
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body.trim());
+    expect(inspectCandidateProtocol(result.conclusion).status).toBe('valid');
+    expect(result.completion).toMatchObject({status: 'completed'});
+    expect(JSON.stringify(updates)).toContain('INITIAL_VISIBLE');
+    expect(JSON.stringify(updates)).not.toContain('REPAIR_MUST_NOT_STREAM');
+  });
+
+  it('retains the original undeclared candidate when completion changes its body', async () => {
+    const body = 'Measured value: 42 ms.';
+    const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+    const run = mockRun()
+      .mockResolvedValueOnce(recoverableStream(body, 'completed'))
+      .mockResolvedValueOnce(recoverableStream(`Measured value: 43 ms.\n${protocolSidecar}`, 'completed'));
+    const result = await runtime.analyze('query', 'changed-declaration-recovery', 'trace', {providerId: null});
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.conclusion).toBe(body);
+    expect(result.conclusionContract?.bindingEligibility).not.toBe('eligible');
+    expect(result.completion).toMatchObject({status: 'completed',
+      conclusionFingerprint: analysisDeliveryFingerprint(body)});
+  });
+
+  it('declines missing-declaration completion when the full history and prompt exceed the existing input cap', async () => {
+    jest.mocked(configModule.loadOpenAIConfig).mockReturnValue({...createOpenAiConfigForTest(), maxHistoryBytes: 1024});
+    const body = 'bounded body '.repeat(300).trimEnd();
+    const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+    const run = mockRun(recoverableStream(body, 'completed'));
+    const result = await runtime.analyze('query', 'missing-declaration-history-cap', 'trace', {providerId: null});
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed'});
+  });
+
+  it('retains the completed native candidate when the declaration template cannot render', async () => {
+    const body = 'Measured value: 42 ms.';
+    const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+    const run = mockRun(recoverableStream(body, 'completed'));
+    jest.spyOn(localizedStrategyTemplate, 'renderRequiredLocalizedStrategyTemplate')
+      .mockImplementationOnce(() => { throw new Error('missing declaration template'); });
+
+    const result = await runtime.analyze('query', 'missing-declaration-template', 'trace', {providerId: null,
+      runId: 'missing-declaration-template'});
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed', runId: 'missing-declaration-template',
+      conclusionFingerprint: analysisDeliveryFingerprint(body)});
+  });
+
+  it('repairs an internally unowned source Trace binding within the existing single correction', async () => {
+    const payload: ConclusionContract = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+      conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
+      claims: [{id: 'source-body', kind: 'inference', text: 'Implementation is a candidate explanation.', references: [],
+        semantics: {schemaVersion: 'claim_semantics@1', predicate: 'source.mechanism', polarity: 'affirmed',
+          discourse: 'hypothetical', quantifier: 'one', modality: 'possible', scope: {population: 'codebase'}}}],
+      sourceClaimBindings: [{claimId: 'source-body', mechanismStatus: 'compatible', sourceReferenceIds: ['source-returned'],
+        traceEvidenceRefIds: ['evidence-owned-by-another-claim']}]};
+    const encode = (value: ConclusionContract) => `Implementation is a candidate explanation.\n<!-- smartperfetto:conclusion-contract@1\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n-->`;
+    const first = encode(payload);
+    const complete = encode({...payload, sourceClaimBindings: [{...payload.sourceClaimBindings![0], traceEvidenceRefIds: []}]});
+    const {runtime, updates} = createRuntimeWithUpdates(); prepareStub(runtime);
+    const run = mockRun().mockResolvedValueOnce(recoverableStream(first, 'completed')).mockResolvedValueOnce(recoverableStream(complete, 'completed'));
+    const result = await runtime.analyze('query', 'source-link-recovery', 'trace', {providerId: null});
+    expect(run).toHaveBeenCalledTimes(2);
+    expect((run.mock.calls[1][0] as any).tools).toEqual([]);
+    const diagnostic = updates.filter(update => update.content?.phase === 'candidate_protocol').map(update => update.content.candidateProtocolDiagnostic);
+    expect(diagnostic[0]).toMatchObject({status: 'invalid', issueCodes: ['invalid_reference'], sourceBindingCount: 1});
+    expect(diagnostic[1]).toMatchObject({status: 'valid', sourceBindingCount: 1});
+    const context = finalization.takeFinalizationContext(result)!;
+    finalizationContexts.push(context);
+    expect(context.getNativeDeclaration(result, new AbortController().signal)?.raw).toBe(complete);
+    expect(inspectCandidateProtocol(first).sidecar.rawPayload).toEqual(payload);
+  });
+
   it.each(['sidecar-only', 'invalid-schema'])('repairs a native completed %s candidate before finalization', async kind => {
     const first = kind === 'sidecar-only' ? protocolSidecar : `The marker is present.\n${protocolSidecar.replace('"focused_answer"', '"invalid-mode"')}`;
     const complete = `The marker is present.\n${protocolSidecar}`;
@@ -572,6 +796,35 @@ describe('OpenAI bounded output-limit recovery', () => {
       expect(recoveryPrompt).toContain('"reason":"invalid_enum"');
       expect(recoveryPrompt).not.toContain('invalid-mode');
     }
+  });
+
+  it('gives the existing relation correction a closed diagnostic and exact external schema', async () => {
+    const base: ConclusionContract = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+      conclusions: [], clusters: [], evidenceChain: [], claims: [], uncertainties: [], nextSteps: [],
+      relationProposals: [{schemaVersion: 'evidence_relation_candidate@1', id: 'proposal:relation_1',
+        kind: 'overlap', direction: 'symmetric', subject: {evidenceRefId: 'evidence-subject'}}]};
+    const first = `The marker is present.\n${renderConclusionContractSidecar({...base, relationProposals: [{
+      ...base.relationProposals![0], PRIVATE_RELATION_KEY_CANARY: 'PRIVATE_RELATION_VALUE_CANARY',
+    }]} as any)}`;
+    const complete = `The marker is present.\n${renderConclusionContractSidecar(base)}`;
+    const {runtime, updates} = createRuntimeWithUpdates(); prepareStub(runtime);
+    const run = mockRun().mockResolvedValueOnce(recoverableStream(first, 'completed'))
+      .mockResolvedValueOnce(recoverableStream(complete, 'completed'));
+    const result = await runtime.analyze('query', 'relation-protocol-recovery', 'trace', {providerId: null});
+    expect(run).toHaveBeenCalledTimes(2);
+    const diagnostic = updates.find(update => update.content?.phase === 'candidate_protocol')!
+      .content.candidateProtocolDiagnostic;
+    expect(diagnostic).toMatchObject({status: 'invalid', issueCodes: ['invalid_relation_proposal'],
+      relationProposalDiagnostics: [{scope: 'item', ordinal: 1, reason: 'unknown_field'}]});
+    const recoveryHistory = run.mock.calls[1][1] as Array<{role?: string; content?: unknown}>;
+    const recoveryPrompt = String(recoveryHistory[recoveryHistory.length - 1].content);
+    expect(recoveryPrompt).toContain('proofBindings');
+    expect(recoveryPrompt).toContain('endpointColumn');
+    expect(recoveryPrompt).toContain('"reason":"unknown_field"');
+    expect(recoveryPrompt).not.toContain('PRIVATE_RELATION_');
+    const context = finalization.takeFinalizationContext(result)!;
+    finalizationContexts.push(context);
+    expect(context.getNativeDeclaration(result, new AbortController().signal)?.raw).toBe(complete);
   });
 
   it.each(['en', 'zh-CN'] as const)('provides value-free schema feedback to the one correction in %s', async outputLanguage => {
@@ -762,7 +1015,7 @@ describe('OpenAI bounded output-limit recovery', () => {
   it('does not publish a late completion attempt after cancellation', async () => {
     const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
     const entered = createDeferred<void>(); const late = createDeferred<any>();
-    const run = mockRun().mockResolvedValueOnce(recoverableStream('original partial answer'))
+    const run = mockRun().mockResolvedValueOnce(recoverableStream('original partial answer', 'completed'))
       .mockImplementationOnce(async () => {entered.resolve(); return late.promise;});
     const updates: any[] = []; runtime.on('update', (update: unknown) => updates.push(update));
     const pending = runtime.analyze('query', 'cancelled-recovery', 'trace', {providerId: null});
@@ -774,6 +1027,7 @@ describe('OpenAI bounded output-limit recovery', () => {
     await Promise.resolve();
     expect(run).toHaveBeenCalledTimes(2);
     expect(updates.some(update => update.type === 'conclusion')).toBe(false);
+    expect(runtime.sessionMap.size).toBe(0);
   });
 });
 
@@ -1178,7 +1432,8 @@ describe('OpenAI finalization handoff', () => {
       order.push('attach'); originalAttach(result, context);
     });
     const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime); mockRun();
-    const options = {providerId: null, runId: 'current-run', analysisContextFingerprint: '', codeAwareMode: 'off' as const};
+    const options = {providerId: null, runId: 'current-run', analysisContextFingerprint: '', codeAwareMode: 'off' as const,
+      selectionContext: {kind: 'track_event' as const, eventId: 7, ts: 42, dur: 9}};
     const pinnedFingerprint = contextAuthorization.buildAnalysisContextAuthorizationFingerprint(options, resolveKnowledgeScope(options));
     options.analysisContextFingerprint = pinnedFingerprint;
     const result = await runtime.analyze('query', 'finalization-once', 'trace', options);
@@ -1191,6 +1446,8 @@ describe('OpenAI finalization handoff', () => {
     const providerQuery = context.getProviderQuery(new AbortController().signal);
     expect(providerQuery).toEqual({text: 'query', analysisContextFingerprint: pinnedFingerprint});
     expect(Object.isFrozen(providerQuery)).toBe(true);
+    expect(context.getSelection(new AbortController().signal)).toEqual({present: true, kind: 'track_event',
+      context: options.selectionContext, sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'trace'}});
     expect(JSON.stringify(result)).not.toContain('"providerQuery"');
     expect(finalization.takeFinalizationContext(result)).toBeUndefined();
     expect(context.runId).toBe('current-run');
@@ -1228,7 +1485,7 @@ describe('OpenAI finalization handoff', () => {
     expect(intentTransport.runOpenAiIntentTransport).toHaveBeenCalledTimes(2);
     const call = jest.mocked(intentTransport.runOpenAiIntentTransport).mock.calls[1][0];
     expect(jest.mocked(intentTransport.runOpenAiIntentTransport).mock.calls[0][0].purpose).toBe('classification');
-    expect(call).not.toHaveProperty('purpose');
+    expect(call.purpose).toBe('final_semantic');
     expect(call).toMatchObject({config: {lightModel: 'pinned-primary', apiKey: 'test-only',
       baseURL: 'https://provider.invalid/v1', protocol: 'responses'}});
     if (maxOutputTokens === undefined) expect(call).not.toHaveProperty('maxOutputTokens');
@@ -1321,15 +1578,18 @@ describe('OpenAI SDK token and storage contracts', () => {
   it.each(['chat_completions', 'responses'] as const)('omits all generation token caps on the actual %s SDK wire when unset', async protocol => {
     jest.mocked(configModule.loadOpenAIConfig).mockReturnValue({...createOpenAiConfigForTest(), protocol, maxOutputTokens: undefined});
     const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+    const nativeAnswer = `complete answer\n${renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1',
+      mode: 'focused_answer', conclusions: [], clusters: [], evidenceChain: [], claims: [], relationProposals: [],
+      uncertainties: [], nextSteps: []})}`;
     const chatWire = [
-      {id: 'uncapped-chat', object: 'chat.completion.chunk', created: 1, model: 'pinned-light', choices: [{index: 0, delta: {role: 'assistant', content: 'complete answer'}, finish_reason: null}]},
+      {id: 'uncapped-chat', object: 'chat.completion.chunk', created: 1, model: 'pinned-light', choices: [{index: 0, delta: {role: 'assistant', content: nativeAnswer}, finish_reason: null}]},
       {id: 'uncapped-chat', object: 'chat.completion.chunk', created: 1, model: 'pinned-light', choices: [{index: 0, delta: {}, finish_reason: 'stop'}]},
     ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
-    const responseMessage = {id: 'msg-uncapped', type: 'message', role: 'assistant', status: 'completed', content: [{type: 'output_text', text: 'complete answer', annotations: []}]};
+    const responseMessage = {id: 'msg-uncapped', type: 'message', role: 'assistant', status: 'completed', content: [{type: 'output_text', text: nativeAnswer, annotations: []}]};
     const responseWire = [
       {type: 'response.created', response: {id: 'resp-uncapped', object: 'response', created_at: 1, model: 'pinned-light', status: 'in_progress', output: []}},
       {type: 'response.output_item.added', output_index: 0, item: responseMessage},
-      {type: 'response.output_text.delta', output_index: 0, item_id: 'msg-uncapped', content_index: 0, delta: 'complete answer'},
+      {type: 'response.output_text.delta', output_index: 0, item_id: 'msg-uncapped', content_index: 0, delta: nativeAnswer},
       {type: 'response.output_item.done', output_index: 0, item: responseMessage},
       {type: 'response.completed', response: {id: 'resp-uncapped', object: 'response', created_at: 1, model: 'pinned-light', status: 'completed', output: [responseMessage], usage: {input_tokens: 1, output_tokens: 1, total_tokens: 2}}},
     ].map(value => `event: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`).join('');
@@ -1338,7 +1598,7 @@ describe('OpenAI SDK token and storage contracts', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     for (const key of ['max_tokens', 'max_completion_tokens', 'max_output_tokens']) expect(body).not.toHaveProperty(key);
-    expect(result.conclusion).toBe('complete answer');
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe('complete answer');
     expect(jest.mocked(intentTransport.runOpenAiIntentTransport).mock.calls[0][0].maxOutputTokens).toBe(2048);
   });
 

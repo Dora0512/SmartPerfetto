@@ -118,7 +118,7 @@ steps:
           type: duration
           format: duration_ms
           unit: ms
-        - name: q4a_io_blocked_ms
+        - name: q4a_uninterruptible_ms
           label: "Q4a 不可中断等待"
           type: duration
           format: duration_ms
@@ -184,11 +184,12 @@ steps:
         SUM(CASE WHEN s.state='Running' AND s.core_type='little' THEN s.dur_ns ELSE 0 END)/1e6 AS q2_little_running_ms,
         SUM(CASE WHEN s.state='Running' AND s.core_type='unknown' THEN s.dur_ns ELSE 0 END)/1e6 AS unknown_running_ms,
         SUM(CASE WHEN s.state IN ('R','R+') THEN s.dur_ns ELSE 0 END)/1e6 AS q3_runnable_ms,
-        SUM(CASE WHEN s.state IN ('D','DK') THEN s.dur_ns ELSE 0 END)/1e6 AS q4a_io_blocked_ms,
+        SUM(CASE WHEN s.state IN ('D','DK') THEN s.dur_ns ELSE 0 END)/1e6 AS q4a_uninterruptible_ms,
         SUM(CASE WHEN s.state IN ('S','I') THEN s.dur_ns ELSE 0 END)/1e6 AS q4b_sleeping_ms,
         SUM(CASE WHEN s.state NOT IN ('Running','R','R+','D','DK','S','I') THEN s.dur_ns ELSE 0 END)/1e6 AS other_state_ms,
-        SUM(CASE WHEN s.state='Running' AND s.core_type IN ('prime','big','medium') THEN s.dur_ns ELSE 0 END)*100.0/
-          NULLIF(SUM(CASE WHEN s.state='Running' THEN s.dur_ns ELSE 0 END),0) AS perf_core_pct,
+        CASE WHEN SUM(CASE WHEN s.state='Running' AND s.core_type='unknown' THEN s.dur_ns ELSE 0 END)>0 THEN NULL
+          ELSE SUM(CASE WHEN s.state='Running' AND s.core_type IN ('prime','big','medium') THEN s.dur_ns ELSE 0 END)*100.0/
+            NULLIF(SUM(CASE WHEN s.state='Running' THEN s.dur_ns ELSE 0 END),0) END AS perf_core_pct,
         GROUP_CONCAT(DISTINCT CASE WHEN s.state='Running' THEN s.cpu END) AS running_cpus,
         GROUP_CONCAT(DISTINCT CASE WHEN s.state='Running' THEN s.core_type END) AS running_core_types,
         COALESCE(m.migrations,0) AS migrations,COALESCE(m.cross_cluster_migrations,0) AS cross_cluster_migrations
@@ -198,7 +199,7 @@ steps:
       SELECT *,COUNT(*) OVER(PARTITION BY window_id) AS total_observed_threads,
         'full_aggregate_before_display_limit' AS sampling_evidence
       FROM summary
-      ORDER BY CASE WHEN role='main' THEN 0 ELSE 1 END,MAX(q3_runnable_ms,q4a_io_blocked_ms,total_cpu_ms) DESC
+      ORDER BY CASE WHEN role='main' THEN 0 ELSE 1 END,MAX(q3_runnable_ms,q4a_uninterruptible_ms,total_cpu_ms) DESC
       LIMIT ${top_k|20}
     save_as: running_thread_quadrants
 

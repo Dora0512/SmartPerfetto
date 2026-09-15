@@ -17,28 +17,36 @@ import {captureEvidenceTable} from '../evidence/evidenceCapture';
 import {attachInvestigationEvidence} from '../evidence/investigationEvidenceLedger';
 import type {EvidenceReadView} from '../evidence/evidenceReadView';
 import {finalizeAnalysisResult, type AnalysisFinalizationOwner} from '../finalizeAnalysisResult';
+import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../finalSemanticAssessment';
 import {clearAllCodeAwareOutputGuards, registerCodeAwareCanary,
   registerPrivateAnalysisQueryForEcho, registerOnDemandSourceLookupForEcho, sanitizeCodeAwareText} from '../security/codeAwareOutputRegistry';
 import {sanitizeSourceReference, type SourceUseDecisionV1} from '../codebase/sourceUseDecision';
 import {finalizeOwnerSourceAwareAnalysisResultWithProjection} from '../codebase/sourceClaimVerifier';
 import {canonicalizeAnalysisResult} from '../canonicalAnalysisResult';
+import type {AnalysisRunSelection} from '../../agentRuntime/analysisRunSpec';
+import {projectOwnerAnalysisResult, projectPrivateAnalysisResult} from '../security/privateAnalysisProjection';
 
 const registry = buildStrategyRegistrySnapshotFromDefinitions({definitions: [], overlayGeneration: 'final-result-test'});
 
 function fixture(options: {body?: string; capture?: boolean; claim?: boolean; inconsistent?: boolean;
   omissions?: boolean; report?: boolean; providerQuery?: {text: string; analysisContextFingerprint?: string};
   identity?: IdentityResolutionV1; scope?: EvidenceScopeProvenanceV1;
-  deadlineMs?: number;
-  source?: {marker: string; declaredMarker?: string; invalid?: boolean};
+  deadlineMs?: number; capabilityRows?: number; capabilityCell?: string;
+  source?: {marker: string; declaredMarker?: string; invalid?: boolean; hypothetical?: boolean;
+    mechanismStatus?: 'compatible' | 'corroborated'; declareBindings?: boolean};
+  selection?: AnalysisRunSelection;
+  /** Emit the declaration as an invalid sidecar that still carries its claims. */
+  invalidDeclaration?: boolean;
   dispatch?: (input: IntentTransportInput) => Promise<IntentTransportResult>} = {}) {
   const body = options.body ?? (options.source ? 'The captured name identifies the source marker.' : 'The captured value is 49.');
   const ref = {evidenceRefId: 'data:count', rowIndex: 0, column: options.source ? 'name' : 'count',
     value: options.source ? options.source.declaredMarker ?? options.source.marker : 49};
   const declared: ConclusionContract = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
     conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
-    claims: options.claim === false ? [] : [{id: 'count', kind: options.source ? 'identity' : 'numeric', text: body, references: [ref],
+    claims: options.claim === false ? [] : [{id: 'count', kind: options.source?.hypothetical ? 'inference' : options.source ? 'identity' : 'numeric', text: body, references: [ref],
       semantics: {schemaVersion: 'claim_semantics@1', predicate: options.source ? 'identity.marker' : 'numeric.cell', polarity: 'affirmed',
-        discourse: 'asserted', quantifier: 'one', modality: 'certain',
+        discourse: options.source?.hypothetical ? 'hypothetical' : 'asserted', quantifier: 'one',
+        modality: options.source?.hypothetical ? 'possible' : 'certain',
         scope: {population: 'cited_rows', subjectRefs: [ref]},
         ...(options.source ? {} : {numeric: {operator: 'eq' as const, value: 49, unit: 'count'}})}}]};
   const result: AnalysisResult = {sessionId: 'final-result-test', conclusion: body, success: true,
@@ -59,13 +67,20 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
     sourceUse = {schemaVersion: 'source_use_decision@1', codeAwareMode: 'provider_send',
       selectedCodebaseIds: ['source-app'], status: 'corroborated', attemptedTools: ['read_codebase_file'],
       queriedCodebaseIds: ['source-app'], usedCodebaseIds: ['source-app'], coverageComplete: true, references: [reference]};
-    declared.sourceClaimBindings = [{claimId: 'count', mechanismStatus: 'compatible', sourceReferenceIds: [reference.id],
-      traceEvidenceRefIds: ['data:count']}];
+    if (options.source.declareBindings !== false) {
+      declared.sourceClaimBindings = [{claimId: 'count', mechanismStatus: options.source.mechanismStatus ?? 'compatible',
+        sourceReferenceIds: [reference.id], traceEvidenceRefIds: ['data:count']}];
+    }
     registerOnDemandSourceLookupForEcho(result.sessionId, [{...reference, referenceId: 'source-read',
       text: `Trace.beginSection("${options.source.marker}");\nTrace.endSection("${options.source.declaredMarker ?? options.source.marker}");`}]);
     result.conclusion = `${body}\n${options.source.invalid
       ? '<!-- smartperfetto:conclusion-contract@1\n```json\n' + JSON.stringify({...declared, verified: true}) + '\n```\n-->'
       : renderConclusionContractSidecar(declared)}`;
+    delete result.conclusionContract;
+  }
+  if (options.invalidDeclaration && !options.source) {
+    result.conclusion = `${body}\n` + '<!-- smartperfetto:conclusion-contract@1\n```json\n' +
+      JSON.stringify({...declared, verified: true}) + '\n```\n-->';
     delete result.conclusionContract;
   }
   const candidate = {runId: 'run', attemptId: 'attempt', candidateRef: 'candidate',
@@ -99,7 +114,11 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
     ? buildStrategyRegistrySnapshotFromDefinitions({definitions: [reportStrategy], overlayGeneration: 'report-test'}) : registry;
   attachFinalizationContext(result, {runId: 'run', sessionId: result.sessionId, deadlineMs: options.deadlineMs ?? Date.now() + 10_000,
     strategyRegistry: pinnedRegistry, traceIdentity: {currentTraceId: 'trace'},
+    selection: options.selection,
     providerQuery: options.providerQuery,
+    capabilityEvidence: options.capabilityRows ? [createDataEnvelope({columns: ['observed'],
+      rows: Array.from({length: options.capabilityRows}, () => [options.capabilityCell ?? 0])},
+      {type: 'sql_result', source: 'capability_fixture', title: 'Capabilities'})] : undefined,
     sourceUse, protocolProjection: projection?.protocolProjection,
     turnIntent: {schemaVersion: 1, status: 'resolved', source: 'semantic', registryFingerprint: pinnedRegistry.registryFingerprint,
       taskKind: 'fact', sceneId: 'general', scope: options.report ? 'scene_wide' : 'bounded_question', recommendedComplexity: 'quick',
@@ -116,8 +135,9 @@ afterEach(() => {clearAllCodeAwareOutputGuards(); jest.useRealTimers();});
 
 describe('issued investigation ledger through finalization', () => {
   function investigationRun(settings: {rows?: number; originRunId?: string; partialSibling?: boolean;
-    fakeLedger?: boolean; explanationOnly?: boolean; report?: boolean} = {}) {
-    const body = 'The captured value is 49. CPU evidence describes the selected window.';
+    fakeLedger?: boolean; explanationOnly?: boolean; report?: boolean; oversizedBody?: boolean} = {}) {
+    const body = 'The captured value is 49. CPU evidence describes the selected window.' +
+      (settings.oversizedBody ? 'x'.repeat(FINAL_SEMANTIC_INPUT_BYTE_LIMIT) : '');
     const claimText = 'The captured value is 49.';
     const contract: ConclusionContract = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
       conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [], claims: [{
@@ -168,7 +188,7 @@ describe('issued investigation ledger through finalization', () => {
     const dispatch = jest.fn(async (input: IntentTransportInput): Promise<IntentTransportResult> => {
       const snapshot = JSON.parse(input.prompt.slice(input.prompt.lastIndexOf('\n\n{') + 2));
       const selected = snapshot.investigationEvidence?.records[0];
-      return {status: 'ok', text: JSON.stringify({schemaVersion: 'final_semantic_response@3',
+      return {status: 'ok', text: JSON.stringify({schemaVersion: 'final_semantic_response@4',
         bodyCoverage: {status: 'complete', reviewedSpans: [{start: 0, end: snapshot.body.length}]},
         claims: [{claimId: 'count', consistency: 'consistent', contentLocations: [{text: claimText}], issues: []}], omissions: [],
         requirements: (snapshot.reportRequirements?.requirements || []).map((requirement: {id: string}) => ({
@@ -229,20 +249,54 @@ describe('issued investigation ledger through finalization', () => {
     expect(final.result.deliveryAssurance).toMatchObject({completion: 'passed', claims: 'passed', investigationEvidence: 'coverage_incomplete'});
   });
 
-  it('compacts 300 records without losing retained evidence or invalidating independent claims/report', async () => {
+  it('carries all 300 records when the complete ledger fits the shared semantic budget', async () => {
     const target = investigationRun({rows: 300, report: true});
     const final = await target.run();
     expect(target.dispatch).toHaveBeenCalledTimes(1);
     const input = target.dispatch.mock.calls[0][0];
     const snapshot = JSON.parse(input.prompt.slice(input.prompt.lastIndexOf('\n\n{') + 2));
-    expect(snapshot.investigationEvidence.byteBudget).toBeLessThanOrEqual(64 * 1024);
+    expect(snapshot.investigationEvidence.byteBudget).toBeGreaterThan(64 * 1024);
+    expect(snapshot.investigationEvidence.byteBudget).toBeLessThanOrEqual(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
     expect(Buffer.byteLength(JSON.stringify(snapshot.investigationEvidence), 'utf8')).toBeLessThanOrEqual(snapshot.investigationEvidence.byteBudget);
-    expect(snapshot.investigationEvidence.omittedRecordCount).toBeGreaterThan(0);
-    expect(snapshot.investigationEvidence.complete).toBe(false);
+    expect(snapshot.investigationEvidence.omittedRecordCount).toBe(0);
+    expect(snapshot.investigationEvidence.complete).toBe(true);
+    expect(snapshot.investigationEvidence.records).toHaveLength(300);
     expect(snapshot.investigationEvidence.records.length + snapshot.investigationEvidence.omittedRecordCount).toBe(300);
+    expect(snapshot.contentLocationCatalog).toMatchObject({schemaVersion: 'final_semantic_location_catalog@1',
+      entries: [expect.objectContaining({text: target.result.conclusion})]});
+    expect(Buffer.byteLength(input.prompt, 'utf8')).toBeLessThanOrEqual(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
     expect(final.result.investigationAssessment?.evidenceRecords).toHaveLength(300);
     expect(final.semanticAssessment?.status).toBe('checked');
     expect(final.result.deliveryAssurance).toMatchObject({completion: 'passed', claims: 'passed', report: 'passed'});
+  });
+
+  it('omits only complete cohorts when the full ledger exceeds the shared semantic budget', async () => {
+    const target = investigationRun({rows: 2000, report: true});
+    const final = await target.run();
+    expect(target.dispatch).toHaveBeenCalledTimes(1);
+    const input = target.dispatch.mock.calls[0][0];
+    const snapshot = JSON.parse(input.prompt.slice(input.prompt.lastIndexOf('\n\n{') + 2));
+    expect(Buffer.byteLength(input.prompt, 'utf8')).toBeLessThanOrEqual(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
+    expect(snapshot.contentLocationCatalog.entries).toEqual([
+      expect.objectContaining({text: target.result.conclusion}),
+    ]);
+    expect(snapshot.investigationEvidence.omittedRecordCount).toBeGreaterThan(0);
+    expect(snapshot.investigationEvidence.records.length % 10).toBe(0);
+    expect(snapshot.investigationEvidence.issues).toContain('investigation_provider_view_omitted_records');
+    expect(snapshot.investigationEvidence.complete).toBe(false);
+    expect(snapshot.investigationEvidence.records.length + snapshot.investigationEvidence.omittedRecordCount).toBe(2000);
+    expect(final.result.investigationAssessment?.evidenceRecords).toHaveLength(2000);
+  });
+
+  it('does not dispatch when the complete semantic prompt exceeds the shared transport budget', async () => {
+    const target = investigationRun({oversizedBody: true});
+    const final = await target.run();
+    expect(target.dispatch).not.toHaveBeenCalled();
+    expect(final.semanticAssessment).toMatchObject({status: 'coverage_incomplete', reason: 'input_limit',
+      inputDiagnostic: {stage: 'prompt_assembly', code: 'byte_limit_exceeded', limitBytes: FINAL_SEMANTIC_INPUT_BYTE_LIMIT}});
+    expect(final.semanticAssessment?.inputDiagnostic?.actualBytes).toBeGreaterThan(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
+    expect(target.originalLedger.records).toHaveLength(2);
+    expect(final.result.deliveryAssurance).toMatchObject({completion: 'passed', claims: 'coverage_incomplete'});
   });
 
   it('delivers the accepted body when template loading throws during ledger sizing', async () => {
@@ -285,7 +339,7 @@ describe('shared final analysis boundary', () => {
 
   it('matches original captured source-marker cells while retaining their owner declaration', async () => {
     const marker = 'synthetic_source_marker_long_name';
-    const target = fixture({source: {marker}});
+    const target = fixture({source: {marker}, body: `The captured name is ${marker}.`});
     expect(target.result.conclusion).toContain(marker);
     const final = await target.run();
     expect(final.result.conclusionContract?.bindingEligibility).toBe('eligible');
@@ -294,7 +348,50 @@ describe('shared final analysis boundary', () => {
     expect(final.semanticAssessment?.status).toBe('checked');
     expect(target.dispatch).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(target.dispatch.mock.calls)).toContain(marker);
-    expect(JSON.stringify(final.result)).toContain(marker);
+    expect(final.result.conclusionContract?.claims?.[0].text).toContain(marker);
+    expect(final.result.claimSupport?.[0].text).toBe(final.result.conclusionContract?.claims?.[0].text);
+    expect(final.result.claimVerificationResult?.claimResults[0].claimId).toBe(
+      final.result.conclusionContract?.claims?.[0].id,
+    );
+    expect(final.result.deliveryAssurance).toMatchObject({claims: 'coverage_incomplete', source: 'passed'});
+    expect(final.result.conclusionContract?.sourceUseDecision).toEqual(final.result.sourceUseDecision);
+    expect(final.result.conclusionContract?.sourceReferences).toEqual(final.result.sourceReferences);
+
+    const ownerAgain = projectOwnerAnalysisResult(final.result.sessionId, final.result, 'en');
+    expect(ownerAgain.conclusionContract).toEqual(final.result.conclusionContract);
+    expect(ownerAgain.claimVerificationResult).toEqual(final.result.claimVerificationResult);
+    expect(ownerAgain.claimSupport).toEqual(final.result.claimSupport);
+    expect(ownerAgain.sourceUseDecision).toEqual(final.result.sourceUseDecision);
+    expect(ownerAgain.sourceClaimVerificationResult).toEqual(final.result.sourceClaimVerificationResult);
+    expect(ownerAgain.deliveryAssurance).toEqual(final.result.deliveryAssurance);
+    expect(ownerAgain.sourceClaimVerificationResult?.status).toBe('passed');
+
+    const strict = projectPrivateAnalysisResult(final.result.sessionId, ownerAgain, 'en');
+    expect(JSON.stringify(strict.conclusionContract)).not.toContain(marker);
+    expect(strict.claimVerificationResult?.passed).toBe(false);
+    expect(strict.claimSupport?.[0]).toMatchObject({supportLevel: 'partial', bindingEligibility: 'ineligible'});
+    expect(strict.sourceClaimVerificationResult?.status).not.toBe('passed');
+  });
+
+  it('does not add source declarations when the model only used an authorized source ledger', async () => {
+    const marker = 'synthetic_source_marker_long_name';
+    const target = fixture({source: {marker, declareBindings: false}, body: `The captured name is ${marker}.`});
+    const final = await target.run();
+
+    expect(final.result.sourceUseDecision?.references).toHaveLength(1);
+    expect(final.result.sourceReferences).toEqual(final.result.sourceUseDecision?.references);
+    expect(final.result.conclusionContract).not.toHaveProperty('sourceUseDecision');
+    expect(final.result.conclusionContract).not.toHaveProperty('sourceReferences');
+    expect(final.result.conclusionContract).not.toHaveProperty('sourceClaimBindings');
+    expect(final.result.sourceClaimVerificationResult).toEqual({
+      schemaVersion: 'source_claim_verifier@1', status: 'not_checked', bindings: [], issues: [],
+    });
+    const ownerAgain = projectOwnerAnalysisResult(final.result.sessionId, final.result, 'en');
+    expect(ownerAgain.conclusionContract).toEqual(final.result.conclusionContract);
+    expect(ownerAgain.sourceUseDecision).toEqual(final.result.sourceUseDecision);
+    expect(ownerAgain.sourceClaimVerificationResult).toEqual(final.result.sourceClaimVerificationResult);
+    expect(ownerAgain.claimVerificationResult).toEqual(final.result.claimVerificationResult);
+    expect(ownerAgain.deliveryAssurance).toEqual(final.result.deliveryAssurance);
   });
 
   it('does not turn different originals into a match when both display as the same CodeRef', async () => {
@@ -302,6 +399,36 @@ describe('shared final analysis boundary', () => {
     const final = await target.run();
     expect(final.result.claimVerificationResult?.claimResults[0]).toMatchObject({status: 'unsupported',
       referenceResults: [{status: 'value_mismatch'}]});
+  });
+
+  it.each(['compatible', 'corroborated'] as const)(
+    'retains matched Trace membership for a candidate source connection without granting %s authority', async mechanismStatus => {
+      const target = fixture({source: {marker: 'synthetic_source_marker_long_name', hypothetical: true, mechanismStatus},
+        body: 'The captured marker might correspond to this source instrumentation.'});
+      const final = await target.run();
+      expect(final.result.claimVerificationResult).toMatchObject({status: 'passed', passed: true,
+        claimResults: [{status: 'inference', referenceResults: [{status: 'matched'}]}]});
+      expect(final.result.sourceClaimVerificationResult).toMatchObject({
+        status: mechanismStatus === 'corroborated' ? 'partial' : 'passed', bindings: [{
+        claimId: 'count', mechanismStatus: 'compatible', traceEvidenceRefIds: ['data:count'],
+      }]});
+      expect(final.result.sourceClaimVerificationResult?.issues.some(issue => issue.severity === 'error')).toBe(false);
+      if (mechanismStatus === 'corroborated') expect(final.result.sourceClaimVerificationResult?.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({code: 'source_binding_mechanism_unverified', severity: 'warning'})]),
+      );
+    });
+
+  it('rejects mismatched Trace evidence even for a hypothetical source connection', async () => {
+    const target = fixture({source: {marker: 'synthetic_source_marker_one_name',
+      declaredMarker: 'synthetic_source_marker_two_name', hypothetical: true},
+      body: 'The captured marker might correspond to this source instrumentation.'});
+    const final = await target.run();
+    expect(final.result.claimVerificationResult?.claimResults[0]).toMatchObject({status: 'unsupported',
+      referenceResults: [{status: 'value_mismatch'}]});
+    expect(final.result.sourceClaimVerificationResult?.bindings).toEqual([]);
+    expect(final.result.sourceClaimVerificationResult?.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({code: 'source_binding_trace_support_missing'}),
+    ]));
   });
 
   it('retains the semantic review reason alongside an independent failed claim', async () => {
@@ -359,6 +486,19 @@ describe('shared final analysis boundary', () => {
       expect(target.dispatch).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(final.result)).toContain(marker);
     }
+  });
+
+  it('delivers claims of an invalid declaration as unverified rather than contradicted', async () => {
+    const target = fixture({invalidDeclaration: true});
+    const final = await target.run();
+    expect(final.result.conclusionContract?.bindingEligibility).toBe('ineligible');
+    expect(final.result.claimVerificationResult).toMatchObject({status: 'partial', passed: false,
+      checkedClaimCount: 0, unsupportedClaimCount: 0, notCheckedReason: 'invalid_declarations'});
+    expect(final.result.claimVerificationResult?.issues.map(issue => [issue.severity, issue.code]))
+      .toEqual([['warning', 'binding_ineligible']]);
+    expect(final.result.deliveryAssurance?.claims).toBe('coverage_incomplete');
+    expect(final.qualityIssue?.code).not.toBe('verifier_contradicted_claim');
+    expect(target.dispatch).not.toHaveBeenCalled();
   });
 
   it('keeps the native invalid declaration ineligible after source projection', async () => {
@@ -570,6 +710,31 @@ describe('shared final analysis boundary', () => {
     expect(JSON.stringify(result)).not.toContain(question);
   });
 
+  it('sends the exact issued selection scope without treating it as captured evidence', async () => {
+    const selection: AnalysisRunSelection = {present: true, kind: 'area', context: {kind: 'area', source: 'area_selection',
+      startNs: 10, endNs: 20, tracks: [{uri: 'track://main', upid: 921}]},
+    sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'trace'}};
+    const target = fixture({selection});
+    const final = await target.run();
+    expect(final.semanticAssessment?.status).toBe('checked');
+    expect(target.dispatch).toHaveBeenCalledTimes(1);
+    const prompt = target.dispatch.mock.calls[0][0].prompt;
+    expect(JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{') + 2)).selectionScope).toEqual(selection);
+    expect(JSON.stringify(final.result)).not.toContain('selectionScope');
+  });
+
+  it.each(['canary', 'credential'] as const)('fails closed when %s content appears inside selection metadata', async kind => {
+    const marker = kind === 'canary' ? 'SELECTION_CANARY_NEVER_SEND' : 'api_key="selection-secret-value-123"';
+    const selection: AnalysisRunSelection = {present: true, kind: 'track_event', context: {
+      kind: 'track_event', eventId: 7, ts: 42, trackUri: `track://${marker}`},
+    sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'trace'}};
+    const target = fixture({selection});
+    if (kind === 'canary') registerCodeAwareCanary(target.result.sessionId, marker);
+    const final = await target.run();
+    expect(final.semanticAssessment).toMatchObject({status: 'coverage_incomplete', reason: 'input_projection_incomplete'});
+    expect(target.dispatch).not.toHaveBeenCalled();
+  });
+
   it('allows the owner query as analysis context without treating it as captured evidence', async () => {
     const question = 'PRIVATE original provider question';
     const target = fixture({providerQuery: {text: question}});
@@ -617,5 +782,30 @@ describe('shared final analysis boundary', () => {
     await expect(target.run()).rejects.toThrow('finalization_run_identity_mismatch');
     expect(target.dispatch).not.toHaveBeenCalled();
     expect(() => target.context.runId).toThrow();
+  });
+});
+
+
+describe('semantic finalization capacity', () => {
+  it('reaches the existing single review with complete byte-bounded evidence above 10000 nodes', async () => {
+    const target = fixture({capabilityRows: 3500});
+    const final = await target.run();
+    expect(final.semanticAssessment?.status).toBe('checked');
+    expect(target.dispatch).toHaveBeenCalledTimes(1);
+    const prompt = target.dispatch.mock.calls[0][0].prompt;
+    expect(prompt).toContain(JSON.stringify(Array.from({length: 3500}, () => [0])));
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(128 * 1024);
+  });
+  it('retains the complete provider byte limit after structure projection', async () => {
+    const target = fixture({capabilityRows: 5000, capabilityCell: 'x'.repeat(120)});
+    const final = await target.run();
+    expect(final.semanticAssessment).toMatchObject({status: 'coverage_incomplete', reason: 'input_limit'});
+    expect(target.dispatch).not.toHaveBeenCalled();
+  });
+  it('distinguishes structural capacity loss without treating incomplete input as complete', async () => {
+    const target = fixture({capabilityRows: 170000});
+    const final = await target.run();
+    expect(final.semanticAssessment).toMatchObject({status: 'coverage_incomplete', reason: 'input_projection_limit'});
+    expect(target.dispatch).not.toHaveBeenCalled();
   });
 });

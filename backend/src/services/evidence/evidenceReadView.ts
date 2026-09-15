@@ -49,6 +49,30 @@ export interface EvidenceReadBudget {maxReferences: number; maxScannedRows: numb
  * run can cite evidence the product has already discarded.
  */
 export const MAX_EVIDENCE_READ_REFERENCES = 256;
+
+/**
+ * Read failures that establish only that the product could not admit or read
+ * the cited evidence — never that the citation is wrong. A claim bound to one
+ * stays unverified instead of being counted as contradicted.
+ *
+ * This is a positive list on purpose. `evidence_not_retained` cannot tell an
+ * evicted capture from an identifier that was never issued, and
+ * `execution_witness_mismatch` is an integrity failure; both, and any reason
+ * added later, keep treating the reference as missing until classified here.
+ */
+const UNREADABLE_EVIDENCE_REASONS: ReadonlySet<string> = new Set([
+  // the declaration was not admitted, so nothing was read
+  'binding_ineligible',
+  // claim preparation could not reach the read view
+  'execution_read_unavailable', 'execution_read_failed', 'read_cancelled',
+  // the capture exists but carries no readable table for this output shape
+  'execution_witness_unavailable', 'unmapped_evidence_shape', 'invalid_evidence_columns',
+  'unmapped_evidence_columns', 'display_transformation_unmapped', 'unsupported_raw_cell',
+]);
+
+export function evidenceReadFailureIsUnreadable(reason: string | undefined): boolean {
+  return reason !== undefined && UNREADABLE_EVIDENCE_REASONS.has(reason);
+}
 export interface EvidenceReadViewOptions {
   currentRunId?: string;
   allowedTraces: readonly {traceId: string; traceSide: 'current' | 'reference'}[];

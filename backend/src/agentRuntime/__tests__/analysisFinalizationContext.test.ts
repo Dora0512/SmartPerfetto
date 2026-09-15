@@ -127,6 +127,46 @@ describe('private runtime finalization context', () => {
     context.dispose();
   });
 
+  it('keeps canonical selection private, frozen and bound to the current run trace', () => {
+    const selection = {present: true as const, kind: 'track_event' as const,
+      context: {kind: 'track_event' as const, eventId: 7, ts: 42, dur: 9},
+      sideResolution: {status: 'resolved' as const, traceSide: 'current' as const, traceId: 'trace'}};
+    const {result, input} = fixture({selection});
+    attachFinalizationContext(result, input);
+    selection.context.eventId = 99;
+    const context = takeFinalizationContext(result)!;
+    const signal = new AbortController().signal;
+    expect(context.getSelection(signal)).toEqual({present: true, kind: 'track_event',
+      context: {kind: 'track_event', eventId: 7, ts: 42, dur: 9},
+      sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'trace'}});
+    expect(Object.isFrozen(context.getSelection(signal))).toBe(true);
+    expect(JSON.stringify(context)).not.toContain('eventId');
+    context.dispose();
+    expect(() => context.getSelection(signal)).toThrow('disposed');
+  });
+
+  it('preserves missing, no-selection and side-unknown states without rebinding them', () => {
+    for (const selection of [undefined, {present: false as const}, {present: true as const, kind: 'track_event' as const,
+      context: {kind: 'track_event' as const, eventId: 7, ts: 42}, sideResolution: {status: 'unknown' as const}}]) {
+      const {result, input} = fixture({selection});
+      attachFinalizationContext(result, input);
+      const context = takeFinalizationContext(result)!;
+      expect(context.getSelection(new AbortController().signal)).toEqual(selection);
+      context.dispose();
+    }
+  });
+
+  it('rejects a foreign trace or noncanonical selection before issuing a context', () => {
+    const foreign = fixture({selection: {present: true, kind: 'track_event',
+      context: {kind: 'track_event', eventId: 7, ts: 42},
+      sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'other-trace'}}});
+    expect(() => attachFinalizationContext(foreign.result, foreign.input)).toThrow('selection_mismatch');
+    const transformed = fixture({selection: {present: true, kind: 'track_event',
+      context: {kind: 'track_event', eventId: 7, ts: 42, trackUri: ' track '},
+      sideResolution: {status: 'unknown'}}});
+    expect(() => attachFinalizationContext(transformed.result, transformed.input)).toThrow('analysis_run_selection_invalid');
+  });
+
   it('keeps provider query in a frozen private method view that expires with its context', () => {
     const query = {text: 'PRIVATE_PROVIDER_QUERY', analysisContextFingerprint: 'selection-v1'};
     const {result, input} = fixture({providerQuery: query});

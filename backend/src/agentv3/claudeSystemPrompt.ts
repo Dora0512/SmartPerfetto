@@ -700,6 +700,11 @@ function buildTypedTurnSystemPromptParts(
     data(3, 'investigation_requirements', resolveAnalysisInvestigationRequirements({
       intent, strategyRegistry: registry,
     }));
+    push(3, 'investigation_findings', requiredAsset('prompt-investigation-findings'));
+    if (intent.status === 'resolved') {
+      data(3, 'scene_strategy_details', (strategy?.detailSections ?? []).map(({ref, title}) =>
+        ({detailRef: ref, title})));
+    }
   }
   if (intent.status === 'resolved' && policy.requiresReport) {
     const contract = getFinalReportContract(intent.sceneId, registry);
@@ -719,6 +724,10 @@ function buildTypedTurnSystemPromptParts(
     }
     push(3, 'code_reference_contract', requiredAsset(language === 'en'
       ? 'prompt-code-reference-contract-en' : 'prompt-code-reference-contract-zh'));
+    if (context.codeAwareMode === 'provider_send' &&
+        (intent.taskKind === 'investigation' || intent.taskKind === 'comparison')) {
+      push(3, 'source_finding_binding', requiredAsset('prompt-source-finding-binding'));
+    }
   }
 
   // No architecture guidance, focus-app default target, or probe suggestion is

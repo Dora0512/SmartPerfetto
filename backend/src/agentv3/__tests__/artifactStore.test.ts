@@ -78,9 +78,70 @@ describe('ArtifactStore evidence retention', () => {
       delete process.env[EVIDENCE_RETENTION_CELLS_ENV];
     }
   });
+
+  it('drops model units with the retained witness while keeping newer live units', () => {
+    process.env[EVIDENCE_RETENTION_CELLS_ENV] = '2';
+    try {
+      const store = new ArtifactStore();
+      const origin = {kind: 'skill_literal' as const, definitionFingerprint: 'retention-v1', skillId: 'fixture'};
+      const first = store.store({skillId: 'fixture', data: {columns: ['ttid_ms'], rows: [[10]]}});
+      store.registerEvidenceCapture(first, captureEvidenceTable({columns: ['ttid_ms'], rows: [[10]]}, {
+        ttid_ms: {origin, unit: 'ms'},
+      }), {evidenceRefId: 'first'});
+      const second = store.store({skillId: 'fixture', data: {columns: ['busy_pct'], rows: [[68], [72]]}});
+      store.registerEvidenceCapture(second, captureEvidenceTable({columns: ['busy_pct'], rows: [[68], [72]]}, {
+        busy_pct: {origin, unit: '%'},
+      }), {evidenceRefId: 'second'});
+
+      expect(store.fetch(first, 'summary')).not.toHaveProperty('columnUnits');
+      expect(store.fetch(second, 'summary')).toMatchObject({columnUnits: {busy_pct: '%'}});
+    } finally {
+      delete process.env[EVIDENCE_RETENTION_CELLS_ENV];
+    }
+  });
 });
 
 describe('ArtifactStore', () => {
+  it('projects live producer units on every fetch surface without persisting them', () => {
+    const store = new ArtifactStore();
+    const origin = {kind: 'skill_literal' as const, definitionFingerprint: 'artifact-v1', skillId: 'fixture'};
+    const id = store.store({skillId: 'fixture', data: {
+      columns: ['ttid_ms', 'busy_pct', 'ambiguous_pct'], rows: [[1912.2, 68.1, 0.3]],
+    }});
+    store.registerEvidenceCapture(id, captureEvidenceTable({
+      columns: ['ttid_ms', 'busy_pct', 'ambiguous_pct'], rows: [[1912.2, 68.1, 0.3]],
+    }, {ttid_ms: {origin, unit: 'ms'}, busy_pct: {origin, unit: '%'}}), {evidenceRefId: 'units'});
+
+    for (const projection of [store.generateSummary(id), store.generateCompactSummary(id),
+      store.fetch(id, 'summary'), store.fetch(id, 'rows'), store.fetch(id, 'full')]) {
+      expect(projection).toMatchObject({columnUnits: {ttid_ms: 'ms', busy_pct: '%'}});
+      expect(projection.columnUnits).not.toHaveProperty('ambiguous_pct');
+    }
+    const snapshot = JSON.parse(JSON.stringify(store.serialize()));
+    expect(JSON.stringify(snapshot)).not.toContain('columnUnits');
+    const restored = ArtifactStore.fromSnapshot(snapshot);
+    for (const projection of [restored.generateSummary(id), restored.generateCompactSummary(id),
+      restored.fetch(id, 'summary'), restored.fetch(id, 'rows'), restored.fetch(id, 'full')]) {
+      expect(projection).not.toHaveProperty('columnUnits');
+    }
+    store.get(id)!.data.rows[0][0] = 999;
+    expect(store.fetch(id, 'summary')).not.toHaveProperty('columnUnits');
+  });
+
+  it('bounds model projection metadata across summaries, fetches and snapshots', () => {
+    const store = new ArtifactStore();
+    const modelProjection = {status: 'truncated' as const, truncatedCellCount: 35,
+      truncatedCells: Array.from({length: 32}, (_, rowIndex) => ({rowIndex, column: 'detail', originalBytes: 5000})),
+      truncatedCellsOmitted: 3};
+    const id = store.store({skillId: 'bounded', data: {columns: ['detail'], rows: [['bounded']]}, modelProjection});
+    const restored = ArtifactStore.fromSnapshot(JSON.parse(JSON.stringify(store.serialize())));
+    for (const projection of [restored.generateSummary(id), restored.generateCompactSummary(id),
+      restored.fetch(id, 'summary'), restored.fetch(id, 'rows'), restored.fetch(id, 'full')]) {
+      expect(projection.modelProjection).toEqual(modelProjection);
+      expect(projection.modelProjection.truncatedCells).toHaveLength(32);
+    }
+  });
+
   it.each([
     {fields: 'metric'}, {fields: ['metric', 7]}, {availability: 'maybe'}, {relativeTo: null},
   ])('preserves invalid scope through store, snapshot and every fetch surface: %j', malformedFields => {

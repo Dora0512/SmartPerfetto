@@ -3297,6 +3297,43 @@ describe('quick-run triage budget follows the question boundary', () => {
   });
 });
 
+describe('unverified claims are not contradicted claims (Round 60 SP-E2E-09)', () => {
+  const claimAssessment = (verification: Record<string, unknown>) => {
+    const target = result({claimVerificationResult: verification as never});
+    return assessFinalResultQualityAssessment({result: target, context: finalizationContext(target)});
+  };
+  const v2 = (overrides: Record<string, unknown>) => ({schemaVersion: 'claim_verifier@2', policy: 'record_only',
+    passed: false, ...overrides});
+
+  it('keeps an ineligible declaration with zero checked claims out of the contradiction gate', () => {
+    // r60lockf_a1 / r60therf_a1 / r60wechat_a1 shape after classification
+    const assessment = claimAssessment(v2({status: 'partial', checkedClaimCount: 0, unsupportedClaimCount: 0,
+      notCheckedReason: 'invalid_declarations',
+      claimResults: ['c1', 'c2'].map(claimId => ({claimId, status: 'not_checked', referenceCells: [{status: 'ineligible'}],
+        deterministicProof: {kind: 'numeric_cell', status: 'not_checked', reason: 'binding_ineligible', anchorIds: [], evidenceRefIds: []}})),
+      issues: ['c1', 'c2'].map(claimId => ({claimId, severity: 'warning', code: 'binding_ineligible', message: 'not admitted'}))}));
+    expect(assessment.issues.map(issue => issue.code)).not.toContain('verifier_contradicted_claim');
+    expect(assessment.assurance.claims).toBe('coverage_incomplete');
+  });
+
+  it('keeps unreadable evidence warnings out of the gate but still fails a real value mismatch', () => {
+    const unreadable = {claimId: 'readable-later', status: 'partial', referenceCells: [{status: 'not_checked', message: 'display_transformation_unmapped'}]};
+    const quiet = claimAssessment(v2({status: 'partial', checkedClaimCount: 1, unsupportedClaimCount: 0,
+      claimResults: [unreadable],
+      issues: [{claimId: 'readable-later', severity: 'warning', code: 'claim_reference_unverified', message: 'display_transformation_unmapped'}]}));
+    expect(quiet.issues.map(issue => issue.code)).not.toContain('verifier_contradicted_claim');
+
+    // r60anrst_a2 shape: 35 partial claims and one real mismatch still fail the gate
+    const mismatch = claimAssessment(v2({status: 'failed', checkedClaimCount: 2, unsupportedClaimCount: 1,
+      claimResults: [unreadable, {claimId: 'cl-render', status: 'unsupported', referenceCells: [{status: 'matched'}, {status: 'value_mismatch'}]}],
+      issues: [{claimId: 'readable-later', severity: 'warning', code: 'claim_reference_unverified', message: 'display_transformation_unmapped'},
+        {claimId: 'cl-render', severity: 'error', code: 'claim_reference_value_mismatch', message: 'value mismatch for ts'}]}));
+    expect(mismatch.selectedIssue?.code).toBe('verifier_contradicted_claim');
+    expect(mismatch.selectedIssue?.message).toBe('1 条断言的引用值与证据不符；不能作为已核验结论交付。');
+    expect(mismatch.assurance.claims).toBe('failed');
+  });
+});
+
 describe('a contradicted claim degrades full mode, not only quick mode', () => {
   function verification(overrides: Record<string, unknown> = {}) {
     return {

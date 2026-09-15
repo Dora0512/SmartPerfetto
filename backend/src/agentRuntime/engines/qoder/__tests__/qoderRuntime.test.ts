@@ -224,6 +224,8 @@ import type {RuntimeToolInvocationEvent, RuntimeToolObserver} from '../../../run
 import {createRuntimeToolResult} from '../../../runtimeToolResult';
 import {getSourceLookupCodeReferences} from '../../../../services/codebase/sourceLookupTools';
 import {projectCodeAwareStreamingUpdate} from '../../../../services/security/codeAwareStreamingUpdateProjection';
+import {renderConclusionContractSidecar, type ConclusionContract} from '../../../../agent/core/conclusionContract';
+import {inspectCandidateProtocol} from '../../../../services/canonicalAnalysisResult';
 
 function createRuntime(
   env: Record<string, string | undefined> = {},
@@ -404,7 +406,7 @@ describe('QoderRuntime', () => {
       expect(results.map(update => update.content.taskId)).toEqual(starts.map(update => update.content.taskId));
       expect(results.map(update => update.content.isError)).toEqual([false, true, false, true]);
       expect(results[0].content.result).toContain('[truncated external tool result;');
-      expect(result.rounds).toBe(0);
+      expect(result.rounds).toBe(1);
     });
 
     it.each(['execute_sql', 'write_analysis_note'])('deduplicates real SDK IDs for %s before counting or publishing outcomes', async toolName => {
@@ -441,7 +443,7 @@ describe('QoderRuntime', () => {
       runtime.on('update', update => updates.push(update));
       const result = await runtime.analyze('test query', 'session-1', 'trace-1', {analysisMode: 'full'});
 
-      expect(result).toMatchObject({success: true, rounds: 0});
+      expect(result).toMatchObject({success: true, rounds: 1});
       expect(handler).toHaveBeenCalledTimes(8);
       expect(tracker.dispatchedToolCallCount).toBe(6);
       const starts = updates.filter(update => update.type === 'agent_task_dispatched');
@@ -934,7 +936,7 @@ describe('QoderRuntime', () => {
         QODER_BYOK_PROVIDER: 'glm', QODER_BYOK_API_KEY: 'provider-key',
         QODER_BYOK_BASE_URL: 'https://provider.example/coding',
       }).analyze('An arbitrary request', 'intent-shared', 'trace-1', {runId: 'intent-run'});
-      expect(mockIntentTransport).toHaveBeenCalledTimes(1);
+      expect(mockIntentTransport).toHaveBeenCalledTimes(2);
       expect(mockLoadQoderSdkModule).toHaveBeenCalledTimes(1);
       expect(mockSdkModule.accessTokenFromEnv).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledTimes(1);
@@ -981,7 +983,7 @@ describe('QoderRuntime', () => {
         codebaseIds: ['source-1'], knowledgeSourceIds: ['knowledge-1'],
       }));
       expect((mockQuery.mock.calls[0][0] as any).options.maxTurns).toBe(2);
-      expect(result.quickRun).toMatchObject({hardCapTurns: 3, actualTurns: 2, enforcement: 'turn_cap'});
+      expect(result.quickRun).toMatchObject({hardCapTurns: 3, actualTurns: 3, enforcement: 'turn_cap'});
     });
 
     it('keeps artifact-capable MCP with existing_only and performs no automatic new evidence reads', async () => {
@@ -1116,8 +1118,12 @@ describe('QoderRuntime', () => {
     it('classifier-local timeout leaves the main request available and discards the late decision', async () => {
       const late = createDeferred<any>();
       mockIntentTransport.mockReturnValue(late.promise);
+      const mainCandidate = `Main request completed\n${renderConclusionContractSidecar({
+        schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [],
+        evidenceChain: [], claims: [], uncertainties: [], nextSteps: [],
+      })}`;
       mockQuery.mockReturnValue(createMockSdkStream([
-        {type: 'result', subtype: 'success', is_error: false, result: 'Main request completed', num_turns: 1},
+        {type: 'result', subtype: 'success', is_error: false, result: mainCandidate, num_turns: 1},
       ]));
       const result = await createRuntime({AGENT_CLASSIFIER_TIMEOUT_MS: '20'})
         .analyze('any request', 'timeout-intent', 'trace-1');
@@ -1141,6 +1147,7 @@ describe('QoderRuntime', () => {
       const options: AnalysisOptions = {
         runId: 'final-context-run', referenceTraceId: 'trace-2', analysisMode: 'full' as const,
         tenantId: 'tenant-1', workspaceId: 'workspace-1', userId: 'user-1', providerId: 'provider-1',
+        selectionContext: {kind: 'track_event', eventId: 7, ts: 42},
       };
       const pinnedFingerprint = buildAnalysisContextAuthorizationFingerprint(options, resolveKnowledgeScope(options));
       options.analysisContextFingerprint = pinnedFingerprint;
@@ -1153,6 +1160,8 @@ describe('QoderRuntime', () => {
       const providerQuery = context.getProviderQuery(new AbortController().signal);
       expect(providerQuery).toEqual({text: 'any request', analysisContextFingerprint: pinnedFingerprint});
       expect(Object.isFrozen(providerQuery)).toBe(true);
+      expect(context.getSelection(new AbortController().signal)).toEqual({present: true, kind: 'track_event',
+        context: options.selectionContext, sideResolution: {status: 'unknown'}});
       expect(JSON.stringify(result)).not.toContain('"providerQuery"');
       expect(takeFinalizationContext(result)).toBeUndefined();
       expect(takeFinalizationContext({...result})).toBeUndefined();
@@ -1388,6 +1397,76 @@ describe('QoderRuntime', () => {
       });
     });
 
+    it('uses one no-tools delivery turn for an unchanged full native declaration candidate', async () => {
+      const body = `${'启动正文保持完整。'.repeat(850)}\n${'Native body remains unchanged. '.repeat(170)}`.trimEnd();
+      expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(8 * 1024);
+      const sidecar = renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+        conclusions: [{rank: 1, statement: 'The authored body is preserved.'}], clusters: [], evidenceChain: [],
+        claims: [], uncertainties: [], nextSteps: []} as ConclusionContract);
+      const repaired = `${body}\n${sidecar}`;
+      mockIntentTransport
+        .mockResolvedValueOnce({status: 'ok', text: JSON.stringify(defaultIntentDecision)})
+        .mockResolvedValueOnce({status: 'ok', text: repaired, finishReason: 'end_turn'});
+      mockQuery.mockReturnValue(createMockSdkStream([
+        {type: 'result', subtype: 'success', is_error: false, result: body, num_turns: 1},
+      ]));
+
+      const result = await createRuntime().analyze('test', 'qoder-missing-declaration', 'trace-1', {
+        runId: 'qoder-missing-declaration',
+      });
+
+      expect(mockIntentTransport).toHaveBeenCalledTimes(2);
+      expect(mockIntentTransport.mock.calls[1][0]).toMatchObject({outputByteLimit: 128 * 1024});
+      expect((mockIntentTransport.mock.calls[1][0] as any).prompt).toContain('missing_declaration');
+      expect(inspectCandidateProtocol(repaired).canonicalBody.trim()).toBe(body);
+      expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
+      expect(result.completion).toMatchObject({status: 'completed', attemptId: 'declaration-completion:1'});
+      const context = takeFinalizationContext(result)!;
+      try {expect(context.getNativeDeclaration(result, new AbortController().signal)?.raw).toBe(repaired);}
+      finally {context.dispose();}
+    });
+
+    it('does not dispatch declaration completion when the original body cannot fit the Qoder output cap', async () => {
+      const body = 'x'.repeat(128 * 1024);
+      mockQuery.mockReturnValue(createMockSdkStream([
+        {type: 'result', subtype: 'success', is_error: false, result: body, num_turns: 1},
+      ]));
+      const result = await createRuntime().analyze('test', 'qoder-declaration-output-cap', 'trace-1');
+      expect(mockIntentTransport).toHaveBeenCalledTimes(1);
+      expect(result.conclusion).toBe(body);
+      expect(result.completion).toMatchObject({status: 'completed', attemptId: 'main'});
+    });
+
+    it('retains the original Qoder attempt when a dispatched declaration completion changes the body', async () => {
+      const body = 'Original bounded answer.';
+      const changed = `Changed bounded answer.\n${renderConclusionContractSidecar({
+        schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [],
+        evidenceChain: [], claims: [], uncertainties: [], nextSteps: [],
+      } as ConclusionContract)}`;
+      mockIntentTransport
+        .mockResolvedValueOnce({status: 'ok', text: JSON.stringify(defaultIntentDecision)})
+        .mockResolvedValueOnce({status: 'ok', text: changed, finishReason: 'end_turn'});
+      mockQuery.mockReturnValue(createMockSdkStream([
+        {type: 'system', subtype: 'init', session_id: 'sdk-original-session'},
+        {type: 'result', subtype: 'success', is_error: false, result: body, num_turns: 1},
+      ]));
+      const updates: unknown[] = [];
+      const runtime = createRuntime();
+      runtime.on('update', update => updates.push(update));
+
+      const result = await runtime.analyze('test', 'qoder-declaration-rejected', 'trace-1', {
+        runId: 'qoder-declaration-rejected',
+      });
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockIntentTransport).toHaveBeenCalledTimes(2);
+      expect(result.conclusion).toBe(body);
+      expect(result.completion).toMatchObject({status: 'completed', attemptId: 'main',
+        conclusionFingerprint: analysisDeliveryFingerprint(body)});
+      expect(runtime.getSdkSessionId('qoder-declaration-rejected')).toBe('sdk-original-session');
+      expect(JSON.stringify(updates)).not.toContain('Changed bounded answer');
+    });
+
     it('returns success: true for success result', async () => {
       const messages = [
         { type: 'assistant', message: { content: [{ type: 'text', text: '## Final Report\nAnalysis complete' }] } },
@@ -1399,7 +1478,7 @@ describe('QoderRuntime', () => {
       const result = await runtime.analyze('test', 'session-1', 'trace-1');
 
       expect(result.success).toBe(true);
-      expect(result.rounds).toBe(5);
+      expect(result.rounds).toBe(6);
       expect(result.conclusion).toBe('## Final Report\nAnalysis complete');
     });
 
@@ -1806,7 +1885,7 @@ describe('QoderRuntime', () => {
           {type: 'result', subtype: 'success', is_error: false, stop_reason: null, result: conclusion, num_turns: 1},
         ]));
         const result = await createRuntime().analyze('arbitrary request', 'truthful-completion', 'trace-1');
-        expect(result).toMatchObject({success: true, partial: false, conclusion, rounds: 1, outputOrigin: 'sdk_final'});
+        expect(result).toMatchObject({success: true, partial: false, conclusion, rounds: 2, outputOrigin: 'sdk_final'});
         expect(result.completion).toMatchObject({status: 'completed', conclusionFingerprint: analysisDeliveryFingerprint(conclusion)});
         expect(result.confidence).toBe(0.35);
         expect(result.terminationReason).toBeUndefined();
@@ -1965,7 +2044,7 @@ describe('QoderRuntime', () => {
         {type: 'result', subtype: 'success', is_error: false, result: 'Late different body', num_turns: 8},
       ]));
       const result = await createRuntime().analyze('any request', 'one-terminal', 'trace-1', {runId: 'one-terminal-run'});
-      expect(result).toMatchObject({conclusion: 'Current final', rounds: 1, completion: {
+      expect(result).toMatchObject({conclusion: 'Current final', rounds: 2, completion: {
         status: 'completed', runId: 'one-terminal-run', conclusionFingerprint: analysisDeliveryFingerprint('Current final'),
       }});
     });
@@ -2142,6 +2221,7 @@ describe('QoderRuntime', () => {
       const attributionSink = createNoopAttributionSink(runtimePerformanceRecorder);
       const resultPromise = runtime.analyze('test', 'session-1', 'trace-1', {
         analysisMode: 'full',
+        selectionContext: {kind: 'track_event', eventId: 7, ts: 42},
         runManifestAttributionSink: attributionSink,
       });
       await waitForMockQuery();
@@ -2157,6 +2237,11 @@ describe('QoderRuntime', () => {
         partial: true,
         terminationReason: 'timeout',
       });
+      const finalization = takeFinalizationContext(result);
+      expect(finalization?.getSelection(new AbortController().signal)).toEqual({present: true, kind: 'track_event',
+        context: {kind: 'track_event', eventId: 7, ts: 42},
+        sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'trace-1'}});
+      finalization?.dispose();
       expect(mockClose).toHaveBeenCalledTimes(1);
       expect(mockProjectionFlush).toHaveBeenCalledTimes(1);
       const receipt = runtimePerformanceRecorder.seal();

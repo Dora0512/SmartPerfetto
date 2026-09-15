@@ -183,7 +183,21 @@ Keep these boundaries intact:
   findings to average, Claude returned 0.30 while OpenAI returned 0.55 whenever
   the conclusion string was non-empty, so the same trace scored differently
   depending only on which runtime ran it. Confidence follows the findings' own
-  confidences; never infer it from the presence of text.
+  confidences; never infer it from the presence of text. With no findings the
+  number is a fixed baseline (Round 60 printed 35% for every conclusion), so
+  user-facing text checks `analysisConfidenceIsGrounded` and shows the
+  verified-claim count instead; do not repurpose the field as a verification
+  ratio — case evolution and pattern memory still consume it as confidence.
+- Claim verification separates "could not verify" from "contradicted". An
+  ineligible declaration, and evidence the product could not read, stay
+  `not_checked` with warnings; only reference errors, value mismatches, rejected
+  propositions and semantic inconsistencies are errors that fail the gate. The
+  unreadable classification is a positive list in `evidenceReadView.ts`
+  (`evidence_not_retained` stays an error: it cannot tell eviction from a never
+  issued identifier) and must come from an issued mark set by the builder
+  (`markUnreadableEvidenceAnchor`), never from a copied reason string. The CLI
+  marker comes from `deriveDeliveryVerdict`: `~` is a delivered but unverified
+  answer, `!` an unfinished run or a contradicted claim.
 - Each runtime reserves one no-tool delivery call inside a turn budget above
   one. Admit closeout only after actual investigation exhaustion, under the
   original deadline, selected model, provider, authorization and explicit cost
@@ -194,6 +208,19 @@ Keep these boundaries intact:
   results must not authorize an additional semantic model call in finalization.
   OpenCode's asynchronous observation can overshoot; record its actual count
   and skip a summary if the total allowance is already exhausted.
+- `perTurnMs × maxTurns` is an initial deadline, not a wall. The OpenAI runtime
+  uses `createProgressAwareRunDeadline`: each returned tool result moves the
+  deadline by the slowest recent round, provider output (text, reasoning, tool
+  arguments — never bookkeeping events) extends it one per-turn step at the
+  deadline, and it never moves back or enters the delivery reserve fixed below
+  `*_MAX_RUN_TIMEOUT_MS`. A timeout after returned data spends that reserve on
+  the same bounded no-tool closeout as a turn cap, retaining `partial` /
+  `timeout`; no returned data or a failed delivery restores the empty result.
+  Finalization evidence reads are bounded by the deadline the run hands over,
+  so a fixed finalization reserve inside the delivery reserve is never spent
+  by the delivery call; like turn-limit results, a timeout result authorizes no
+  semantic model call. `*_MAX_RUN_TIMEOUT_MS` is part of the provider snapshot
+  fingerprint. Claude, Pi, OpenCode and Qoder still use fixed budgets.
 - Structured facts must be read from a tool result **before**
   `summarizeExternalToolResult` truncates it. `planPhaseId` and `success` are
   appended after the result body, so they are the first casualties of the

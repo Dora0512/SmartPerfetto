@@ -18,6 +18,9 @@ const ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'ANTHROPIC_VERTEX_PROJECT_ID',
   'CLAUDE_MODEL',
   'CLAUDE_LIGHT_MODEL',
   'OPENAI_API_KEY',
@@ -85,6 +88,32 @@ describe('buildRuntimeHealthPayload', () => {
     restoreEnv();
     resetProviderService();
     await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it.each([undefined, 'https://proxy.example/anthropic'])(
+    'keeps the backend healthy but Claude unconfigured without credentials (%s)', (baseUrl) => {
+      if (baseUrl) process.env.ANTHROPIC_BASE_URL = baseUrl;
+      const payload = buildRuntimeHealthPayload();
+      expect(payload.status).toBe('OK');
+      expect(payload.aiEngine).toMatchObject({
+        runtime: 'claude-agent-sdk', configured: false,
+        diagnostics: {configured: false, configHint: expect.stringContaining('Providers')},
+      });
+    },
+  );
+
+  it('does not borrow an ambient key for a selected provider missing its own key', () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ambient';
+    const svc = getProviderService();
+    const provider = svc.create({
+      name: 'Missing key', category: 'custom', type: 'custom',
+      connection: {agentRuntime: 'claude-agent-sdk', baseUrl: 'https://proxy.example/anthropic'},
+      models: {primary: 'test-model', light: 'test-model'},
+    });
+    svc.activate(provider.id);
+    expect(buildRuntimeHealthPayload().aiEngine).toMatchObject({
+      source: 'provider', configured: false,
+    });
   });
 
   it('reports default Claude runtime diagnostics without leaking credentials', () => {
@@ -302,6 +331,45 @@ describe('buildRuntimeHealthPayload', () => {
       modulePath: '/tmp/opencode-sdk/dist/index.js',
     });
     expect(JSON.stringify(payload)).not.toContain('sk-opencode-secret');
+  });
+
+  it('does not report OpenCode configured from SDK availability without a model', () => {
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'opencode';
+    process.env.SMARTPERFETTO_OPENCODE_SDK_MODULE_PATH = '/tmp/opencode-sdk/dist/index.js';
+
+    const payload = buildRuntimeHealthPayload(new Date('2026-05-20T00:00:00.000Z'));
+
+    expect(payload.aiEngine).toMatchObject({
+      runtime: 'opencode',
+      configured: false,
+      diagnostics: {
+        configured: false,
+        modelConfigured: false,
+      },
+    });
+  });
+
+  it('reports an active custom OpenCode provider as configured', () => {
+    const provider = getProviderService().create({
+      name: 'Configured OpenCode',
+      category: 'custom',
+      type: 'custom',
+      models: {primary: 'opencode-provider-model', light: 'opencode-provider-light'},
+      connection: {
+        agentRuntime: 'opencode',
+        openCodeModelJson: '{"providerID":"smartperfetto","modelID":"opencode-provider-model"}',
+      },
+    });
+    getProviderService().activate(provider.id);
+
+    const payload = buildRuntimeHealthPayload(new Date('2026-05-20T00:00:00.000Z'));
+
+    expect(payload.aiEngine).toMatchObject({
+      runtime: 'opencode',
+      configured: true,
+      source: 'provider',
+      diagnostics: {configured: true, modelConfigured: true},
+    });
   });
 
   it('routes health diagnostics through the shared runtime diagnostics resolver', async () => {

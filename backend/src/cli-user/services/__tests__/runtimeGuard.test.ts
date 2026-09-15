@@ -30,6 +30,8 @@ describe('runtime guard', () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.CLAUDE_CODE_USE_VERTEX;
     delete process.env.CLAUDE_BINARY_PATH;
     delete process.env.SMARTPERFETTO_QODER_SDK_MODULE_PATH;
     delete process.env.QODER_PERSONAL_ACCESS_TOKEN;
@@ -45,14 +47,29 @@ describe('runtime guard', () => {
     consoleLogSpy.mockRestore();
   });
 
-  test('allows Claude runtime without explicit env credentials for local auth fallback', () => {
+  test('rejects Claude without credentials even when the SDK binary is executable', () => {
     process.env.CLAUDE_BINARY_PATH = createExecutableStub(tmpDir);
-    const result = assertAnalysisRuntimeReady();
-    expect(result.selection.kind).toBe('claude-agent-sdk');
-    expect(result.diagnostics).toMatchObject({
-      runtime: 'claude-agent-sdk',
-      configured: expect.any(Boolean),
+    expect(() => assertAnalysisRuntimeReady()).toThrow('no configured credentials');
+    expect(() => assertAnalysisRuntimeReady()).toThrow('Providers');
+    expect(() => assertAnalysisRuntimeReady()).toThrow('smp config init');
+    expect(() => assertAnalysisRuntimeReady()).toThrow('~/.smartperfetto/runtime/data/providers.json');
+    const report = collectDoctorReport(tmpDir);
+    expect(report.ok).toBe(false);
+    expect(report.checks.find(check => check.name === 'runtime')).toMatchObject({
+      ok: false,
+      status: 'error',
+      message: expect.stringContaining('Providers'),
     });
+    expect(report.checks.find(check => check.name === 'runtime')?.message)
+      .toContain('SMARTPERFETTO_BACKEND_DATA_DIR');
+  });
+
+  test('accepts explicitly configured Claude credentials', () => {
+    process.env.CLAUDE_BINARY_PATH = createExecutableStub(tmpDir);
+    process.env.ANTHROPIC_API_KEY = 'sk-test';
+    expect(assertAnalysisRuntimeReady().diagnostics.configured).toBe(true);
+    expect(collectDoctorReport(tmpDir).checks.find(check => check.name === 'runtime'))
+      .toMatchObject({ok: true, status: 'ok'});
   });
 
   test('rejects Claude runtime when explicit SDK binary path is not executable', () => {
@@ -172,11 +189,13 @@ describe('runtime guard', () => {
     expect(report.checks.find(check => check.name === 'runtime')).toMatchObject({
       ok: false,
       status: 'error',
-      message: 'Qoder Agent SDK is not installed; review its terms and install the optional SDK explicitly',
+      message: expect.stringContaining('Qoder Agent SDK is not installed; review its terms and install the optional SDK explicitly'),
     });
+    expect(report.checks.find(check => check.name === 'runtime')?.message).not.toContain('Providers');
   });
 
   test('uses saved session runtime override instead of current env selection', () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-test';
     process.env.SMARTPERFETTO_AGENT_RUNTIME = 'openai-agents-sdk';
     process.env.CLAUDE_BINARY_PATH = createExecutableStub(tmpDir);
     const result = assertAnalysisRuntimeReady({

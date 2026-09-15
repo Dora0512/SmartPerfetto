@@ -11,7 +11,13 @@ import {
   requestProviderEndpoint,
   type ProviderEndpointResponse,
 } from './providerEndpointRequest';
+import { providerConfigurationHelp } from './providerConfigurationHelp';
+import { parseOutputLanguage } from '../../agentv3/outputLanguage';
 import { buildOpenAIChatCompletionsTokenLimit } from './openAiChatCompletionsCompat';
+
+function configurationFailureHelp(message: string): string {
+  return `${message}\n\n${providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE))}`;
+}
 
 const TEST_REQUEST_TIMEOUT_MS = 10000;
 const TEST_TOTAL_TIMEOUT_MS = 15000;
@@ -32,12 +38,16 @@ export async function testProviderConnection(provider: ProviderConfig): Promise<
       totalTimeoutMs,
       () => new Error(`Provider connection test timed out after ${totalTimeoutMs / 1000}s`),
     );
-    return { ...result, latencyMs: Date.now() - start };
+    return {
+      ...result,
+      ...(!result.success ? {error: configurationFailureHelp(result.error || 'Connection test failed')} : {}),
+      latencyMs: Date.now() - start,
+    };
   } catch (err: any) {
     return {
       success: false,
       latencyMs: Date.now() - start,
-      error: err.message || 'Connection test failed',
+      error: configurationFailureHelp(err.message || 'Connection test failed'),
     };
   }
 }
@@ -88,8 +98,8 @@ function testPiAgentCore(provider: ProviderConfig): Omit<TestResult, 'latencyMs'
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { success: false, error: 'Pi Agent Core model JSON must be an object' };
     }
-  } catch (err: any) {
-    return { success: false, error: `Pi Agent Core model JSON is invalid: ${err.message}` };
+  } catch {
+    return { success: false, error: 'Pi Agent Core model JSON is invalid' };
   }
   return {
     success: true,
@@ -109,8 +119,8 @@ function testOpenCode(provider: ProviderConfig): Omit<TestResult, 'latencyMs'> {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         return { success: false, error: 'OpenCode model JSON must be an object' };
       }
-    } catch (err: any) {
-      return { success: false, error: `OpenCode model JSON is invalid: ${err.message}` };
+    } catch {
+      return { success: false, error: 'OpenCode model JSON is invalid' };
     }
     return {
       success: true,
@@ -135,13 +145,12 @@ function testQoder(provider: ProviderConfig): Omit<TestResult, 'latencyMs'> {
   if (provider.type !== 'custom') {
     return { success: false, error: 'Qoder Agent SDK runtime is only supported for custom providers' };
   }
-  if (!provider.connection.qoderAccessToken?.trim() && !provider.connection.qoderCliPath?.trim()) {
-    return { success: false, error: 'Qoder Agent SDK requires a Personal Access Token or Qoder CLI path' };
-  }
   return {
     success: true,
     modelVerified: false,
-    error: 'Qoder provider configuration is syntactically valid; SDK and authentication smoke checks run during analysis.',
+    error: provider.connection.qoderAccessToken?.trim() || provider.connection.qoderCliPath?.trim()
+      ? 'Qoder provider configuration is syntactically valid; SDK and authentication smoke checks run during analysis.'
+      : 'Qoder provider configuration is syntactically valid; analysis will verify the installed SDK and local qodercli login.',
   };
 }
 

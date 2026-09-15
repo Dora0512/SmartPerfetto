@@ -17,6 +17,10 @@ describe('official DeepSeek classification protocol options', () => {
         .toEqual({thinking: {type: 'disabled'}});
       expect(buildOpenAITextRequestPurposeOptions({requestUrl, protocol: 'responses', purpose: 'classification'}))
         .toEqual({reasoning: {effort: 'none'}});
+      expect(buildOpenAITextRequestPurposeOptions({requestUrl, protocol: 'chat_completions', purpose: 'final_semantic'}))
+        .toEqual({response_format: {type: 'json_object'}});
+      expect(buildOpenAITextRequestPurposeOptions({requestUrl, protocol: 'responses', purpose: 'final_semantic'}))
+        .toEqual({text: {format: {type: 'json_object'}}});
       expect(buildOpenAITextRequestPurposeOptions({requestUrl, protocol: 'chat_completions'})).toEqual({});
       expect(buildOpenAITextRequestPurposeOptions({requestUrl, protocol: 'responses'})).toEqual({});
     },
@@ -25,9 +29,11 @@ describe('official DeepSeek classification protocol options', () => {
     'https://api.deepseek.com.evil.test/chat/completions', 'https://evil.test/api.deepseek.com/chat/completions',
     'https://gateway.example/v1/chat/completions', 'https://api.deepseek.com@evil.test/chat/completions'])(
     'leaves other endpoints unchanged: %s', url => {
-      for (const protocol of ['chat_completions', 'responses'] as const) expect(buildOpenAITextRequestPurposeOptions({
-        requestUrl: new URL(url), protocol, purpose: 'classification',
-      })).toEqual({});
+      for (const protocol of ['chat_completions', 'responses'] as const) {
+        for (const purpose of ['classification', 'final_semantic'] as const) expect(buildOpenAITextRequestPurposeOptions({
+          requestUrl: new URL(url), protocol, purpose,
+        })).toEqual({});
+      }
     },
   );
 });

@@ -1014,6 +1014,23 @@ describe('runClaimVerification', () => {
     expect(result.verifiedTraceOccurrenceRefIdsByClaimId).toEqual({});
   });
 
+  it.each(['verified', 'partial', 'inference', 'unsupported', 'not_checked'] as const)(
+    'collects only matched references owned by an eligible claim: %s', status => {
+      const verification: ClaimVerificationResult = {
+        schemaVersion: 'claim_verifier@2', status: 'partial', policy: 'record_only', passed: false,
+        checkedClaimCount: 1, unsupportedClaimCount: status === 'unsupported' ? 1 : 0, issues: [],
+        claimResults: [{claimId: 'candidate', status, referenceResults: [
+          {evidenceRefId: 'data:owned', status: 'matched'},
+          {evidenceRefId: 'data:owned', status: 'matched'},
+          {evidenceRefId: 'data:wrong', status: 'value_mismatch'},
+        ]}],
+      };
+      expect(collectMatchedTraceEvidenceRefIdsByClaimId(verification)).toEqual(
+        ['verified', 'partial', 'inference'].includes(status) ? {candidate: ['data:owned']} : {},
+      );
+      expect(collectVerifiedTraceOccurrenceRefIdsByClaimId(verification)).toEqual({});
+    });
+
   it('separates partial matched membership from verified Trace occurrences', () => {
     const verification: ClaimVerificationResult = {
       schemaVersion: 'claim_verifier@1',

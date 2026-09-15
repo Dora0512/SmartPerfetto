@@ -16,6 +16,7 @@ import {
   copyAnalysisResultForSnapshot,
   projectPrivateAnalysisResult,
   projectOwnerAnalysisResult,
+  projectOwnerConclusionContract,
   projectOwnerSessionStateSnapshot,
   projectPrivateClaimVerification,
   projectPrivateTerminationMessage,
@@ -825,6 +826,26 @@ describe('private termination state', () => {
 
 
 describe('owner source analysis delivery', () => {
+  it('retains authorized declaration text while redacting credentials', () => {
+    const sessionId = 'owner-contract';
+    const source = 'fun readStartupPolicySynchronously() = policyFile.readText()';
+    registerOnDemandSourceLookupForEcho(sessionId, [{referenceId: 'owner-contract-read', codebaseId: 'app',
+      filePath: 'src/StartupHooks.kt', lineRange: {start: 28, end: 28}, text: source}]);
+    const contract = {schemaVersion: 'conclusion_contract_v1' as const, mode: 'focused_answer' as const,
+      conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
+      claims: [{id: 'source-call', kind: 'inference' as const,
+        text: `${source}; api_key="owner-secret-value-123"`, references: []}]};
+    try {
+      expect(projectOwnerConclusionContract(sessionId, contract)?.claims?.[0].text).toBe(
+        `${source}; api_key="[REDACTED_SECRET]"`,
+      );
+      expect(JSON.stringify(projectPrivateAnalysisResult(sessionId, {...deliveredResult(), sessionId,
+        conclusionContract: contract}, 'en').conclusionContract)).not.toContain(source);
+    } finally {
+      clearCodeAwareOutputGuards(sessionId);
+    }
+  });
+
   it.each(['quality_gate_failed', 'plan_incomplete'] as const)('retains a generated answer and diagnostics for %s', terminationReason => {
     const result = deliveredResult();
     const source = 'fun dispatchWork() { trace.beginSection("startup"); }';

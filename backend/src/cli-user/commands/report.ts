@@ -16,6 +16,8 @@ import * as path from 'path';
 import { bootstrap } from '../bootstrap';
 import { loadSession, turnReportPath } from '../io/sessionStore';
 import { openPath } from '../io/openFile';
+import {parseOutputLanguage} from '../../agentv3/outputLanguage';
+import {loadCliAnalysisEvidence, renderCliAnalysisEvidence} from '../services/analysisResultPresentation';
 
 export interface ReportCommandArgs {
   sessionId: string;
@@ -115,6 +117,7 @@ function buildTurnMarkdownExport(
 ): string {
   const file = path.join(sp.turnsDir, `${String(turn).padStart(3, '0')}.md`);
   const body = readIfExists(file);
+  const evidence = formatStoredEvidence(sp, config.sessionId, turn, body);
   return [
     '# SmartPerfetto CLI Turn Report',
     '',
@@ -124,12 +127,24 @@ function buildTurnMarkdownExport(
     ...(config.referenceTracePath ? [`- Reference Trace: ${config.referenceTracePath}`] : []),
     '',
     body || '*(no turn markdown)*',
-    '',
-    buildAnalysisQualityMarkdown(sp, turn),
+    ...(evidence ? ['', evidence] : []),
   ].join('\n');
 }
 
 function buildMarkdownExport(sp: ReturnType<typeof loadSession>['sp'], config: NonNullable<ReturnType<typeof loadSession>['config']>): string {
+  const conclusion = readIfExists(sp.conclusion);
+  const latestTurnMarkdown = readIfExists(path.join(
+    sp.turnsDir,
+    `${String(config.turnCount).padStart(3, '0')}.md`,
+  ));
+  const latestEvidence = formatStoredEvidence(
+    sp,
+    config.sessionId,
+    config.turnCount,
+    latestTurnMarkdown,
+    conclusion,
+    true,
+  );
   const lines: string[] = [
     '# SmartPerfetto CLI Report',
     '',
@@ -141,9 +156,8 @@ function buildMarkdownExport(sp: ReturnType<typeof loadSession>['sp'], config: N
     '',
     '## Latest Conclusion',
     '',
-    readIfExists(sp.conclusion) || '*(no conclusion)*',
-    '',
-    buildAnalysisQualityMarkdown(sp),
+    conclusion || '*(no conclusion)*',
+    ...(latestEvidence ? ['', latestEvidence] : []),
     '',
   ];
 
@@ -153,55 +167,35 @@ function buildMarkdownExport(sp: ReturnType<typeof loadSession>['sp'], config: N
   if (turnFiles.length) {
     lines.push('## Turns', '');
     for (const file of turnFiles) {
-      lines.push(readIfExists(path.join(sp.turnsDir, file)), '');
+      const body = readIfExists(path.join(sp.turnsDir, file));
+      const turn = Number.parseInt(file.slice(0, -3), 10);
+      lines.push(body, '');
+      // The latest evidence is already rendered with Latest Conclusion above.
+      if (Number.isSafeInteger(turn) && turn > 0 && turn !== config.turnCount) {
+        const evidence = formatStoredEvidence(sp, config.sessionId, turn, body);
+        if (evidence) lines.push(evidence, '');
+      }
     }
   }
   return lines.join('\n');
 }
 
-function buildAnalysisQualityMarkdown(
+function formatStoredEvidence(
   sp: ReturnType<typeof loadSession>['sp'],
-  turn?: number,
+  sessionId: string,
+  turn: number,
+  turnMarkdown: string,
+  conclusion?: string,
+  latest = false,
 ): string {
-  const turnPrefix = turn === undefined
-    ? undefined
-    : path.join(sp.turnsDir, String(turn).padStart(3, '0'));
-  const claimSupportPath = turnPrefix ? `${turnPrefix}.claim-support.json` : sp.claimSupport;
-  const claimVerificationPath = turnPrefix ? `${turnPrefix}.claim-verification.json` : sp.claimVerification;
-  const identityResolutionsPath = turnPrefix ? `${turnPrefix}.identity-resolutions.json` : sp.identityResolutions;
-  const claimSupportRaw = readJsonIfExists(claimSupportPath, []);
-  const verifier = readJsonIfExists(claimVerificationPath, null) as any;
-  const identitiesRaw = readJsonIfExists(identityResolutionsPath, []);
-  const claimSupport = Array.isArray(claimSupportRaw) ? claimSupportRaw : [];
-  const identities = Array.isArray(identitiesRaw) ? identitiesRaw : [];
-  const hasVerifier = verifier && typeof verifier === 'object';
-  if (!hasVerifier && claimSupport.length === 0 && identities.length === 0) {
-    return '';
-  }
-
-  const lines = [
-    '## Claim Verification',
-    '',
-    `- Verifier: ${hasVerifier ? verifier.status || 'not_checked' : 'not_checked'}`,
-    `- Checked claims: ${hasVerifier ? verifier.checkedClaimCount ?? 0 : 0}`,
-    `- Unsupported claims: ${hasVerifier ? verifier.unsupportedClaimCount ?? 0 : 0}`,
-    `- Claim support entries: ${claimSupport.length}`,
-    `- Identity sidecars: ${identities.length}`,
-    ...(fs.existsSync(claimSupportPath) ? [`- Claim support file: ${claimSupportPath}`] : []),
-    ...(fs.existsSync(claimVerificationPath) ? [`- Claim verification file: ${claimVerificationPath}`] : []),
-    ...(fs.existsSync(identityResolutionsPath) ? [`- Identity resolutions file: ${identityResolutionsPath}`] : []),
-  ];
-  const issues = Array.isArray(verifier?.issues) ? verifier.issues : [];
-  if (issues.length > 0) {
-    lines.push('', '### Issues', '');
-    for (const issue of issues.slice(0, 8)) {
-      lines.push(`- ${issue.claimId || 'unknown'} \`${issue.code || 'issue'}\`: ${issue.message || ''}`.trim());
-    }
-    if (issues.length > 8) {
-      lines.push(`- ${issues.length - 8} more issues omitted from markdown export.`);
-    }
-  }
-  return lines.join('\n');
+  return renderCliAnalysisEvidence(loadCliAnalysisEvidence({
+    sp,
+    sessionId,
+    turn,
+    turnMarkdown,
+    ...(conclusion !== undefined ? {conclusion} : {}),
+    latest,
+  }), parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE));
 }
 
 function buildJsonExport(sp: ReturnType<typeof loadSession>['sp'], config: NonNullable<ReturnType<typeof loadSession>['config']>): Record<string, unknown> {

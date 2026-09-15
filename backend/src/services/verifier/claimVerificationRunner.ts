@@ -61,7 +61,8 @@ export function collectMatchedTraceEvidenceRefIdsByClaimId(
 ): Record<string, string[]> {
   return collectMatchedTraceEvidenceRefIds(
     verification,
-    new Set<ClaimVerificationClaimStatus>(['verified', 'partial']),
+    // A candidate can own matched references without proving its proposed mechanism.
+    new Set<ClaimVerificationClaimStatus>(['verified', 'partial', 'inference']),
   );
 }
 

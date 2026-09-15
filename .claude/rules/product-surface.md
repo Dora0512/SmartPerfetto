@@ -24,7 +24,7 @@ be checked against the public product surfaces below.
 
 | Runtime | Provider families | Native state within a run | Important boundary |
 | --- | --- | --- | --- |
-| `claude-agent-sdk` | Anthropic direct, Bedrock, Vertex, Claude/Anthropic-compatible gateways, local Claude Code auth for source runs | Claude SDK session id in `SessionStateSnapshot` | Local Claude Code auth is not available in Docker or portable packages unless explicitly configured in that environment |
+| `claude-agent-sdk` | Anthropic direct, Bedrock, Vertex, Claude/Anthropic-compatible gateways | Claude SDK session id in `SessionStateSnapshot` | Requires explicit provider/env credentials; Claude Code login and Base URL alone do not establish SDK readiness |
 | `openai-agents-sdk` | OpenAI Responses API, OpenAI-compatible gateways, Ollama/chat-completions endpoints | OpenAI history and last response id in `SessionStateSnapshot` | Requires OpenAI runtime rules; do not validate only Claude env vars |
 | `pi-agent-core` | Custom Provider Manager profiles, Pi model JSON, OpenAI-compatible providers where supported by Pi AI | Pi opaque transcript state in `SessionStateSnapshot` | Keep SmartPerfetto MCP tool allowlists, plan evidence logging, and final verifier parity with the Claude target path |
 | `opencode` | Custom Provider Manager profiles, OpenCode model JSON, OpenAI-compatible providers | OpenCode session id and isolated project/home/config dirs in `SessionStateSnapshot` | Keep the bridge sandboxed and route all SmartPerfetto tools through the shared MCP registry/plan evidence log |
@@ -77,7 +77,7 @@ affected:
 - CLI trace capture, including capture presets/config output and optional
   post-capture analysis.
 - Claude, OpenAI, Pi Agent Core, OpenCode, and Qoder runtimes; Provider Manager, env
-  fallback, local Claude auth, and resume/session snapshots.
+  fallback, explicit Claude credentials, and resume/session snapshots.
 - Single-trace, raw trace comparison, multi-analysis-result comparison, and
   report export.
 - Live chat projection, HTML report, CLI artifacts, claim verification,

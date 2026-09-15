@@ -40,8 +40,8 @@ import {copyScopeProvenance, scopeProvenanceForFields,
   type EvidenceScopeProvenanceV1} from '../../types/identityContract';
 import {evidenceReferenceKey, preparedReferenceResolution, preparedEvidenceBindingEligibility, preparedEvidenceMatchesInput,
   type PreparedClaimEvidence} from './claimEvidencePreparation';
-import {bindReadResolutionToAnchor, type EvidenceReadResolution} from './evidenceReadView';
-import {getCapturedAnchorFacts} from './evidenceCapture';
+import {bindReadResolutionToAnchor, evidenceReadFailureIsUnreadable, type EvidenceReadResolution} from './evidenceReadView';
+import {getCapturedAnchorFacts, markUnreadableEvidenceAnchor} from './evidenceCapture';
 
 export interface BuildEvidenceContractInput {
   conclusionContract?: ConclusionContract | null;
@@ -59,6 +59,8 @@ interface EnvelopeMatch {
   rowIndex?: number;
   missingReason?: string;
   readResolution?: EvidenceReadResolution;
+  /** Set only from a product-authored read outcome that shows the evidence could not be read. */
+  unreadableReason?: string;
 }
 
 interface BuiltRelations {
@@ -439,11 +441,19 @@ function findEnvelopeForRef(envelopes: DataEnvelope[], ref: ConclusionContractCl
   prepared?: PreparedClaimEvidence, blockedReason?: string): EnvelopeMatch | undefined {
   if (prepared || blockedReason) {
     const resolution = prepared && !blockedReason ? preparedReferenceResolution(prepared, ref) : undefined;
-    if (!resolution || resolution.status !== 'resolved') return {
-      envelope: createDataEnvelope({columns: [], rows: []}, {type: 'skill_result', source: 'unavailable_evidence', title: 'Unavailable evidence'}),
-      missingReason: blockedReason || (resolution && 'reason' in resolution ? resolution.reason : 'prepared_reference_missing'),
-      ...(resolution ? {readResolution: resolution} : {}),
-    };
+    if (!resolution || resolution.status !== 'resolved') {
+      const missingReason = blockedReason || (resolution && 'reason' in resolution ? resolution.reason : 'prepared_reference_missing');
+      // Both the blocked binding and the prepared read outcome are authored here,
+      // never by the model, so their classification can mark the anchor.
+      const unreadable = evidenceReadFailureIsUnreadable(missingReason) &&
+        (Boolean(blockedReason) || resolution?.status === 'missing');
+      return {
+        envelope: createDataEnvelope({columns: [], rows: []}, {type: 'skill_result', source: 'unavailable_evidence', title: 'Unavailable evidence'}),
+        missingReason,
+        ...(resolution ? {readResolution: resolution} : {}),
+        ...(unreadable ? {unreadableReason: missingReason} : {}),
+      };
+    }
     return {envelope: {meta: structuredClone(resolution.record.meta), display: structuredClone(resolution.record.display),
       data: {columns: [...resolution.record.columns], rows: []}}, row: resolution.row && {...resolution.row},
       rowIndex: resolution.originalRowIndex, readResolution: resolution};
@@ -811,7 +821,7 @@ function buildAnchor(
     // cited evidence is absent. Keep its reason without manufacturing a binding.
     const unresolvedRead = !invalidScope && !unavailableScope &&
       (match.readResolution?.status === 'ambiguous' || match.readResolution?.status === 'incomplete');
-    return {
+    const unavailable: EvidenceAnchorV1 = {
       anchorId,
       version: 'evidence_contract@1',
       evidenceRefId,
@@ -838,6 +848,10 @@ function buildAnchor(
       ...declaredQualifiers,
       confidence: 0,
     };
+    if (match.unreadableReason && !invalidScope && !unavailableScope) {
+      markUnreadableEvidenceAnchor(unavailable, match.unreadableReason);
+    }
+    return unavailable;
   }
   const identity = deriveIdentity(envelope, row, scopeProvenance);
   const anchor: EvidenceAnchorV1 = {

@@ -32,7 +32,7 @@ const SEMANTIC_DELTA_QUERIES = [
   {
     id: 'autonomous-diagnosis',
     kind: 'autonomous-diagnosis',
-    text: '诊断这次启动变慢的主要机制，区分本次 Trace 事实与源码机制解释。',
+    text: '诊断选中的启动标记区间的主要耗时机制，区分本次 Trace 事实与源码机制解释。',
   },
   {
     id: 'quantitative-only',
@@ -521,7 +521,25 @@ function concreteCredential(value) {
   return normalized;
 }
 
-function realProviderAvailability(runtimeKind, env = process.env, fileExists = fs.existsSync) {
+function concreteClaudeCredential(value) {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  const lower = normalized.toLowerCase();
+  if (['sk-ant-xxx', 'sk-proxy-xxx', 'xxx', 'placeholder'].includes(lower)) return undefined;
+  if (lower.startsWith('your_') || lower.startsWith('replace_with_') || lower.startsWith('example_')) {
+    return undefined;
+  }
+  if (/^<[^>]+>$/.test(normalized)) return undefined;
+  return normalized;
+}
+
+function enabledEnvFlag(value) {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
+function realProviderAvailability(runtimeKind, env = process.env) {
   const deepseekApiKey = concreteCredential(
     env.DEEPSEEK_API_KEY || env.OPENAI_API_KEY,
   );
@@ -540,34 +558,25 @@ function realProviderAvailability(runtimeKind, env = process.env, fileExists = f
         };
   }
   if (runtimeKind === 'claude-agent-sdk') {
-    const claudeCredential = concreteCredential(
-      env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN,
-    );
-    const bedrockConfigured = Boolean(
-      concreteCredential(env.AWS_BEARER_TOKEN_BEDROCK) ||
-      (concreteCredential(env.AWS_ACCESS_KEY_ID) &&
-        concreteCredential(env.AWS_SECRET_ACCESS_KEY)) ||
-      concreteCredential(env.AWS_PROFILE),
-    );
-    const localClaudeCredential = fileExists(
-      path.join(os.homedir(), '.claude', '.credentials.json'),
-    );
-    return claudeCredential || bedrockConfigured || localClaudeCredential
+    const anthropicApiKey = concreteClaudeCredential(env.ANTHROPIC_API_KEY);
+    const anthropicAuthToken = concreteClaudeCredential(env.ANTHROPIC_AUTH_TOKEN);
+    const bedrockConfigured = enabledEnvFlag(env.CLAUDE_CODE_USE_BEDROCK);
+    const vertexConfigured = enabledEnvFlag(env.CLAUDE_CODE_USE_VERTEX) &&
+      Boolean(concreteClaudeCredential(env.ANTHROPIC_VERTEX_PROJECT_ID));
+    return anthropicApiKey || anthropicAuthToken || bedrockConfigured || vertexConfigured
       ? {
           available: true,
-          credentialKind: claudeCredential
-            ? (env.ANTHROPIC_API_KEY
-                ? 'ANTHROPIC_API_KEY'
-                : env.ANTHROPIC_AUTH_TOKEN
-                  ? 'ANTHROPIC_AUTH_TOKEN'
-                  : 'CLAUDE_CODE_OAUTH_TOKEN')
+          credentialKind: anthropicApiKey
+            ? 'ANTHROPIC_API_KEY'
+            : anthropicAuthToken
+              ? 'ANTHROPIC_AUTH_TOKEN'
             : bedrockConfigured
               ? 'AWS_BEDROCK_AUTH'
-              : 'CLAUDE_LOCAL_LOGIN',
+              : 'GOOGLE_VERTEX_AUTH',
         }
       : {
           available: false,
-          reason: 'ANTHROPIC_OR_CLAUDE_LOCAL_AUTH_MISSING',
+          reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
         };
   }
   if (runtimeKind === 'qoder-agent-sdk') {
@@ -616,9 +625,16 @@ function semanticDeltaQueries() {
   return SEMANTIC_DELTA_QUERIES.map(query => ({...query}));
 }
 
-function scenarioSliceSelector(caseId, scenario) {
-  const targets = (scenario?.signals || []).filter(signal => signal.type === 'atrace-slice' &&
-    signal.name !== `SmartPerfetto::CASE::${caseId}`);
+function scenarioSliceSelector(caseId, scenario, targetName) {
+  if (typeof targetName !== 'string' || !targetName.trim()) {
+    throw new Error('Source scenario must receive one target slice name');
+  }
+  const caseMarker = `SmartPerfetto::CASE::${caseId}`;
+  if (targetName === caseMarker) {
+    throw new Error('Source scenario cannot select its case marker');
+  }
+  if (!Array.isArray(scenario?.signals)) throw new Error('Source scenario signals must be an array');
+  const targets = scenario.signals.filter(signal => signal.type === 'atrace-slice' && signal.name === targetName);
   if (targets.length !== 1) throw new Error('Source scenario must identify exactly one target slice');
   const [target] = targets;
   const threads = (scenario.actors?.threads || []).filter(thread =>
@@ -638,8 +654,14 @@ function sourceScenarioSliceSelector() {
   if (typeof scenarioFile !== 'string' || path.basename(scenarioFile) !== scenarioFile) {
     throw new Error('Source scenario metadata must name a local scenario file');
   }
+  const expected = JSON.parse(fs.readFileSync(path.join(caseRoot, 'analysis/expected.json'), 'utf8'));
+  const traceFacts = expected?.source_trace_ground_truth?.traceFacts;
+  if (!traceFacts || typeof traceFacts !== 'object' || Array.isArray(traceFacts) ||
+      !Object.hasOwn(traceFacts, 'marker') || typeof traceFacts.marker !== 'string' || !traceFacts.marker.trim()) {
+    throw new Error('Source ground truth must declare one target marker');
+  }
   return scenarioSliceSelector(caseMetadata.id,
-    JSON.parse(fs.readFileSync(path.join(caseRoot, scenarioFile), 'utf8')));
+    JSON.parse(fs.readFileSync(path.join(caseRoot, scenarioFile), 'utf8')), traceFacts.marker);
 }
 
 function semanticConditionArgs(query, condition, outputPath, timeoutMs) {
@@ -769,8 +791,7 @@ function evaluateSemanticConditionReport(input) {
   const privacyPassed = Boolean(report) &&
     forbidden?.[PRIVATE_SOURCE_CANARY] !== true &&
     !serialized.includes(sourceRoot) &&
-    !serialized.includes(PRIVATE_SOURCE_CANARY) &&
-    !serialized.includes('val startupPolicy =');
+    !serialized.includes(PRIVATE_SOURCE_CANARY);
   const setup = report?.analysisContext?.setup?.codebases?.[0];
   const provenancePassed = condition === 'A0'
     ? Array.isArray(report?.analysisContext?.codebaseIds) &&
@@ -830,14 +851,14 @@ function evaluateSemanticConditionReport(input) {
   const sourceToolCount = ['search_codebase', 'read_codebase_file', 'lookup_app_source']
     .reduce((count, tool) => count + (summary?.toolCallCounts?.[tool] || 0), 0);
   const forbiddenMatches = summary?.forbiddenTextMatches || {};
+  // Generic filename:line syntax also occurs in Trace stacks; it is not source provenance.
   const sourceLeakFree = condition !== 'A0' || (
+    !serialized.includes('val startupPolicy =') &&
     [
       SEMANTIC_DELTA_RELATIVE_SOURCE_PATH,
       SEMANTIC_DELTA_SOURCE_FILE,
       '[Code:',
     ].every(text => forbiddenMatches[text] !== true) &&
-    summary?.conclusionHasConcreteCodeRefs !== true &&
-    summary?.analysisCompletedHasConcreteCodeRefs !== true &&
     (summary?.analysisCompletedSourceReferenceCount || 0) === 0 &&
     (summary?.analysisCompletedSourceBindingCount || 0) === 0 &&
     sourceToolCount === 0
@@ -858,12 +879,14 @@ function evaluateSemanticConditionReport(input) {
   const selectedCodebases = new Set(report?.analysisContext?.codebaseIds || []);
   const sourceGroundTruth = JSON.parse(fs.readFileSync(path.resolve(backendRoot,
     '../Trace/constructed/source-analysis-semantic/analysis/expected.json'), 'utf8')).source_trace_ground_truth;
-  const matchingReferences = references.filter(reference =>
+  const bodyReferences = references.filter(reference =>
     typeof reference.id === 'string' && reference.id.startsWith('source-ref-v1-') &&
     selectedCodebases.has(reference.codebaseId) && reference.filePath === SEMANTIC_DELTA_SOURCE_FILE &&
     (reference.lookupKind === 'body' || reference.lookupKind === 'indexed') &&
-    Number.isInteger(reference.lineRange?.start) && Number.isInteger(reference.lineRange?.end) &&
-    reference.lineRange.start > 0 && reference.lineRange.start <= sourceGroundTruth.lineRange.start &&
+    Number.isSafeInteger(reference.lineRange?.start) && Number.isSafeInteger(reference.lineRange?.end) &&
+    reference.lineRange.start > 0 && reference.lineRange.start <= reference.lineRange.end);
+  const matchingReferences = bodyReferences.filter(reference =>
+    reference.lineRange.start <= sourceGroundTruth.lineRange.start &&
     reference.lineRange.end >= sourceGroundTruth.lineRange.end);
   const matchingReferenceIds = new Set(matchingReferences.map(reference => reference.id));
   const verifiedBindings = summary?.analysisCompletedVerifiedSourceBindings || [];
@@ -878,7 +901,7 @@ function evaluateSemanticConditionReport(input) {
   });
   const canaryLine = fs.readFileSync(path.join(sourceRoot, SEMANTIC_DELTA_SOURCE_FILE), 'utf8')
     .split(/\r?\n/).findIndex(line => line.includes(PRIVATE_SOURCE_CANARY)) + 1;
-  const privacyCanaryCovered = canaryLine > 0 && matchingReferences.some(reference =>
+  const privacyCanaryCovered = canaryLine > 0 && bodyReferences.some(reference =>
     reference.lineRange.start <= canaryLine && reference.lineRange.end >= canaryLine);
   const quantitativeOutputPassed = traceFactPassed && claims.length > 0 && claims.every(claim =>
     ['numeric', 'time_range', 'comparison'].includes(claim.kind) && claim.semantics?.scope?.population !== 'codebase');

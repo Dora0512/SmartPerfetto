@@ -95,12 +95,21 @@ export function createRuntimeTurnCloseoutTape(options: {maxBytes?: number} = {})
     }
     trim();
   };
-  const buildPrompt = (input: {query: string; priorConclusion: string; outputLanguage?: OutputLanguage}): string | undefined => {
+  /** At least one call returned data that survived projection; an unreadable result gives a delivery call nothing. */
+  const hasReturnedData = () => [...entries.values()].some(entry => entry.state === 'returned' && entry.returnedData !== undefined);
+  const buildPrompt = (input: {
+    query: string;
+    priorConclusion: string;
+    outputLanguage?: OutputLanguage;
+    /** Which acquisition budget ran out; the delivery call is the same for both. */
+    budgetExhausted?: 'turn_limit' | 'timeout';
+  }): string | undefined => {
     let template: string | undefined;
     try { template = loadPromptTemplate(`prompt-runtime-turn-closeout-${input.outputLanguage === 'en' ? 'en' : 'zh'}`); }
     catch { return undefined; }
     if (!template?.trim()) return undefined;
     return renderTemplate(template.replace(/<!--[\s\S]*?-->/g, '').trim(), {
+      budget_exhausted: input.budgetExhausted ?? 'turn_limit',
       original_query: boundedText(input.query, 6000),
       prior_conclusion: boundedText(input.priorConclusion, 8000),
       returned_data: JSON.stringify({kind: 'current_run_returned_data_excerpts',
@@ -108,5 +117,5 @@ export function createRuntimeTurnCloseoutTape(options: {maxBytes?: number} = {})
         omittedCalls, unavailableResults, entries: [...entries.values()]}),
     });
   };
-  return {observe, buildPrompt};
+  return {observe, buildPrompt, hasReturnedData};
 }

@@ -8,7 +8,7 @@ SmartPerfetto 后端现在把“模型 SDK”与“Perfetto 分析能力”分�
 
 | Runtime | SDK | Provider 类型 | 说明 |
 |---|---|---|---|
-| `claude-agent-sdk` | Claude Agent SDK | Anthropic、Bedrock、Vertex、DeepSeek、Anthropic-compatible gateway | 默认运行时，支持 Claude Code 本地认证、MCP server 和可配置 sub-agent，复用共享终态与验证合约 |
+| `claude-agent-sdk` | Claude Agent SDK | Anthropic、Bedrock、Vertex、DeepSeek、Anthropic-compatible gateway | 默认运行时，需要显式 provider/env 凭据，支持 MCP server 和可配置 sub-agent，复用共享终态与验证合约 |
 | `openai-agents-sdk` | OpenAI Agents SDK | OpenAI、Ollama、OpenAI-compatible gateway | 原生 OpenAI runtime，通过 function tools 复用同一套 SmartPerfetto 工具 |
 | `pi-agent-core` | Pi Agent Core | custom only | 可选 public runtime；真实模型配置下复用 SmartPerfetto 共享 prompt/tool/report 管线，fake-stream 仅用于 smoke；不启用 `.pi` discovery、package extension、shell/file tools |
 | `opencode` | OpenCode server / SDK | custom only | 可选 public runtime；使用显式 OpenAI-compatible 或 OpenCode model 配置、request-scoped SmartPerfetto MCP 工具和加固隔离的 OpenCode server；不读取本地 OpenCode 登录态/project state，也不启用内建 file/shell/web/edit tools |
@@ -197,13 +197,17 @@ intent 不自动预取；计划按需产生，阶段完成标记必须有真实�
 ## 轮次预算与收尾
 
 完整模式默认 100 轮，快速模式默认 50 轮；5 轮 quick target 仅为软目标。
-总预算大于 1 时预留一次无工具收尾，正常提前完成不额外调用模型。调查触顶后，
+总预算大于 1 时预留一次无工具交付。正常提前完成且已带有效必需声明，或 typed intent
+为 acknowledgement 时不额外调用模型；已完成的非 acknowledgement 候选若缺少声明，
+可使用这一次预留额度，让同一作者基于完整原生正文补交声明。只有返回候选的可见正文
+与冻结原文完全一致且声明有效时才接受；改写、截断、失败或无效响应全部保留原候选，
+补交期间关闭工具且不重复推送正文。调查触顶后，
 收尾使用本轮固定的模型、Provider、授权与原始截止时间，基于已返回数据和已有正文
 说明有限结论、证据不足及下一轮可追问的问题。它不会继续查询，也不会把调查升级为
 完成；`partial`、`completion.reason=turn_limit` 和 `terminationReason=max_turns` 保留。
 触顶后不再追加模型语义审核，确定性证据检查仍可执行。
 
-收尾失败保留原候选；取消、超时、授权失效或已耗尽的显式费用预算不会启动额外调用。
+收尾或声明补交失败时保留原候选；取消、超时、授权失效或已耗尽的显式费用预算不会启动额外调用。
 只有 1 轮的配置没有额外收尾额度。OpenCode 通过观察原生消息停止采集，可能在两次观察
 之间过冲；实际轮数照实记录，已无剩余额度时不再请求总结，不能将它宣称为严格调用硬上限。
 
@@ -254,6 +258,13 @@ deadline、trace identity 和证据读取范围；产品 owner 在 await 前后�
 正文、真实 native completion 和原始 claim 是不同输入；合法 JSON 和模型审核
 一致都不能单独成为证明。
 
+同一 context 将冻结的输入选区绑定到语义审核。审核根据问题、意图和选中的事件或区间
+检查回答是否切题；用户明确要求分析其他对象或整条 Trace 时，以该要求为准，不能被
+界面残留选区覆盖。选区元数据仅用于定位，不是执行证据，也不能证明进程身份。
+旧调用或 preparation 前路径缺失选区，与当前 run 明确无选区保持可区分；无效选区必须拒绝。
+双 Trace 场景中，工作区焦点不能证明选区来自哪条 Trace，因此来源保持未知。
+隐私投影无法完整保留本次获准的选区时，审核记录为不完整，不能静默更换分析范围。
+
 语义审核不另加应用层输出 token 上限。OpenAI 只发送本次运行冻结的显式
 `maxOutputTokens`；Claude 保留原 SDK 环境；Pi 未显式传入上限时使用已固定模型的
 原生 SDK 能力。分类请求仍保留各自的小协议预算。服务商与 SDK 的输出限制仍然有效，
@@ -269,6 +280,12 @@ witness、受信单位/字段语义或覆盖时保留候选/未知状态；
 一般因果关系不能由相等数值或端点推导。完整 claim 状态由捕获证据与当前命题的语义审核
 联合决定。报告、CLI 和 snapshot 保留 provenance；chat 分开投影正文、machine sidecar
 和结构化 runtime appendix，不能机械删改自然语言结论。
+
+结论呈现保留全部正文，不按“证据索引”或“断言验证”等标题删除语义段落。
+Web 将服务器核验详情作为独立消息字段，绑定候选身份；替换正文时清除旧详情，
+元数据回填只更新本轮消息中相同候选的记录。CLI 使用绑定会话、回合和正文的独立
+呈现文件，HTML 报告完整列出声明、各类引用与核验问题。来源表匹配与命题验证分开
+标注；这些显示数据不能重新签发 witness、提升验证状态或参与授权恢复。
 
 ## Session 与恢复
 

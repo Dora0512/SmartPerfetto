@@ -210,7 +210,8 @@ describe('canonical system evidence primitives', () => {
       }
       const selection=query(db,'composite/selection_range_cpu_sched_summary#running_thread_quadrants');
       expect(selection).toHaveLength(2);
-      expect(selection.find(row=>row.utid===2)).toMatchObject({total_cpu_ms:0,q4a_io_blocked_ms:30,total_observed_threads:2});
+      expect(selection.find(row=>row.utid===2)).toMatchObject({total_cpu_ms:0,q4a_uninterruptible_ms:30,total_observed_threads:2});
+      expect(selection.every(row=>!Object.prototype.hasOwnProperty.call(row,'q4a_io_blocked_ms'))).toBe(true);
       expect(query(db,'atomic/sched_latency_in_range')[0]).toMatchObject({utid:1,total_runnable_ms:15,runnable_preempted_ms:15});
       expect(query(db,'composite/cpu_analysis#core_type_stats').reduce((sum,row)=>sum+row.total_time_ms,0)).toBe(15);
     } finally {db.close();}

@@ -54,6 +54,7 @@ display:
       label: "总耗时"
       type: duration
       format: duration_ms
+      unit: ms
     - name: percent
       label: "占比"
       type: percentage
@@ -80,8 +81,8 @@ sql: |
       s.startup_id,
       s.dur AS startup_dur,
       ts.state,
-      COALESCE(ts.io_wait, 0) AS io_wait,
-      COALESCE(NULLIF(ts.blocked_function, ''), '-') AS blocked_function,
+      ts.io_wait,
+      NULLIF(ts.blocked_function, '') AS blocked_function,
       LOWER(COALESCE(ts.blocked_function, '')) AS blocked_function_lc,
       MIN(CASE WHEN ts.dur < 0 THEN s.ts + s.dur ELSE ts.ts + ts.dur END, s.ts + s.dur) - MAX(ts.ts, s.ts) AS clipped_dur
     FROM thread_state ts

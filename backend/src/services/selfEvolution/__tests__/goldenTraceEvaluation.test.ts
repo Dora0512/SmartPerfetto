@@ -281,6 +281,20 @@ describe('golden trace deterministic scorer', () => {
 });
 
 describe('golden trace registry compiler', () => {
+  it('allows authorized source quotations without weakening private-data or trace-proof boundaries', () => {
+    const sourceCase = loadGoldenTraceRegistry().cases.find(
+      item => item.caseId === 'synthetic-source-analysis-semantic-v1',
+    );
+    expect(sourceCase).toBeDefined();
+    const rubric = (sourceCase?.goldenPoints ?? []).join('\n');
+    expect(rubric).toContain('owner-facing quotations are allowed with relative source references');
+    expect(rubric).toContain('exact authorized read');
+    expect(rubric).toContain('credentials, private canaries, registered absolute roots');
+    expect(rubric).toContain('private-knowledge material outside the authorized inputs remain excluded');
+    expect(rubric).toContain('a CodeRef alone cannot prove that the event occurred');
+    expect(rubric).not.toContain('without exposing raw source text');
+  });
+
   it('unifies the constructed catalog, scenarios, coverage, golden facts, and splits', () => {
     const registry = loadGoldenTraceRegistry();
     const authored = JSON.parse(fs.readFileSync(path.resolve(

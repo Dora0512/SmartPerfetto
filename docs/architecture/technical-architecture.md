@@ -109,7 +109,7 @@ Cookie 写请求除了 CORS 之外还要经过精确 Origin 检查，因为 CORS
 
 | Runtime | 主要 Provider | 恢复状态 |
 |---|---|---|
-| `claude-agent-sdk` | Anthropic、Bedrock、Vertex、Claude-compatible、本机 Claude 登录 | Claude session id |
+| `claude-agent-sdk` | Anthropic、Bedrock、Vertex、Claude-compatible | Claude session id |
 | `openai-agents-sdk` | OpenAI Responses、OpenAI-compatible、Ollama/chat-completions | history + response id |
 | `pi-agent-core` | Provider Manager custom profile / Pi model config | opaque transcript |
 | `opencode` | OpenCode SDK 与 custom provider | OpenCode session id + 隔离目录 |
@@ -125,8 +125,8 @@ planning 和 verifier shared layers，不能整体视为 legacy。
 `SMARTPERFETTO_AGENT_RUNTIME`、默认 runtime。session 创建后固定 provider/runtime；
 恢复时不能因为当前 active profile 改变而静默换 provider。
 
-Provider Manager profile 优先于 `.env` fallback。Docker/portable 中的认证环境与宿主机
-不同，不能把源码路径下可用的 Claude 登录态写成所有发布形态都可用。
+Provider Manager profile 优先于 `.env` fallback。Claude Agent SDK 在所有运行方式下
+都需要显式 provider/env 凭据；Claude Code 登录态不代表 SDK 已配置。
 
 ## 5. MCP 工具面
 

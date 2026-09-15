@@ -6,16 +6,14 @@
 # 启动线程阻塞关系图（原子 Skill）
 # =============================================================================
 # 利用 thread_state.waker_utid 构建线程间的 block/wakeup 关系图。
-# 回答核心问题："主线程被谁阻塞？唤醒者当时在做什么？"
+# 返回等待区间与实际后继唤醒事件；唤醒者不等于阻塞原因。
 #
 # 分析维度：
 # - 被阻塞线程（blocked_thread）+ 阻塞状态（S/D）+ 阻塞函数
 # - 唤醒者线程 + 唤醒者所在进程
 # - 唤醒者在唤醒时刻正在执行的 slice（waker_current_slice）
 #
-# 这个数据让 Agent 可以构建类似这样的因果链：
-#   MainThread[S: binder_wait] ← Binder:1234_5 ← system_server/PackageManager
-#   MainThread[S: futex_wait]  ← HeapTaskDaemon[Running: GC]
+# 每行对应一个原生等待区间；保留身份、裁剪边界、唤醒及 IRQ 证据状态。
 
 name: startup_thread_blocking_graph
 version: "1.0"
@@ -25,7 +23,7 @@ tier: B
 
 meta:
   display_name: "启动线程阻塞关系图"
-  description: "分析启动期间线程间的 block/wakeup 关系，定位阻塞根因"
+  description: "观测启动期间的等待区间和后继唤醒事件；唤醒者身份不证明阻塞原因"
   icon: "account_tree"
   tags: [startup, blocking, wakeup, thread_graph, atomic]
 
@@ -52,16 +50,38 @@ inputs:
 display:
   level: detail
   layer: deep
-  title: "线程阻塞关系图"
+  title: "等待区间与唤醒事件"
   columns:
+    - {name: is_unfinished, label: "未结束等待", type: number}
+    - {name: left_censored, label: "左边界裁剪", type: number}
+    - {name: right_censored, label: "右边界裁剪", type: number}
+    - {name: wakeup_state_id, label: "后继状态ID", type: number}
+    - {name: evidence_scope, label: "证据范围", type: string}
+    - {name: waker_slice_id, label: "唤醒时操作ID", type: number}
+    - {name: upid, label: "upid", type: number, hidden: true}
+    - {name: utid, label: "utid", type: number, hidden: true}
+    - {name: thread_state_id, label: "thread_state_id", type: number, hidden: true}
+    - {name: raw_start_ts, label: "原始等待开始", type: timestamp, unit: ns}
+    - {name: raw_end_ts, label: "原始等待结束", type: timestamp, unit: ns}
+    - {name: start_ts, label: "窗口内等待开始", type: timestamp, unit: ns}
+    - {name: end_ts, label: "窗口内等待结束", type: timestamp, unit: ns}
+    - {name: wakeup_ts, label: "后继事件时间", type: timestamp, unit: ns}
+    - {name: wakeup_status, label: "唤醒证据状态", type: string}
+    - {name: wakeup_count, label: "有唤醒元数据的事件数", type: number}
+    - {name: waker_utid, label: "唤醒线程身份", type: number}
+    - {name: waker_upid, label: "唤醒进程身份", type: number}
+    - {name: observed_waker_utid, label: "原始唤醒线程字段", type: number}
+    - {name: irq_context, label: "IRQ 上下文", type: number}
+    - {name: relation_status, label: "关系证据边界", type: string}
+    - {name: waker_slice_status, label: "唤醒时操作证据", type: string}
     - name: blocked_thread
-      label: "被阻塞线程"
+      label: "等待线程"
       type: string
     - name: blocked_role
-      label: "被阻塞角色"
+      label: "等待线程角色"
       type: string
     - name: blocked_state
-      label: "阻塞状态"
+      label: "等待状态"
       type: string
     - name: blocked_function
       label: "阻塞函数"
@@ -77,103 +97,107 @@ display:
       label: "唤醒者当时操作"
       type: string
     - name: block_count
-      label: "阻塞次数"
+      label: "等待区间数"
       type: number
     - name: total_block_ms
-      label: "总阻塞时间"
+      label: "窗口内等待时长"
       type: duration
       format: duration_ms
       unit: ms
     - name: max_block_ms
-      label: "最大阻塞时间"
+      label: "单区间等待时长"
       type: duration
       format: duration_ms
       unit: ms
     - name: avg_block_ms
-      label: "平均阻塞时间"
+      label: "单区间等待时长"
       type: duration
       format: duration_ms
       unit: ms
 
+sql_fragments:
+  - fragments/system_thread_state_spans.sql
+
 sql: |
   WITH process_threads AS (
-    SELECT
-      t.utid,
-      t.tid,
-      t.name as thread_name,
-      p.pid,
-      CASE
-        WHEN t.tid = p.pid THEN 'main'
-        WHEN t.name = 'RenderThread' THEN 'render'
+    SELECT t.utid,t.upid,t.name AS thread_name,
+      CASE WHEN t.tid=p.pid THEN 'main'
+        WHEN t.name='RenderThread' THEN 'render'
         WHEN t.name GLOB '*HeapTaskDaemon*' OR t.name GLOB '*FinalizerDaemon*' THEN 'gc'
         WHEN t.name GLOB 'Jit thread pool*' THEN 'jit'
-        WHEN t.name GLOB 'Binder:*' THEN 'binder'
-        ELSE 'other'
-      END as role
-    FROM thread t
-    JOIN process p ON t.upid = p.upid
-    WHERE ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*')
+        WHEN t.name GLOB 'Binder:*' THEN 'binder' ELSE 'other' END AS role
+    FROM thread t JOIN process p ON t.upid=p.upid
+    WHERE ('${package}'='' OR p.name='${package}' OR p.name GLOB '${package}:*')
   ),
-  -- 查找所有阻塞事件（S/D 状态 > min_block_ms）及其唤醒者
-  blocking_events AS (
-    SELECT
-      pt.thread_name as blocked_thread,
-      pt.role as blocked_role,
-      ts.state as blocked_state,
-      ts.blocked_function,
-      ts.waker_utid,
-      ts.ts as block_ts,
-      ts.dur as block_dur
-    FROM thread_state ts
-    JOIN process_threads pt ON ts.utid = pt.utid
-    WHERE ts.state IN ('S', 'D')
-      AND ts.waker_utid IS NOT NULL
-      AND ts.ts >= ${start_ts} AND ts.ts < ${end_ts}
-      AND ts.dur > ${min_block_ms|1} * 1000000
+  system_windows AS (
+    SELECT 0 AS window_id,${start_ts} AS window_start_ts,${end_ts} AS window_end_ts
   ),
-  -- 关联唤醒者的线程信息和进程信息
-  with_waker_info AS (
-    SELECT
-      be.*,
-      COALESCE(wt.name, 'unknown') as waker_thread,
-      COALESCE(wp.name, 'unknown') as waker_process,
-      wt.utid as waker_utid_resolved
-    FROM blocking_events be
-    LEFT JOIN thread wt ON be.waker_utid = wt.utid
-    LEFT JOIN process wp ON wt.upid = wp.upid
+  system_target_threads AS (
+    SELECT w.window_id,t.upid,t.utid,t.role FROM system_windows w CROSS JOIN process_threads t
   ),
-  -- 查找唤醒者在唤醒时刻正在执行的最内层 slice
-  with_waker_slice AS (
-    SELECT
-      wi.*,
-      (SELECT s.name FROM slice s
-       JOIN thread_track tt ON s.track_id = tt.id
-       WHERE tt.utid = wi.waker_utid_resolved
-         AND s.ts <= wi.block_ts + wi.block_dur
-         AND s.ts + s.dur >= wi.block_ts + wi.block_dur
-       ORDER BY s.dur ASC
-       LIMIT 1) as waker_current_slice
-    FROM with_waker_info wi
+  wakeup_events AS (
+    SELECT e.utid,e.ts,COUNT(*) AS event_rows,
+      CASE WHEN COUNT(*)=1 THEN MAX(e.id) END AS wakeup_state_id,
+      CASE WHEN COUNT(*)=1 THEN MAX(e.waker_utid) END AS observed_waker_utid,
+      CASE WHEN COUNT(*)=1 THEN MAX(e.irq_context) END AS irq_context
+    FROM thread_state e JOIN process_threads t ON t.utid=e.utid
+    CROSS JOIN system_windows w
+    WHERE e.state IN ('R','R+') AND e.ts>=w.window_start_ts AND e.ts<w.window_end_ts
+    GROUP BY e.utid,e.ts
+  ),
+  waits AS (
+    SELECT wait_span.*,t.thread_name,e.event_rows,e.wakeup_state_id,e.observed_waker_utid,e.irq_context AS wake_irq_context,
+      CASE WHEN e.event_rows=1 THEN e.ts END AS wakeup_ts,
+      CASE WHEN e.event_rows=1 AND COALESCE(e.irq_context,0)!=1 THEN e.observed_waker_utid END AS resolved_waker_utid,
+      CASE WHEN e.event_rows>1 THEN 'ambiguous_successor'
+        WHEN e.irq_context=1 THEN 'observed_irq'
+        WHEN e.observed_waker_utid IS NOT NULL THEN 'observed_thread'
+        WHEN e.event_rows=1 THEN 'successor_without_wake_metadata'
+        ELSE 'no_in_window_wakeup' END AS wakeup_status
+    FROM system_thread_state_spans wait_span JOIN process_threads t ON t.utid=wait_span.utid
+    LEFT JOIN wakeup_events e ON e.utid=wait_span.utid AND e.ts=wait_span.raw_end_ts
+    WHERE wait_span.state IN ('S','I','D','DK') AND wait_span.dur_ns>${min_block_ms|1}*1000000
+  ),
+  -- Only a unique deepest slice is a usable contemporaneous task observation.
+  active_waker_slices AS (
+    SELECT w.thread_state_id,s.id,s.name,s.depth
+    -- Resolve the wait's waker before scanning its track; reordering across
+    -- wakeup_events' LEFT JOIN can otherwise scan slices before waker filtering.
+    FROM waits w CROSS JOIN thread_track tt ON tt.utid=w.resolved_waker_utid
+    CROSS JOIN slice s ON s.track_id=tt.id
+    WHERE s.ts<=w.wakeup_ts AND s.dur>=-1 AND s.dur!=0
+      AND CASE WHEN s.dur=-1 THEN (SELECT end_ts FROM trace_bounds) ELSE s.ts+s.dur END>w.wakeup_ts
+  ),
+  deepest_waker_slices AS (
+    SELECT a.thread_state_id,COUNT(*) AS candidate_count,
+      CASE WHEN COUNT(*)=1 THEN MAX(a.id) END AS waker_slice_id,
+      CASE WHEN COUNT(*)=1 THEN MAX(a.name) END AS waker_current_slice
+    FROM active_waker_slices a
+    WHERE a.depth=(SELECT MAX(b.depth) FROM active_waker_slices b WHERE b.thread_state_id=a.thread_state_id)
+    GROUP BY a.thread_state_id
   )
-  -- 聚合：按阻塞线程 × 唤醒者 × 阻塞函数分组
-  SELECT
-    blocked_thread,
-    blocked_role,
-    blocked_state,
-    COALESCE(blocked_function, '-') as blocked_function,
-    waker_thread,
-    waker_process,
-    COALESCE(waker_current_slice, '-') as waker_current_slice,
-    COUNT(*) as block_count,
-    ROUND(SUM(block_dur) / 1e6, 2) as total_block_ms,
-    ROUND(MAX(block_dur) / 1e6, 2) as max_block_ms,
-    ROUND(AVG(block_dur) / 1e6, 2) as avg_block_ms
-  FROM with_waker_slice
-  GROUP BY blocked_thread, blocked_role, blocked_state, blocked_function,
-           waker_thread, waker_process
-  ORDER BY
-    CASE blocked_role WHEN 'main' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,
-    total_block_ms DESC
+  SELECT w.upid,w.utid,w.thread_state_id,w.thread_name AS blocked_thread,w.role AS blocked_role,
+    w.state AS blocked_state,NULLIF(w.blocked_function,'') AS blocked_function,
+    printf('%d',w.raw_start_ts) AS raw_start_ts,
+    CASE WHEN w.raw_end_ts IS NOT NULL THEN printf('%d',w.raw_end_ts) END AS raw_end_ts,
+    printf('%d',w.clipped_start_ts) AS start_ts,printf('%d',w.clipped_end_ts) AS end_ts,
+    w.is_unfinished,w.left_censored,w.right_censored,
+    w.wakeup_state_id,CASE WHEN w.wakeup_ts IS NOT NULL THEN printf('%d',w.wakeup_ts) END AS wakeup_ts,
+    w.observed_waker_utid,w.wake_irq_context AS irq_context,w.resolved_waker_utid AS waker_utid,wt.upid AS waker_upid,
+    COALESCE(wt.name,'unknown') AS waker_thread,COALESCE(wp.name,'unknown') AS waker_process,
+    COALESCE(ds.waker_current_slice,'-') AS waker_current_slice,ds.waker_slice_id,
+    CASE WHEN ds.candidate_count=1 THEN 'observed_unique_deepest'
+      WHEN ds.candidate_count>1 THEN 'ambiguous_deepest' ELSE 'not_observed' END AS waker_slice_status,
+    w.wakeup_status,
+    CASE WHEN w.wakeup_status IN ('observed_irq','observed_thread') THEN 1 ELSE 0 END AS wakeup_count,
+    1 AS block_count,ROUND(w.dur_ns/1e6,2) AS total_block_ms,
+    ROUND(w.dur_ns/1e6,2) AS max_block_ms,ROUND(w.dur_ns/1e6,2) AS avg_block_ms,
+    'observed_wakeup_not_proven_blocking_cause' AS relation_status,
+    'one_wait_span_clipped_to_window' AS evidence_scope
+  FROM waits w LEFT JOIN thread wt ON wt.utid=w.resolved_waker_utid
+  LEFT JOIN process wp ON wp.upid=wt.upid
+  LEFT JOIN deepest_waker_slices ds ON ds.thread_state_id=w.thread_state_id
+  ORDER BY CASE w.role WHEN 'main' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,w.dur_ns DESC,w.thread_state_id
   LIMIT ${top_k|20}
 
 output:

@@ -354,6 +354,10 @@ function safeNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function safeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
 function normalizeSelectionTrackInfo(
   value: unknown,
   index: number,
@@ -470,15 +474,21 @@ export function normalizeSelectionContext(value: unknown): SelectionContext | un
     };
   }
   if (raw.kind === 'track_event') {
-    if (!safeNonNegativeInteger(raw.eventId) || !safeNonNegativeInteger(raw.ts)) {
+    if (!safeNonNegativeInteger(raw.eventId) || !safeInteger(raw.ts)) {
       throw new AnalyzeOptionsError(
-        'track_event selectionContext requires safe integer eventId and ts',
+        'track_event selectionContext requires a non-negative eventId and safe integer ts',
         'INVALID_SELECTION_CONTEXT',
       );
     }
     if (raw.dur !== undefined && !safeNonNegativeInteger(raw.dur)) {
       throw new AnalyzeOptionsError(
         'track_event selectionContext.dur must be a non-negative safe integer',
+        'INVALID_SELECTION_CONTEXT',
+      );
+    }
+    if (raw.dur !== undefined && !Number.isSafeInteger(raw.ts + raw.dur)) {
+      throw new AnalyzeOptionsError(
+        'track_event selectionContext ts + dur must be a safe integer',
         'INVALID_SELECTION_CONTEXT',
       );
     }

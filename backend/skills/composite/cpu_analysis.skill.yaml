@@ -469,12 +469,12 @@ steps:
         ), 1) as percent,
         COUNT(*) as count,
         -- IO 等待详情
-        CASE WHEN ts.state IN ('D', 'DK') THEN COALESCE(ts.io_wait, 0) ELSE NULL END as io_wait
+        CASE WHEN ts.state IN ('D', 'DK') THEN ts.io_wait ELSE NULL END as io_wait
       FROM clipped_states ts
       WHERE ts.utid = (SELECT utid FROM main_thread)
         AND (${start_ts} IS NULL OR ts.ts + ts.dur > ${start_ts})
         AND (${end_ts} IS NULL OR ts.ts < ${end_ts})
-      GROUP BY ts.state, CASE WHEN ts.state IN ('D', 'DK') THEN COALESCE(ts.io_wait, 0) ELSE NULL END
+      GROUP BY ts.state, CASE WHEN ts.state IN ('D', 'DK') THEN ts.io_wait ELSE NULL END
       ORDER BY total_dur_ms DESC
     save_as: main_thread_states
     condition: target_process.data.length > 0
@@ -740,7 +740,7 @@ steps:
         (SELECT utid FROM main_thread) AS utid,
         ts.blocked_function,
         ts.state,
-        COALESCE(ts.io_wait, 0) as io_wait,
+        ts.io_wait,
         CASE
           WHEN ts.state IN ('D', 'DK') AND COALESCE(ts.io_wait, 0) = 1 THEN 'direct_io_wait'
           WHEN ts.state IN ('D', 'DK') AND (
@@ -772,7 +772,7 @@ steps:
         AND ts.dur > 1000000  -- > 1ms
         AND (${start_ts} IS NULL OR ts.ts + ts.dur > ${start_ts})
         AND (${end_ts} IS NULL OR ts.ts < ${end_ts})
-      GROUP BY ts.blocked_function, ts.state, COALESCE(ts.io_wait, 0)
+      GROUP BY ts.blocked_function, ts.state, ts.io_wait
       ORDER BY total_dur_ms DESC
       LIMIT 15
     save_as: blocked_functions

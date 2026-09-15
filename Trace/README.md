@@ -12,7 +12,7 @@ Evidence tiers: R1=6, R2=0, R3=15.
 
 Pinned Perfetto SQL source: `add693d8b338ba9599dbcbc3e300b1ab8c000897`. The generated coverage ledger contains 240 Skill SQL source contracts and 2 canonical portable SQL source checks with exact source hashes and upstream module paths.
 
-Skill execution quality: 200 source-column-backed semantic, 4 execution-only composition, 0 expected-empty negative, 11 explicit deferred prerequisite, 32 definition-only.
+Skill execution quality: 204 source-column-backed semantic, 4 execution-only composition, 0 expected-empty negative, 11 explicit deferred prerequisite, 32 definition-only.
 
 ## Commands
 
@@ -55,7 +55,7 @@ Constructed cases keep source scenarios and overlay protobufs in Git; combined t
 | --- | --- | --- | --- | --- | --- |
 | [Binder, lock, and I/O blocking](./constructed/binder-io-blocking/) | io | Android 16 / API 36 (tested API 35-36) | android-startup-heavy | 25 target(s) |
 | [Framework rendering pipeline signatures](./constructed/framework-pipelines/) | pipeline | Android 16 / API 36 (tested API 35-36) | android-startup-heavy | 33 target(s) |
-| [General analysis and runtime contracts](./constructed/general-runtime-contracts/) | general | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 15 target(s) |
+| [General analysis and runtime contracts](./constructed/general-runtime-contracts/) | general | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 17 target(s) |
 | [GPU workload and frequency](./constructed/gpu-workload/) | gpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 11 target(s) |
 | [Input and interaction latency](./constructed/input-interaction-latency/) | interaction | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 14 target(s) |
 | [Linux and Android system state](./constructed/linux-system-state/) | linux | Android 16 / API 36 (tested API 35-36) | android-startup-light | 5 target(s) |
@@ -64,7 +64,7 @@ Constructed cases keep source scenarios and overlay protobufs in Git; combined t
 | [Memory and GC pressure](./constructed/memory-gc-pressure/) | memory | Android 16 / API 36 (tested API 35-36) | android-startup-light | 20 target(s) |
 | [Power and thermal throttling](./constructed/power-thermal/) | power | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 19 target(s) |
 | [Rendering pipeline jank](./constructed/rendering-jank/) | scrolling | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 46 target(s) |
-| [Scheduler and CPU contention](./constructed/scheduler-cpu-contention/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 36 target(s) |
+| [Scheduler and CPU contention](./constructed/scheduler-cpu-contention/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 38 target(s) |
 | [Source analysis semantic ground truth](./constructed/source-analysis-semantic/) | startup | Android 16 / API 36 (tested API 35-36) | android-startup-light | 0 target(s) |
 | [Startup and process lifecycle](./constructed/startup-lifecycle/) | startup | Android 16 / API 36 (tested API 35-36) | android-startup-heavy | 24 target(s) |
 | [System scheduling evidence with explicit handoffs](./constructed/system-scheduling-evidence/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 4 target(s) |

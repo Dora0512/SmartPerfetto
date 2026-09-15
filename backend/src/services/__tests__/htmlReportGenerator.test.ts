@@ -2,12 +2,24 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { HTMLReportGenerator } from '../htmlReportGenerator';
+import { HTMLReportGenerator, type AgentDrivenReportData } from '../htmlReportGenerator';
 import {createDataEnvelope, type DataEnvelope} from '../../types/dataContract';
 import {QUERY_REVIEW_SCHEMA_VERSION, type QueryReviewV1} from '../../types/queryReviewContract';
 import {routeAdaptiveEvidencePreflight} from '../../agentRuntime/adaptiveEvidenceRouter';
+import type {ClaimSupportV1, EvidenceAnchorV1} from '../../types/evidenceContract';
+import type {IdentityResolutionV1} from '../../types/identityContract';
 
 const originalOutputLanguage = process.env.SMARTPERFETTO_OUTPUT_LANGUAGE;
+
+function claimDetailReport(contract: unknown): AgentDrivenReportData {
+  return {
+    traceId: 'trace-details', query: 'Explain every finding', timestamp: 1714600000000,
+    hypotheses: [], dialogue: [],
+    result: {sessionId: 'session-details', success: false, findings: [], hypotheses: [],
+      conclusion: 'Keep the original conclusion.', conclusionContract: contract,
+      confidence: 0.5, rounds: 1, totalDurationMs: 100},
+  };
+}
 
 function makeEnvelopeWithFrameId(frameId: number): DataEnvelope {
   return {
@@ -532,6 +544,264 @@ describe('HTMLReportGenerator', () => {
     expect(html).not.toContain('无汇总数据');
   });
 
+  test('renders every claim, reference, verifier issue and identity without preview-only tails', () => {
+    const claims = Array.from({length: 4}, (_, i) => ({id: `claim-${i}`, text: `Full claim ${i}`,
+      references: Array.from({length: 2}, (_, j) => ({evidenceRefId: `evidence-${i}-${j}`,
+        sourceToolCallId: `tool-${i}-${j}`, column: 'value', value: j, rowIndex: j}))}));
+    const data = claimDetailReport({claims});
+    data.result.claimSupport = claims.map((claim): ClaimSupportV1 => ({claimId: claim.id, text: claim.text,
+      kind: 'categorical', anchors: [], supportLevel: 'partial'}));
+    data.result.claimVerificationResult = {
+      schemaVersion: 'claim_verifier@2', status: 'failed', policy: 'record_only', passed: false,
+      checkedClaimCount: 4, unsupportedClaimCount: 1,
+      claimResults: claims.map((claim, i) => ({claimId: claim.id, status: i === 3 ? 'unsupported' : 'partial'})),
+      issues: Array.from({length: 13}, (_, i) => ({claimId: 'claim-3', severity: 'error',
+        code: `missing-${i}`, message: `Visible verifier issue ${i}`})),
+    } as any;
+    data.result.identityResolutions = Array.from({length: 9}, (_, i): IdentityResolutionV1 => ({
+      version: 'identity_contract@1', identityRefId: `identity-${i}`, status: 'missing',
+      target: {traceId: 'trace-details', source: 'selection', processName: `process-${i}`},
+      processes: [], threads: [], warnings: [],
+    }));
+
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('Full claim 3');
+    expect(html).toContain('evidence-3-1');
+    expect(html).toContain('tool-3-1');
+    expect(html).toContain('Visible verifier issue 12');
+    expect(html).toContain('identity-8');
+    expect(html).toContain('证据不支持 (unsupported)');
+    expect(html).not.toContain('条断言未展开');
+    expect(html).not.toContain('条引用未展开');
+    expect(data.result.conclusion).toBe('Keep the original conclusion.');
+  });
+
+  test('keeps formal reference roles and complete values visible without raw diagnostic bundles', () => {
+    const longValue = 'value-'.repeat(40) + 'TAIL_MARKER';
+    const data = claimDetailReport({claims: [{id: 'all-roles', text: 'Source and Trace references',
+      references: [null, '', 0, false, undefined].map((value, rowIndex) => ({
+        evidenceRefId: `value-kind-${rowIndex}`, column: 'value', value, rowIndex,
+      })),
+      artifactRefs: [{artifactId: 'artifact-late', rowSelector: {nested: {longValue}}}],
+      relationRefs: ['proposal:relation-late'],
+      semantics: {schemaVersion: 'claim_semantics@1', predicate: 'source.location', polarity: 'affirmed',
+        discourse: 'asserted', quantifier: 'one', modality: 'certain', scope: {population: 'cited_rows',
+        subjectRefs: [{sourceToolCallId: 'subject-tool', column: 'detail', value: longValue}],
+        objectRefs: [{sourceArtifactId: 'object-artifact', column: 'html', value: '<script>unsafe</script>'}],
+      }, source: {sourceReferenceId: 'source-location', filePath: 'src/Source.kt', lineRange: {start: 1, end: 4}}},
+      rawDeclaration: 'PRIVATE_RAW_DECLARATION_CANARY', rawSemantics: {text: 'PRIVATE_RAW_SEMANTICS_CANARY'},
+    }]});
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    for (const text of ['artifact-late', 'proposal:relation-late', 'subject-tool', 'object-artifact',
+      'source-location', 'src/Source.kt', 'TAIL_MARKER', '主体引用', '客体引用', '制品引用', '关系引用']) {
+      expect(html).toContain(text);
+    }
+    for (const text of ['null', '&quot;&quot;', '<code>value</code>=0', 'false']) expect(html).toContain(text);
+    expect(html).toContain('&lt;script&gt;unsafe&lt;/script&gt;');
+    expect(html).not.toContain('<script>unsafe</script>');
+    expect(html).not.toContain('PRIVATE_RAW_DECLARATION_CANARY');
+    expect(html).not.toContain('PRIVATE_RAW_SEMANTICS_CANARY');
+  });
+
+  test.each(['malformed', 'cyclic', 'accessor'])('retains the body without bypassing an unavailable %s evidence projection', shape => {
+    const claim: Record<string, unknown> = {id: 'UNSAFE_DETAIL_CANARY', text: 'UNSAFE_DETAIL_CANARY', references: []};
+    const contract: Record<string, unknown> = {claims: [claim]};
+    let accessed = false;
+    if (shape === 'malformed') claim.references = 'invalid';
+    if (shape === 'cyclic') claim.artifactRefs = [{artifactId: 'artifact', rowSelector: {cycle: claim}}];
+    if (shape === 'accessor') Object.defineProperty(contract, 'claims', {enumerable: true, get: () => {
+      accessed = true;
+      throw new Error('do not execute persisted accessors');
+    }});
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(claimDetailReport(contract));
+    expect(html).toContain('Keep the original conclusion.');
+    expect(html).toContain('核验详情不可用');
+    expect(html).not.toContain('UNSAFE_DETAIL_CANARY');
+    expect(accessed).toBe(false);
+  });
+
+  test('does not execute evidence accessors while adapting report claims', () => {
+    const data = claimDetailReport({claims: [{id: 'claim', text: 'CLAIM_ACCESSOR_CANARY', references: []}]});
+    let accessed = false;
+    Object.defineProperty(data.result, 'claimSupport', {enumerable: true, get: () => {
+      accessed = true;
+      throw new Error('do not execute evidence accessors');
+    }});
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(accessed).toBe(false);
+    expect(html).toContain('Keep the original conclusion.');
+    expect(html).toContain('核验详情不可用');
+    expect(html).not.toContain('CLAIM_ACCESSOR_CANARY');
+  });
+
+  test('does not execute investigation accessors outside the closed evidence projection', () => {
+    const data = claimDetailReport({claims: []});
+    let accessed = false;
+    for (const field of ['deliveryAssurance', 'investigationAssessment'] as const) {
+      Object.defineProperty(data.result, field, {enumerable: true, get: () => {
+        accessed = true;
+        throw new Error('do not execute persisted accessors');
+      }});
+    }
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(accessed).toBe(false);
+    expect(html).toContain('Keep the original conclusion.');
+    expect(html).toContain('系统调查覆盖: 尚未核验');
+  });
+
+  test('prefers canonical claims over legacy aliases without merging them', () => {
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(claimDetailReport({
+      claims: [{id: 'canonical', text: 'CANONICAL_CLAIM', references: []}],
+      claim_refs: [{claim_id: 'legacy', claim: 'LEGACY_ALIAS_CANARY', evidence_refs: []}],
+    }));
+    expect(html).toContain('CANONICAL_CLAIM');
+    expect(html).not.toContain('LEGACY_ALIAS_CANARY');
+  });
+
+  test.each(['multiple', 'malformed', 'cyclic', 'accessor'])('rejects ambiguous or invalid %s legacy claims without losing the body', shape => {
+    const claim: Record<string, unknown> = {claim_id: 'legacy', claim: 'LEGACY_ALIAS_CANARY', evidence_refs: []};
+    const contract: Record<string, unknown> = {claim_refs: [claim]};
+    let accessed = false;
+    if (shape === 'multiple') contract.claimRefs = [claim];
+    if (shape === 'malformed') claim.evidence_refs = 'invalid';
+    if (shape === 'cyclic') claim.evidence_refs = [{row_selector: {loop: claim}}];
+    if (shape === 'accessor') Object.defineProperty(claim, 'claim', {enumerable: true, get: () => {
+      accessed = true;
+      return 'LEGACY_ALIAS_CANARY';
+    }});
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(claimDetailReport(contract));
+    expect(html).toContain('Keep the original conclusion.');
+    expect(html).toContain('核验详情不可用');
+    expect(html).not.toContain('LEGACY_ALIAS_CANARY');
+    expect(accessed).toBe(false);
+  });
+
+  test('renders known legacy references while ignoring unknown raw fields', () => {
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(claimDetailReport({claim_refs: [{
+      claim_id: 'legacy', claim: 'Legacy formal claim', evidence_refs: [{col: 'metric', value: 0}],
+      rawDeclaration: 'LEGACY_RAW_CANARY',
+    }]}));
+    expect(html).toContain('Legacy formal claim');
+    expect(html).toContain('<code>metric</code>=0');
+    expect(html).not.toContain('LEGACY_RAW_CANARY');
+  });
+
+  test('renders complete captured evidence, proof and resolved identities from the shared formal projection', () => {
+    const data = claimDetailReport({claims: [{id: 'detail-claim', text: 'Metric did not match', references: []}]});
+    const anchor: EvidenceAnchorV1 = {
+      anchorId: 'anchor-detail', version: 'evidence_contract@1', evidenceRefId: 'evidence-detail',
+      context: {traceId: 'trace-details', producerKind: 'execute_sql', sourceToolCallId: 'detail-tool'},
+      cells: [{column: 'metric', value: 1, actualValue: 0, rowIndex: 0},
+        {column: 'wait', value: null, actualValue: null, isSqlNull: true},
+        {column: 'flag', value: false, actualValue: false, rowSelector: {rawReferences: 'legitimate-selector-data'}}],
+      missing: false, rootCauseBoundary: 'root-cause-boundary-detail',
+    };
+    Object.assign(anchor, {rawReferences: 'RAW_ANCHOR_CANARY'});
+    data.result.claimSupport = [{claimId: 'detail-claim', text: 'Metric did not match', kind: 'numeric',
+      anchors: [anchor], relationAnchors: [{...anchor, anchorId: 'relation-anchor-detail'}],
+      supportLevel: 'unsupported', relationEvaluation: 'candidate', inferenceReason: 'inference-boundary-detail',
+      relations: [{schemaVersion: 'evidence_relation@1', id: 'relation-detail', kind: 'derived',
+        direction: 'subject_to_object', verificationStatus: 'candidate', reasonCode: 'derived_not_verified',
+        subjectAnchorId: 'anchor-detail', directEvidenceAnchorIds: ['anchor-detail'], supportLevel: 'inference'}],
+    }];
+    data.result.claimVerificationResult = {
+      schemaVersion: 'claim_verifier@2', status: 'failed', policy: 'record_only', passed: false,
+      checkedClaimCount: 1, unsupportedClaimCount: 1, issues: [],
+      claimResults: [{claimId: 'detail-claim', status: 'unsupported',
+        referenceCells: [{anchorId: 'anchor-detail', evidenceRefId: 'evidence-detail',
+          column: 'metric', status: 'value_mismatch', message: 'cell-verification-detail'}],
+        deterministicProof: {kind: 'numeric_cell', status: 'rejected', reason: 'finite-proof-detail',
+          anchorIds: ['anchor-detail'], evidenceRefIds: ['evidence-detail'], nativeRows: [{
+            anchorId: 'anchor-detail', evidenceRefId: 'evidence-detail', captureId: 'witness-capture-detail',
+            traceId: 'trace-details', traceSide: 'current', relation: 'sched', idColumn: 'id', id: 0,
+            schemaFingerprint: 'a'.repeat(64),
+          }]},
+        propositionCoverage: {status: 'none', covered: [], uncovered: ['metric'], reason: 'projection-coverage-detail'},
+      }],
+    };
+    data.result.identityResolutions = [{version: 'identity_contract@1', identityRefId: 'identity-detail',
+      target: {traceId: 'trace-details', processName: 'requested-process', source: 'selection'}, status: 'weak',
+      processes: [{upid: 42, processName: 'resolved-process-detail', startTs: 0,
+        matchSources: ['process-match-detail'], confidence: 0}],
+      threads: [{utid: 43, threadName: 'resolved-thread-detail', owningUpid: 42,
+        matchSources: ['thread-match-detail'], confidence: 0}],
+      warnings: ['identity-warning-detail'], recommendedParams: {upid: 42, includePeer: false},
+    }];
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    for (const value of ['relation-anchor-detail', 'relation-detail', 'inference-boundary-detail',
+      'root-cause-boundary-detail', 'cell-verification-detail', 'finite-proof-detail', 'witness-capture-detail',
+      'projection-coverage-detail', 'resolved-process-detail', 'resolved-thread-detail',
+      'process-match-detail', 'thread-match-detail', 'identity-warning-detail', 'legitimate-selector-data']) {
+      expect(html).toContain(value);
+    }
+    expect(html).toContain('<code>null</code>');
+    expect(html).toContain('<code>false</code>');
+    expect(html).toContain('<code>0</code>');
+    expect(html).not.toContain('RAW_ANCHOR_CANARY');
+  });
+
+  test('does not present an ambiguous verifier or mismatched source tuple as verified', () => {
+    const data = claimDetailReport({claims: [{id: 'duplicate', text: 'Ambiguous claim',
+      references: [{evidenceRefId: 'actual-evidence', sourceToolCallId: 'wrong-tool', sourceRef: '表 1'}]}]});
+    data.result.claimVerificationResult = {schemaVersion: 'claim_verifier@2', status: 'passed', passed: true,
+      checkedClaimCount: 1, unsupportedClaimCount: 0, policy: 'record_only', issues: [],
+      claimResults: [{claimId: 'duplicate', status: 'verified'}, {claimId: 'duplicate', status: 'verified'}]} as any;
+    data.dataEnvelopes = [createDataEnvelope({columns: ['value'], rows: [[1]]}, {
+      type: 'sql_result', source: 'execute_sql', title: 'Actual table',
+      evidenceRefId: 'actual-evidence', sourceToolCallId: 'actual-tool',
+    })];
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('未核验 (not_checked)');
+    expect(html).toContain('报告中未找到');
+    expect(html).not.toContain('已找到来源表</span>');
+    expect(html).not.toContain('已验证 (verified)');
+  });
+
+  test('does not label a declaration verified when its support text conflicts', () => {
+    const data = claimDetailReport({claims: [{id: 'conflict', text: 'Original claim', references: []}]});
+    data.result.claimSupport = [{claimId: 'conflict', text: 'A different claim', kind: 'categorical',
+      anchors: [], supportLevel: 'verified'}];
+    data.result.claimVerificationResult = {schemaVersion: 'claim_verifier@2', status: 'passed', passed: true,
+      checkedClaimCount: 1, unsupportedClaimCount: 0, policy: 'record_only', issues: [],
+      claimResults: [{claimId: 'conflict', status: 'verified'}]};
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('Original claim');
+    expect(html).toContain('A different claim');
+    expect(html).toContain('未核验 (not_checked)');
+    expect(html).not.toContain('已验证 (verified)');
+  });
+
+  test('retains all nested detail rows behind the existing table expansion', () => {
+    const data = claimDetailReport({claims: []});
+    // Match SkillExecutor.convertDisplayResultsToSections' live legacy object-row shape.
+    data.dataEnvelopes = [createDataEnvelope({columns: ['id'], rows: [[1]], expandableData: [{
+      item: {id: 1}, result: {success: true, sections: {work: {title: 'Detailed work', format: 'table' as const,
+        columns: ['label', 'constant_flag', 'constant_count', 'constant_detail'],
+        data: Array.from({length: 25}, (_, i) => ({label: `complete-detail-row-${i + 1}`,
+          constant_flag: false, constant_count: 0, constant_detail: 'constant-detail-marker'})),
+      }}},
+    }]}, {type: 'sql_result', source: 'execute_sql', title: 'Details'}) as unknown as DataEnvelope];
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('complete-detail-row-25');
+    expect(html).toContain('constant-detail-marker');
+    expect(html).toContain('<strong>false</strong>');
+    expect(html).toContain('<strong>0</strong>');
+    expect(html).toContain('toggleExpandableRow');
+    expect(html).not.toContain('... 还有 5 条');
+  });
+
+  test('keeps the conclusion when a malformed non-scalar reference invalidates evidence presentation', () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const data = claimDetailReport({claims: [{id: 'bad-value', text: 'Keep this claim visible', references: [
+      {column: 'bad', value: cycle}, {column: 'good', value: false},
+    ]}]});
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('Keep the original conclusion.');
+    expect(html).toContain('核验详情不可用');
+    expect(html).not.toContain('Keep this claim visible');
+  });
+
   test('renders structured conclusion claim references in report', () => {
     const generator = new HTMLReportGenerator();
     const evidenceRefId = 'data:sql_table:current:trace-hash:query-hash:tool-hash';
@@ -603,7 +873,7 @@ describe('HTMLReportGenerator', () => {
       },
     });
 
-    expect(html).toContain('证据引用摘要');
+    expect(html).toContain('逐条结论与证据');
     expect(html).toContain('Q1 / C1');
     expect(html).toContain('帧 1435508 耗时 45.6ms。');
     expect(html).toContain('报告来源: 数据表 1 · Frame duration table');

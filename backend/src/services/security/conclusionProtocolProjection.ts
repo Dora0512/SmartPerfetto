@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2024-2026 Gracker (Chris)
 
+import {isDeepStrictEqual} from 'node:util';
 import {
   CONCLUSION_PROTOCOL_VALUES, CONCLUSION_CONTRACT_SIDECAR_MARKER, declaredContractForResult, parseConclusionContractSidecar,
   parseTypedConclusionContractJson, renderConclusionContractSidecar,
@@ -11,7 +12,7 @@ import type {AnalysisResult} from '../../agent/core/orchestratorTypes';
 import {analysisDeliveryFingerprint, type AnalysisCandidateIdentity} from '../../types/analysisDelivery';
 import {sanitizeSourceClaimBindings} from '../codebase/sourceUseDecision';
 import {
-  issueCodeAwareStructuredProjectionReceipt, projectCodeAwareProtocolLiteral,
+  issueCodeAwareStructuredProjectionReceipt, projectCodeAwareProtocolLiteral, projectCodeAwareSemanticInputStructure,
   projectCodeAwareAuthorizedInputText,
   projectCodeAwareStructuredText, sanitizeCodeAwareStructuredTextWithReceipt,
   type CodeAwareTextProjectionReceipt,
@@ -212,18 +213,19 @@ export function releaseConclusionProtocolProjection(token: IssuedConclusionProto
 /** Preserve captured machine inputs and exact native declaration prose on their issued input roles. */
 export function projectConclusionSemanticInput(input: {
   sessionId: string; snapshot: FinalSemanticSnapshot; prepared: PreparedClaimEvidence;
-  providerQuery?: string; nativeDeclaration?: NativeConclusionDeclaration;
+  providerQuery?: string; providerSelection?: FinalSemanticSnapshot['selectionScope'];
+  nativeDeclaration?: NativeConclusionDeclaration;
   canonicalProjection?: CanonicalAnalysisProjection; canonicalCandidate?: AnalysisCandidateIdentity; runId?: string;
-}): {value: FinalSemanticSnapshot; changed: boolean} {
-  if (!input.nativeDeclaration || !isIssuedNativeConclusionDeclaration(input.nativeDeclaration)) {
-    const projected = projectCodeAwareStructuredText(input.sessionId,
-      input.providerQuery === undefined ? input.snapshot : {...input.snapshot, query: ''});
-    if (input.providerQuery !== undefined && projected.value) projected.value.query = input.providerQuery;
+}): {value: FinalSemanticSnapshot; changed: boolean; limited: boolean} {
+  let limited = false;
+  const projectInput = <T>(sessionId: string | undefined, value: T) => {
+    const projected = projectCodeAwareSemanticInputStructure(sessionId, value);
+    limited ||= projected.limited;
     return projected;
-  }
+  };
   let changed = false;
   const trusted = <T>(value: T): T => {
-    const bounded = projectCodeAwareStructuredText(undefined, value);
+    const bounded = projectInput(undefined, value);
     changed ||= bounded.changed;
     const visit = (node: unknown): unknown => {
       if (typeof node === 'string') {
@@ -243,6 +245,35 @@ export function projectConclusionSemanticInput(input: {
     };
     return visit(bounded.value) as T;
   };
+  const trustedSelection = () => {
+    const original = input.snapshot.selectionScope;
+    const issued = input.providerSelection;
+    if (!isDeepStrictEqual(original, issued)) {changed = true; return undefined;}
+    if (issued === undefined) return undefined;
+    const bounded = projectInput(undefined, issued);
+    changed ||= bounded.changed;
+    const visit = (node: unknown): unknown => {
+      if (typeof node === 'string') {
+        const receipt = sanitizeCodeAwareStructuredTextWithReceipt(input.sessionId, node);
+        changed ||= receipt.disposition !== 'preserved' || receipt.text !== node;
+        return receipt.text;
+      }
+      if (!node || typeof node !== 'object') return node;
+      if (Array.isArray(node)) return node.map(visit);
+      return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, visit(value)]));
+    };
+    return visit(bounded.value) as FinalSemanticSnapshot['selectionScope'];
+  };
+  if (!input.nativeDeclaration || !isIssuedNativeConclusionDeclaration(input.nativeDeclaration)) {
+    const {selectionScope: _selectionScope, ...withoutSelection} = input.snapshot;
+    const projected = projectInput<FinalSemanticSnapshot>(input.sessionId,
+      input.providerQuery === undefined ? withoutSelection : {...withoutSelection, query: ''});
+    changed ||= projected.changed;
+    const selection = trustedSelection();
+    if (selection !== undefined && projected.value) projected.value.selectionScope = selection;
+    if (input.providerQuery !== undefined && projected.value) projected.value.query = input.providerQuery;
+    return {value: projected.value, changed, limited};
+  }
   const contract = declaredContractForResult(input.snapshot.conclusionContract);
   const replacements = new WeakMap<object, Map<string, unknown>>();
   const token = nativeDeclarations.get(input.nativeDeclaration);
@@ -307,7 +338,7 @@ export function projectConclusionSemanticInput(input: {
     for (const key of ['subject', 'object', 'proof']) maskReference(relation as unknown as Record<string, unknown>, key);
   }
   // Masked fields are restored after output projection; they are never reparsed as new declarations.
-  const contractProjection = projectCodeAwareStructuredText(input.sessionId, contract);
+  const contractProjection = projectInput(input.sessionId, contract);
   // Keep fixed validated literals through the same role as display projection.
   const restoreClosed = (original: unknown, projected: unknown, path: string[] = []) => {
     if (!original || !projected || typeof original !== 'object' || typeof projected !== 'object') return;
@@ -340,13 +371,14 @@ export function projectConclusionSemanticInput(input: {
     rows.push({index, row: trusted(read.row), columns: trusted(record.columns)});
     read.row = null; record.columns = null;
   });
-  const base = projectCodeAwareStructuredText<FinalSemanticSnapshot>(input.sessionId, {...input.snapshot,
+  const {selectionScope: _selectionScope, ...withoutSelection} = input.snapshot;
+  const base = projectInput<FinalSemanticSnapshot>(input.sessionId, {...withoutSelection,
     query: input.providerQuery === undefined ? input.snapshot.query : '',
     conclusionContract: undefined, evidenceSnapshot: evidence, sourceUse: undefined,
     // Native raw payload is private diagnostic state, never semantic-provider input.
     protocolDiagnostics: undefined});
   changed ||= base.changed;
-  if (!base.value) return {value: base.value, changed: true};
+  if (!base.value) return {value: base.value, changed: true, limited};
   base.value.conclusionContract = contractProjection.value;
   const projectedReads = (base.value.evidenceSnapshot as typeof evidence)?.reads;
   for (const row of rows) {
@@ -355,6 +387,8 @@ export function projectConclusionSemanticInput(input: {
     read.row = row.row; (read.record as Record<string, unknown>).columns = row.columns;
   }
   base.value.sourceUse = trusted(input.snapshot.sourceUse);
+  const selection = trustedSelection();
+  if (selection !== undefined) base.value.selectionScope = selection;
   if (input.providerQuery !== undefined) base.value.query = input.providerQuery;
-  return {value: base.value, changed};
+  return {value: base.value, changed, limited};
 }

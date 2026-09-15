@@ -5,7 +5,9 @@ The native candidate needs completion with reason code: {{completion_reason}}. o
 
 For turn_limit, first state that the investigation is incomplete, summarize evidence-supported findings and unfinished questions, and say when the evidence cannot establish a root cause. Plan or hypothesis status is not a verified finding.
 
-Use only evidence already returned in the complete conversation to produce one concise, self-contained answer from beginning to end, replacing the incomplete candidate. Do not merely append its missing tail, repeat tool calls, or claim unfinished analysis phases are complete.
+Use only evidence already returned in the complete conversation to produce one complete, self-contained answer from beginning to end, replacing the incomplete candidate. Do not merely append its missing tail, repeat tool calls, or claim unfinished analysis phases are complete.
+
+Protocol repair is not an abridgment: preserve every distinct finding supported by returned evidence, its affected interval, adjacent readable evidence, source mechanism and necessary limits. Deduplicate wording without collapsing valid findings into a single dominant cause or aggregate table. The draft itself is not evidence; explicitly correct unsupported judgments or retain them as unverified. An unfinished investigation still explains the known findings and their individual gaps.
 
 If the original candidate contains conclusion declarations, retain them and correct their protocol format; never delete declarations to bypass validation. Keep the visible answer outside machine protocol blocks.
 

@@ -55,14 +55,17 @@ display:
       label: "总等待"
       type: duration
       format: duration_ms
+      unit: ms
     - name: avg_wait_ms
       label: "平均等待"
       type: duration
       format: duration_ms
+      unit: ms
     - name: max_wait_ms
       label: "最大等待"
       type: duration
       format: duration_ms
+      unit: ms
     - name: severe_delays
       label: "严重延迟次数"
       type: number

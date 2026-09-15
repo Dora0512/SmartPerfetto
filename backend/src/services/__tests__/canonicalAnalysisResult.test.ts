@@ -2,8 +2,10 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {compactSemanticEvidenceSnapshot, expandSemanticEvidenceSnapshot} from '../evidence/semanticEvidenceSnapshot';
+import {compactSemanticSourceSnapshot, expandSemanticSourceSnapshot} from '../evidence/semanticSourceSnapshot';
 import type {AnalysisResult} from '../../agent/core/orchestratorTypes';
-import {renderConclusionContractSidecar, type ConclusionContract} from '../../agent/core/conclusionContract';
+import {renderConclusionContractSidecar, parseConclusionContractDeclaration, type ConclusionContract} from '../../agent/core/conclusionContract';
 import {analysisDeliveryFingerprint, type AnalysisCompletion, type AnalysisDeliveryContext} from '../../types/analysisDelivery';
 import {canonicalizeAnalysisResult, isIssuedCanonicalAnalysisProjection, inspectCandidateProtocol,
   buildCandidateProtocolDiagnostic, sanitizeCandidateProtocolDiagnostic} from '../canonicalAnalysisResult';
@@ -14,7 +16,7 @@ import {finalizeSourceAwareAnalysisResultWithProjection} from '../codebase/sourc
 import {claimConclusionProtocolProjection, readConclusionProtocolProjection, releaseConclusionProtocolProjection,
   projectConclusionSemanticInput} from '../security/conclusionProtocolProjection';
 import {registerOnDemandSourceLookupForEcho, registerCodeAwareCanary, registerPrivateAnalysisQueryForEcho,
-  revokeCodeAwareOutputGuards, clearCodeAwareOutputGuards} from '../security/codeAwareOutputRegistry';
+  revokeCodeAwareOutputGuards, clearCodeAwareOutputGuards, withOwnerCodeAwareProjection} from '../security/codeAwareOutputRegistry';
 import {prepareClaimEvidence, preparedClaimEvidenceSnapshot} from '../evidence/claimEvidencePreparation';
 
 function declaration(value = 999): ConclusionContract {
@@ -73,6 +75,34 @@ async function proseFixture(attach = true) {
 }
 
 describe('exact native prose semantic input receipt', () => {
+  it('restores only the exact issued selection and fails closed on protected metadata', async () => {
+    const target = await proseFixture();
+    const selection = {present: true as const, kind: 'track_event' as const,
+      context: {kind: 'track_event' as const, eventId: 7, ts: 42, trackUri: 'track://ordinary'},
+      sideResolution: {status: 'unknown' as const}};
+    try {
+      const input: Parameters<typeof projectConclusionSemanticInput>[0] = {...target.input,
+        snapshot: {...target.input.snapshot, selectionScope: selection}};
+      const exact = withOwnerCodeAwareProjection(() => projectConclusionSemanticInput({...input,
+        providerSelection: selection}));
+      expect(exact.changed).toBe(false);
+      expect(exact.value.selectionScope).toEqual(selection);
+
+      const mismatch = withOwnerCodeAwareProjection(() => projectConclusionSemanticInput({...input,
+        providerSelection: {...selection, context: {...selection.context, eventId: 8}}}));
+      expect(mismatch.changed).toBe(true);
+      expect(mismatch.value.selectionScope).toBeUndefined();
+
+      registerCodeAwareCanary(target.input.sessionId, 'SELECTION_CANARY');
+      input.snapshot.selectionScope = {...selection,
+        context: {...selection.context, trackUri: 'track://SELECTION_CANARY'}};
+      const protectedInput = withOwnerCodeAwareProjection(() => projectConclusionSemanticInput({...input,
+        providerSelection: input.snapshot.selectionScope}));
+      expect(protectedInput.changed).toBe(true);
+      expect(JSON.stringify(protectedInput.value)).not.toContain('SELECTION_CANARY');
+    } finally {target.cleanup();}
+  });
+
   it('restores only original declaration fields while keeping the actual display body and receipt private', async () => {
     const target = await proseFixture();
     try {
@@ -226,6 +256,47 @@ describe('canonical analysis result projection', () => {
     expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, issueCodes: ['invalid_reference'], details: [detail]})).toBeUndefined();
     const {details: _details, ...old} = diagnostic;
     expect(sanitizeCandidateProtocolDiagnostic(old)).toEqual(old);
+  });
+
+  it('projects bounded relation failures without retaining raw keys, values, IDs or source text', () => {
+    const raw = renderConclusionContractSidecar({...declaration(), relationProposals: [{
+      schemaVersion: 'evidence_relation_candidate@1', id: 'PRIVATE_RELATION_ID_CANARY', kind: 'overlap',
+      direction: 'symmetric', subject: {sourceRef: 'PRIVATE_RELATION_SOURCE_CANARY'},
+      PRIVATE_RELATION_KEY_CANARY: 'PRIVATE_RELATION_VALUE_CANARY',
+    }]} as any);
+    const diagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(raw), 'native', 1);
+    expect(diagnostic).toMatchObject({status: 'invalid', issueCodes: ['invalid_relation_proposal'], issueCount: 1,
+      relationProposalDiagnostics: [{scope: 'item', ordinal: 1, reason: 'unknown_field'}]});
+    expect(sanitizeCandidateProtocolDiagnostic(diagnostic)).toEqual(diagnostic);
+    expect(JSON.stringify(diagnostic)).not.toContain('PRIVATE_RELATION_');
+  });
+
+  it('sanitizes relation diagnostics as a closed bounded discriminated collection', () => {
+    const raw = renderConclusionContractSidecar({...declaration(), relationProposals: null} as any);
+    const diagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(raw), 'native', 1);
+    expect(diagnostic.relationProposalDiagnostics).toEqual([
+      {scope: 'collection', reason: 'collection_not_array'},
+    ]);
+    expect(sanitizeCandidateProtocolDiagnostic(diagnostic)).toEqual(diagnostic);
+    const item = {scope: 'item', ordinal: 1, reason: 'invalid_id'};
+    const invalidCollections: unknown[] = [
+      [], null, item, [item, item], Array.from({length: 25}, (_, index) => ({...item,
+        ordinal: index % 24 + 1, reason: index === 24 ? 'invalid_kind' : 'invalid_id'})),
+      [{...item, scope: 'other'}], [{...item, reason: 'PRIVATE_RELATION_REASON_CANARY'}],
+      [{scope: 'item', reason: 'invalid_id'}], [{...item, ordinal: 0}], [{...item, ordinal: 25}],
+      [{...item, ordinal: 1.5}], [{...item, raw: 'PRIVATE_RELATION_VALUE_CANARY'}],
+      [{scope: 'collection', reason: 'collection_not_array', ordinal: 1}],
+      [{scope: 'collection', reason: 'invalid_id'}],
+      [{scope: 'collection', reason: 'collection_not_array'}, item],
+    ];
+    for (const relationProposalDiagnostics of invalidCollections) {
+      expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, relationProposalDiagnostics})).toBeUndefined();
+    }
+    expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, status: 'valid', relationProposalDiagnostics: [item]})).toBeUndefined();
+    expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, issueCodes: ['invalid_reference'],
+      relationProposalDiagnostics: [item]})).toBeUndefined();
+    expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, issueCount: 0,
+      relationProposalDiagnostics: [item]})).toBeUndefined();
   });
 
   it.each(['Ordinary answer', JSON.stringify(declaration())])('keeps ordinary or legacy declarations absent rather than invalid: %s', raw => {
@@ -484,5 +555,185 @@ describe('canonical analysis result projection', () => {
     expect(canonical.result.completion?.status).toBe('unknown');
     expect(assessFinalResultQualityAssessment({result: canonical.result, context: canonical.deliveryContext})
       .assurance.completion).toBe('failed');
+  });
+});
+
+
+describe('source binding declaration ownership', () => {
+  function sourceDeclaration(): any {
+    return {...declaration(), claims: [{id: 'source-body', text: 'Implementation may explain the wait', kind: 'inference', references: [],
+      semantics: {schemaVersion: 'claim_semantics@1', predicate: 'source.mechanism', polarity: 'affirmed',
+        discourse: 'hypothetical', quantifier: 'one', modality: 'possible', scope: {population: 'codebase'}}}],
+      sourceClaimBindings: [{claimId: 'source-body', mechanismStatus: 'compatible', sourceReferenceIds: ['source-returned'], traceEvidenceRefIds: []}]};
+  }
+  it('admits source-only empty Trace links without declaring source proof', () => {
+    const parsed = parseConclusionContractDeclaration(sourceDeclaration());
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.contract?.sourceClaimBindings?.[0].mechanismStatus).toBe('compatible');
+  });
+  it.each(['missing', 'duplicate', 'foreign_trace'] as const)('rejects %s links while retaining the original declaration', kind => {
+    const raw = sourceDeclaration();
+    raw.privateNote = 'PRIVATE_DECLARATION_NOTE';
+    if (kind === 'missing') raw.sourceClaimBindings[0].claimId = 'not-declared';
+    if (kind === 'duplicate') raw.claims.push(structuredClone(raw.claims[0]));
+    if (kind === 'foreign_trace') {
+      raw.sourceClaimBindings[0].traceEvidenceRefIds = ['data:duration'];
+      raw.claims.push(declaration().claims![0]);
+    }
+    const before = structuredClone(raw);
+    const parsed = parseConclusionContractDeclaration(raw);
+    expect(parsed.issues).toContainEqual({code: 'invalid_reference', path: `sourceClaimBindings[0].${kind === 'foreign_trace' ? 'traceEvidenceRefIds' : 'claimId'}`});
+    expect(parsed.contract?.bindingEligibility).toBe('ineligible');
+    expect(parsed.contract?.sourceClaimBindings).toEqual(raw.sourceClaimBindings);
+    expect(parsed.contract?.rawDeclaration).toEqual(raw);
+    expect(raw).toEqual(before);
+    const native = `Body\n<!-- smartperfetto:conclusion-contract@1\n\`\`\`json\n${JSON.stringify(raw)}\n\`\`\`\n-->`;
+    const diagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(native), 'native', 1);
+    expect(diagnostic.issueCodes).toContain('invalid_reference');
+    expect(JSON.stringify(diagnostic)).not.toContain('PRIVATE_DECLARATION_NOTE');
+    expect(JSON.stringify(canonicalizeAnalysisResult(result(native)).result)).not.toContain('PRIVATE_DECLARATION_NOTE');
+  });
+  it('reports cluster shape and unowned Trace bindings together for one correction opportunity', () => {
+    const raw = sourceDeclaration();
+    raw.clusters = ['wrong shape'];
+    raw.sourceClaimBindings[0].traceEvidenceRefIds = ['foreign'];
+    const parsed = parseConclusionContractDeclaration(raw);
+    expect(parsed.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(['invalid_contract', 'invalid_reference']));
+    expect(parsed.contract).toBeUndefined();
+  });
+  it.each(['references', 'artifactRefs', 'relationRefs', 'subjectRefs', 'objectRefs'] as const)(
+    'leaves %s aliases and evidence truth to the verifier', field => {
+      const raw = sourceDeclaration();
+      const claim = raw.claims[0];
+      raw.sourceClaimBindings[0].traceEvidenceRefIds = ['data:duration'];
+      if (field === 'references') claim.references = [{artifactId: 'artifact-alias', rowIndex: 0, column: 'dur_ms'}];
+      else if (field === 'artifactRefs') claim.artifactRefs = [{artifactId: 'artifact-alias'}];
+      else if (field === 'relationRefs') claim.relationRefs = ['relation:observed'];
+      else claim.semantics.scope[field] = [{evidenceRefId: 'data:duration', rowIndex: 0, column: 'dur_ms'}];
+      expect(parseConclusionContractDeclaration(raw).issues).toEqual([]);
+    });
+});
+
+
+describe('lossless semantic evidence transport', () => {
+  it('interns only identical whole records and roundtrips every row, status and source', () => {
+    const record = {captureId: 'capture-a', traceId: 'trace-a', unit: 'ms', generation: 1,
+      columns: Array.from({length: 40}, (_, i) => `column_${i}`)};
+    const variants = [record, {...record, traceId: 'trace-b'}, {...record, unit: 'ns'}, {...record, generation: 2}];
+    const snapshot = {schemaVersion: 'prepared_claim_evidence@1', fingerprint: 'unchanged', bindingEligibility: 'eligible',
+      reads: [...Array.from({length: 20}, (_, i) => ({key: `read-${i}`, status: 'resolved', record: variants[i % 4],
+        originalRowIndex: i, row: {value: i, missing: null, flag: false}})), {key: 'missing', status: 'missing', reason: 'not_found'}]};
+    const original = structuredClone(snapshot);
+    const compacted = compactSemanticEvidenceSnapshot(snapshot) as any;
+    expect(compacted.schemaVersion).toBe('semantic_evidence_snapshot@1');
+    expect(compacted.records).toHaveLength(4);
+    expect(compacted.fingerprint).toBe(snapshot.fingerprint);
+    expect(expandSemanticEvidenceSnapshot(compacted)).toEqual(original);
+    expect(snapshot).toEqual(original);
+    expect(Buffer.byteLength(JSON.stringify(compacted))).toBeLessThan(Buffer.byteLength(JSON.stringify(original)));
+  });
+  it('interns complete field origins without merging different producers or losing field properties', () => {
+    const origin = {kind: 'skill_sql', skillId: 'startup', stepId: 'states',
+      definitionFingerprint: 'a'.repeat(64), selectedSqlHash: 'b'.repeat(64)};
+    const variants = [origin, {...origin, definitionFingerprint: 'c'.repeat(64)},
+      {...origin, kind: 'sql'}, {...origin, selectedSqlHash: 'd'.repeat(64)}];
+    const snapshot = {schemaVersion: 'prepared_claim_evidence@1', fingerprint: 'original', reads:
+      variants.map((source, i) => ({key: `read-${i}`, status: 'resolved', record: {captureId: `capture-${i}`,
+        fields: Object.fromEntries(Array.from({length: 8}, (_, field) => [`field-${field}`,
+          {origin: source, unit: field % 2 ? 'ms' : 'ns', role: 'timestamp', clock: 'trace', nullable: false}]))},
+        row: {value: i, absent: null}}))};
+    const original = structuredClone(snapshot);
+    const compacted = compactSemanticEvidenceSnapshot(snapshot) as any;
+    expect(compacted.schemaVersion).toBe('semantic_evidence_snapshot@2');
+    expect(compacted.records).toHaveLength(4);
+    expect(compacted.origins).toEqual(variants);
+    expect(expandSemanticEvidenceSnapshot(compacted)).toEqual(original);
+    expect(snapshot).toEqual(original);
+    expect(Buffer.byteLength(JSON.stringify(compacted))).toBeLessThan(Buffer.byteLength(JSON.stringify(original)));
+  });
+  it('pools repeated complete field and display-column descriptors without merging differences', () => {
+    const origin = {kind: 'skill_sql', skillId: 'startup', definitionFingerprint: 'a'.repeat(64)};
+    const columns = [{name: 'dur', type: 'duration', unit: 'ms', label: '耗时'},
+      {name: 'name', type: 'string', label: '名称'}];
+    const snapshot = {schemaVersion: 'prepared_claim_evidence@1', fingerprint: 'unicode', bindingEligibility: 'eligible',
+      reads: Array.from({length: 12}, (_, index) => ({key: `read-${index}`, status: 'resolved', record: {
+        captureId: `capture-${index}`, display: {title: `表 ${index}`, columns: index === 11
+          ? [columns[0], {...columns[1], label: 'Different'}] : columns},
+        fields: Object.fromEntries([['dur', {origin, unit: index === 10 ? 'ns' : 'ms', nullable: false}],
+          ['name', {origin, nullable: true}], ['__proto__', {origin, nullable: true}]])},
+      originalRowIndex: index, row: {dur: index, name: `行 ${index}`}}))};
+    const compacted = compactSemanticEvidenceSnapshot(snapshot) as any;
+    expect(compacted.schemaVersion).toBe('semantic_evidence_snapshot@2');
+    expect(compacted.fieldDescriptors.length).toBe(3);
+    expect(compacted.displayColumns.length).toBe(3);
+    const expanded = expandSemanticEvidenceSnapshot(compacted) as typeof snapshot;
+    expect(Object.prototype.hasOwnProperty.call(expanded.reads[0].record.fields, '__proto__')).toBe(true);
+    expect(expanded).toEqual(snapshot);
+  });
+  it('rejects invalid transport indexes instead of partially decoding them', () => {
+    const base = {schemaVersion: 'semantic_evidence_snapshot@2', sourceSchemaVersion: 'prepared_claim_evidence@1',
+      origins: [], fieldDescriptors: [{}], displayColumns: [{}], records: [{fields: {dur: 0},
+        display: {columnIndexes: [0]}}], reads: [{recordIndex: 0}]};
+    for (const changed of [
+      {...base, reads: [{recordIndex: 1}]},
+      {...base, records: [{fields: {dur: 2}, display: {columnIndexes: [0]}}]},
+      {...base, records: [{fields: {dur: 0}, display: {columnIndexes: [-1]}}]},
+    ]) expect(expandSemanticEvidenceSnapshot(changed)).toBeUndefined();
+  });
+  it('retains unfamiliar, colliding and non-beneficial shapes unchanged', () => {
+    for (const value of [undefined, {reads: []}, {schemaVersion: 'prepared_claim_evidence@1', reads: []},
+      ...['records', 'origins', 'sourceSchemaVersion', 'fieldDescriptors', 'displayColumns'].map(key => ({schemaVersion: 'prepared_claim_evidence@1',
+        [key]: 'existing', reads: [{record: {id: 2}}]})),
+      {schemaVersion: 'prepared_claim_evidence@1', reads: [{record: {fields: {dur: {originIndex: 0, origin: {kind: 'sql'}}}}}]},
+      {schemaVersion: 'prepared_claim_evidence@1', reads: [{record: {display: {columnIndexes: [0]}}}]},
+      {schemaVersion: 'prepared_claim_evidence@1', reads: [{record: {fields: {dur: 0}}}]},
+      {schemaVersion: 'prepared_claim_evidence@1', reads: [{recordIndex: 1, record: {id: 2}}]}]) {
+      expect(compactSemanticEvidenceSnapshot(value)).toBe(value);
+    }
+  });
+});
+
+describe('lossless final semantic source transport', () => {
+  const sourceUse = {schemaVersion: 'source_use_decision@1', codeAwareMode: 'provider_send', selectedCodebaseIds: ['codebase'],
+    status: 'corroborated', attemptedTools: ['read_codebase_file'], queriedCodebaseIds: ['codebase'],
+    usedCodebaseIds: ['codebase'], coverageComplete: true, references: [
+      {id: 'source-ref-1', referenceId: 'source-1', codebaseId: 'codebase', filePath: 'src/App.kt',
+        lineRange: {start: 1, end: 200}, lookupKind: 'body'},
+      {id: 'source-ref-2', referenceId: 'source-2', codebaseId: 'codebase', filePath: 'src/App.kt',
+        lineRange: {start: 201, end: 400}, lookupKind: 'body'},
+    ]};
+  const snapshot = () => ({inputCoverage: 'complete', query: 'explain', body: 'body', sourceUse,
+    selectionScope: {present: true, kind: 'track_event', context: {kind: 'track_event', eventId: 7, ts: 42},
+      sideResolution: {status: 'unknown'}},
+    conclusionContract: {schemaVersion: 'conclusion_contract_v1', sourceUseDecision: sourceUse,
+      sourceReferences: sourceUse.references, sourceClaimBindings: [{claimId: 'source-claim',
+        mechanismStatus: 'compatible', sourceReferenceIds: ['source-ref-1'], traceEvidenceRefIds: []}]}});
+
+  it('aliases only exact duplicate source ledgers and preserves bindings through roundtrip', () => {
+    const original = snapshot();
+    const compacted = compactSemanticSourceSnapshot(original) as any;
+    expect(compacted.semanticSourceAlias).toEqual({schemaVersion: 'final_semantic_source_alias@1'});
+    expect(compacted.conclusionContract).not.toHaveProperty('sourceUseDecision');
+    expect(compacted.conclusionContract).not.toHaveProperty('sourceReferences');
+    expect(compacted.conclusionContract.sourceClaimBindings).toEqual(original.conclusionContract.sourceClaimBindings);
+    expect(expandSemanticSourceSnapshot(compacted)).toEqual(original);
+    expect(Buffer.byteLength(JSON.stringify(compacted))).toBeLessThan(Buffer.byteLength(JSON.stringify(original)));
+  });
+
+  it('keeps mismatched, reordered and colliding source snapshots unchanged', () => {
+    const mismatch = snapshot(); mismatch.conclusionContract.sourceUseDecision = {...sourceUse, status: 'located'} as any;
+    const reordered = snapshot(); reordered.conclusionContract.sourceReferences = [...sourceUse.references].reverse();
+    const collision = {...snapshot(), semanticSourceAlias: {schemaVersion: 'other'}};
+    for (const value of [mismatch, reordered, collision]) expect(compactSemanticSourceSnapshot(value)).toBe(value);
+  });
+
+  it('rejects unknown markers, extra marker keys, double definitions and invalid source ledgers', () => {
+    const compacted = compactSemanticSourceSnapshot(snapshot()) as any;
+    for (const value of [
+      {...compacted, semanticSourceAlias: {schemaVersion: 'unknown'}},
+      {...compacted, semanticSourceAlias: {...compacted.semanticSourceAlias, extra: true}},
+      {...compacted, conclusionContract: {...compacted.conclusionContract, sourceReferences: []}},
+      {...compacted, sourceUse: {...compacted.sourceUse, references: 'invalid'}},
+    ]) expect(expandSemanticSourceSnapshot(value)).toBeUndefined();
   });
 });

@@ -2,7 +2,7 @@
 
 [English](configuration.en.md) | [中文](configuration.md)
 
-For local source runs, SmartPerfetto can use Claude Code's local authentication and configuration directly. If `claude` already works in the same terminal, you do not need to create `.env`. Use env files when you need explicit API keys, compatible proxies, or Docker runtime credentials.
+Claude Agent SDK requires explicit provider credentials through the Provider Manager attached to the running instance or through env in every run mode. Claude Code login and a Base URL alone do not configure the SDK.
 
 Windows portable users should complete download, extraction, and startup through the
 [Windows guide](windows.en.md), then use the Provider fields on this page. Do not copy Unix
@@ -10,12 +10,11 @@ source commands into the ordinary Windows portable path.
 
 ## First Answer: Which Runtime Do I Configure?
 
-Claude Code, OpenAI Agents SDK, Pi Agent Core, OpenCode, and Qoder Agent SDK are alternative runtime paths, not a checklist of required setup steps. Pick one source for your first setup:
+Claude Agent SDK, OpenAI Agents SDK, Pi Agent Core, OpenCode, and Qoder Agent SDK are alternative runtime paths, not a checklist of required setup steps. Pick one source for your first setup:
 
 | What you have | Recommended path | What to configure |
 |---|---|---|
 | You do not want to edit env files, or you use Docker/portable packages | UI Provider Manager | Add the provider key on the `Providers` tab, test it, then activate it |
-| Local source run where `claude` already works in the same terminal | Local Claude Code config | No `.env`, no `OPENAI_*` variables |
 | Anthropic API key or a Claude/Anthropic-compatible provider | Claude Agent SDK | `ANTHROPIC_*` + `CLAUDE_*` |
 | OpenAI API key, Ollama, or an OpenAI-compatible provider | OpenAI Agents SDK | `SMARTPERFETTO_AGENT_RUNTIME=openai-agents-sdk` + `OPENAI_*` |
 | Pi Agent Core model configuration | Pi Agent Core | Custom Provider Manager profile or `SMARTPERFETTO_AGENT_RUNTIME=pi-agent-core` + `SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON` |
@@ -31,7 +30,7 @@ sources; Evolution operates the controlled Self-Evolution workflow on the
 currently saved backend. The advanced backend auth token on the `Connection`
 tab is optional; fill it only when the backend was started with
 `SMARTPERFETTO_API_KEY`. It is not a model-provider key field. Model-provider
-credentials can come from Claude Code local config, from the backend/Docker env
+credentials can come from the backend/Docker env
 files below, or from Provider Manager profiles created in the frontend.
 
 For beginners, the UI path is the least ambiguous:
@@ -41,7 +40,9 @@ For beginners, the UI path is the least ambiguous:
 3. Choose a provider and paste the **API Key**. The name, official connection URLs, and models are prefilled. Save directly, or choose a model suggestion or enter a model ID.
 4. Click **Create Provider**. This only saves the profile.
 5. Back in the provider list, click the plug icon to test the connection, then click the provider row or choose it in the provider switcher to activate it.
-6. Verify with authenticated `/api/runtime-health`. `aiEngine.credentialSource=provider-manager` means the UI provider is active; `env-or-default` means SmartPerfetto is using env or local Claude Code fallback. Public `/health` is liveness-only.
+6. Verify with authenticated `/api/runtime-health`. `aiEngine.credentialSource=provider-manager` means the UI provider is active; `env-or-default` means SmartPerfetto is using env/default configuration; inspect `aiEngine.configured` to determine whether credentials are configured. Public `/health` is liveness-only.
+
+If a key is missing, expired, or rejected, first open **AI Assistant Settings → Providers** on the current backend. Update the provider-specific credentials, URL, and model, then save, test, and activate it; Bedrock/Vertex use their respective cloud authentication fields. Configuration files for the run modes below are the fallback. Restart the backend, container, or CLI after file changes, and start a new analysis session after switching configuration.
 
 An active Provider Manager profile overrides `.env`. To make `.env` changes take effect again, choose `System Default` in the provider switcher or deactivate the active provider.
 
@@ -152,13 +153,17 @@ review reuses only the source run's pinned provider/runtime and falls back
 explicitly when that pin is absent or changed. See
 [Agent-Assisted GitHub Feedback](agent-assisted-feedback.en.md).
 
-npm CLI does not use the Web UI `Connection` settings. For first-time CLI setup, run:
+npm CLI does not use the Web UI `Connection` settings. Its Provider store defaults
+to `~/.smartperfetto/runtime/data/providers.json`, while a source Web backend
+defaults to `backend/data/providers.json`. A Web Provider profile affects the CLI
+only when both processes explicitly use the same `SMARTPERFETTO_BACKEND_DATA_DIR`.
+For first-time CLI setup, run:
 
 ```bash
 smp config init
 ```
 
-It creates `~/.smartperfetto/env`. When `--env-file` is not passed, the CLI loads package/source `backend/.env` first, then `~/.smartperfetto/env`, with the user file taking priority. If you pass `--env-file /path/to/env`, the CLI reads only that file. CLI configuration follows the same rule: choose one runtime block, not every block.
+It creates `~/.smartperfetto/env`. When `--env-file` is not passed, the CLI loads package/source `backend/.env` first, then `~/.smartperfetto/env`, with the user file taking priority. If you pass `--env-file /path/to/env`, the CLI reads only that file. CLI configuration follows the same rule: choose one runtime block, not every block. Use `smp provider list` and `smp provider test <providerId>` only to inspect a profile already present in the current CLI store; the CLI does not currently add, edit, or activate Provider profiles.
 
 ## Codebase Selection And Provider Authorization
 
@@ -184,13 +189,13 @@ and evidence semantics.
 
 SmartPerfetto has these runtime paths:
 
-- `claude-agent-sdk`: the default runtime. Use it for Anthropic, Claude Code local auth, Bedrock, Vertex, and Anthropic/Claude Code-compatible providers.
+- `claude-agent-sdk`: the default runtime. Use it for Anthropic, Bedrock, Vertex, and Anthropic/Claude Code-compatible providers.
 - `openai-agents-sdk`: the OpenAI runtime. Use it for OpenAI Responses API, Ollama, and OpenAI-compatible gateways that support streaming function/tool calling.
 - `pi-agent-core`: optional public runtime. With a real model config it reuses SmartPerfetto's shared prompt, SQL/Skill, planning/hypothesis, and report/claim-verification pipeline. It dynamically loads `@earendil-works/pi-agent-core` and does not enable `.pi` project discovery, package extensions, shell tools, or file tools.
 - `opencode`: optional public runtime. It runs a hardened isolated OpenCode server, feeds it explicit OpenAI-compatible or OpenCode model configuration, and exposes only request-scoped SmartPerfetto MCP tools. It does not read the user's OpenCode CLI login, project config, extensions, or built-in file/shell/web/edit tools.
 - `qoder-agent-sdk`: optional public runtime. It exposes only request-scoped SmartPerfetto MCP tools, supports a local `qodercli` login or PAT, and keeps private-knowledge runs out of provider session resume and durable opaque state. Its SDK/CLI terms are separate, so the SDK is an opt-in optional peer and is not installed by default.
 
-These runtimes are mutually selected backend orchestration paths. OpenAI runtime setup does not require installing or logging in to Claude Code; local Claude Code setup does not require an OpenAI key. Pi Agent Core, OpenCode, and Qoder setup are separate from both. Real-model analysis quality should be verified with startup/scrolling E2E; fake-stream is smoke/test-only and does not represent parity.
+These runtimes are mutually selected backend orchestration paths. OpenAI runtime setup does not require installing or logging in to Claude Code; Claude API setup does not require an OpenAI key. Pi Agent Core, OpenCode, and Qoder setup are separate from both. Real-model analysis quality should be verified with startup/scrolling E2E; fake-stream is smoke/test-only and does not represent parity.
 
 Runtime selection priority is: request/session `providerId`, active Provider Manager profile, `SMARTPERFETTO_AGENT_RUNTIME`, then the default `claude-agent-sdk`. Do not enable both `ANTHROPIC_*` and `OPENAI_*` for first setup; if an advanced deployment does contain both without `SMARTPERFETTO_AGENT_RUNTIME=openai-agents-sdk`, analysis still uses Claude Agent SDK. An active Provider Manager profile overrides `.env` fallback; confirm the current source with `aiEngine.credentialSource` and `aiEngine.providerOverridesEnv` from authenticated `/api/runtime-health`.
 
@@ -433,7 +438,7 @@ Read these `/api/runtime-health` fields before debugging provider complaints:
 
 | Field | What to check |
 |---|---|
-| `aiEngine.credentialSource` | `provider-manager` means UI profile is active; `env-or-default` means `.env` or Claude Code fallback |
+| `aiEngine.credentialSource` | `provider-manager` means UI profile is active; `env-or-default` means env/default configuration, not proof of configured credentials |
 | `aiEngine.providerOverridesEnv` | `true` means `.env` changes will not affect analysis until the active provider is disabled |
 | `aiEngine.runtime` | Must be `claude-agent-sdk`, `openai-agents-sdk`, `pi-agent-core`, `opencode`, or `qoder-agent-sdk`, not a provider name |
 | `aiEngine.providerMode` | Shows the effective connection family, such as `anthropic_compatible_proxy` or `openai_chat_completions_compatible` |
@@ -452,7 +457,7 @@ Read these `/api/runtime-health` fields before debugging provider complaints:
 | `pi-agent-core` | Uses Pi Agent Core custom model JSON through the shared SmartPerfetto analysis pipeline |
 | `opencode` | Uses OpenCode custom model JSON or OpenAI-compatible fields through the shared SmartPerfetto analysis pipeline |
 | `qoder` | Uses the opt-in Qoder Agent SDK through a local `qodercli` login, PAT, or explicit CLI path |
-| `unconfigured` | No explicit env credentials; if local `claude` works, the SDK can still use Claude Code local auth/config during analysis |
+| `unconfigured` | No explicit provider credentials. Configure an API key/auth token or a supported cloud provider before analysis |
 
 ### Temporarily Disable Model-Backed Analysis
 
@@ -483,6 +488,7 @@ Slow or local models usually need longer per-turn timeouts:
 ```bash
 AGENT_FULL_REQUEST_TIMEOUT_MS=1200000
 AGENT_STREAM_IDLE_TIMEOUT_MS=300000
+AGENT_MAX_RUN_TIMEOUT_MS=3600000
 AGENT_MAX_HISTORY_BYTES=4194304
 
 CLAUDE_FULL_PER_TURN_MS=60000
@@ -495,6 +501,7 @@ CLAUDE_CLASSIFIER_TIMEOUT_MS=30000
 OPENAI_FULL_PER_TURN_MS=60000
 OPENAI_FULL_REQUEST_TIMEOUT_MS=1200000
 OPENAI_STREAM_IDLE_TIMEOUT_MS=300000
+OPENAI_MAX_RUN_TIMEOUT_MS=3600000
 OPENAI_MAX_HISTORY_BYTES=4194304
 OPENAI_QUICK_PER_TURN_MS=40000
 OPENAI_CLASSIFIER_TIMEOUT_MS=30000
@@ -507,6 +514,17 @@ runtime-specific values can override them on direct environment-provider paths.
 `*_STREAM_IDLE_TIMEOUT_MS` limits how long a provider may emit no stream events
 (5 minutes by default); on expiry the backend cancels the SDK and active tool
 work, then completes the normal terminal event path with a `partial` result.
+In the OpenAI runtime, `maxTurns × per-turn timeout` (capped by the full-mode limit above)
+is only the initial deadline: each returned tool result moves it forward by the
+slowest of the recent rounds, and a deadline that arrives while the provider is
+still emitting text, reasoning or tool arguments is extended one per-turn step at a
+time. `AGENT_MAX_RUN_TIMEOUT_MS` / `OPENAI_MAX_RUN_TIMEOUT_MS` (60 minutes by default)
+bound the extended run and hold a fixed reserve for one no-tool delivery call; a
+value below the initial budget is treated as the initial budget, so it limits
+extensions and never shortens the original budget. When investigation still times
+out after data has returned, that reserved call gives a limited conclusion from the
+returned data, marked `partial` / `timeout`; with no returned data, or if the delivery
+call also times out, the run ends without a deliverable conclusion.
 `AGENT_MAX_HISTORY_BYTES` / `OPENAI_MAX_HISTORY_BYTES` default to 4 MiB and only bound provider history
 retained across continuations or sessions. It does not truncate Artifacts,
 DataEnvelopes, reports, or evidence provenance.

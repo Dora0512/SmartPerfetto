@@ -12,6 +12,7 @@ import {
   createQuickConfig,
   explainClaudeRuntimeError,
   getClaudeRuntimeDiagnostics,
+  hasClaudeCredentials,
   getClaudeSdkBinaryDiagnostics,
   getSdkBinaryOption,
   isClaudeQuotaError,
@@ -287,6 +288,29 @@ describe('createQuickConfig', () => {
   });
 });
 
+describe('Claude credential requirements', () => {
+  it.each([undefined, '', '   ', 'your_anthropic_api_key_here'])(
+    'does not treat a proxy URL or Claude login markers as credentials (%s)', (key) => {
+      expect(hasClaudeCredentials({
+        ANTHROPIC_BASE_URL: 'https://proxy.example/anthropic',
+        ANTHROPIC_API_KEY: key,
+        ANTHROPIC_AUTH_TOKEN: key,
+        CLAUDECODE: '1',
+        CLAUDE_CODE_OAUTH_TOKEN: 'local-login-token',
+      })).toBe(false);
+    },
+  );
+
+  it.each([
+    {ANTHROPIC_API_KEY: 'sk-test'},
+    {ANTHROPIC_AUTH_TOKEN: 'token-test', ANTHROPIC_BASE_URL: 'https://proxy.example'},
+    {CLAUDE_CODE_USE_BEDROCK: '1', AWS_PROFILE: 'test-profile'},
+    {CLAUDE_CODE_USE_VERTEX: '1', ANTHROPIC_VERTEX_PROJECT_ID: 'test-project'},
+  ])('preserves explicit API and cloud configuration: %j', (env) => {
+    expect(hasClaudeCredentials(env)).toBe(true);
+  });
+});
+
 describe('getClaudeRuntimeDiagnostics', () => {
   it('reports Anthropic-compatible proxy mode', () => {
     process.env.ANTHROPIC_BASE_URL = 'http://localhost:3000';
@@ -392,8 +416,32 @@ describe('explainClaudeRuntimeError', () => {
     const message = explainClaudeRuntimeError("You're out of extra usage");
 
     expect(message).toContain("You're out of extra usage");
-    expect(message).toContain('ANTHROPIC_BASE_URL');
-    expect(message).toContain('CC Switch');
+    expect(message).toContain('Providers');
+    expect(message).toContain('backend/.env');
+    expect(message.indexOf('Providers')).toBeLessThan(message.indexOf('backend/.env'));
+  });
+
+  it.each(['zh-CN', 'en'] as const)('guides invalid keys to Web settings before run-mode files (%s)', (language) => {
+    for (const error of [
+      'Invalid API key',
+      'authentication_error',
+      'HTTP 401 Unauthorized',
+      'HTTP 403 Forbidden',
+      'request failed with status=401',
+      'request failed with statusCode: 403',
+      'provider error code=401',
+    ]) {
+      const message = explainClaudeRuntimeError(error, language);
+      expect(message).toContain(error);
+      expect(message).toContain('Providers');
+      expect(message.indexOf('Providers')).toBeLessThan(message.indexOf('backend/.env'));
+      expect(message).toContain('~/.smartperfetto/env');
+      expect(message).toContain('SMARTPERFETTO_ENV_FILE');
+      expect(message).toContain('--env-file');
+    }
+    for (const ordinaryText of ['trace 401 failed', 'trace 403 failed', 'trace 14030 failed']) {
+      expect(explainClaudeRuntimeError(ordinaryText, language)).toBe(ordinaryText);
+    }
   });
 
   it('explains when active Provider Manager credentials override env fallback', () => {

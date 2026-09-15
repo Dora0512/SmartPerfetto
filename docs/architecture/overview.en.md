@@ -302,7 +302,7 @@ Source use adds another orthogonal boundary. `SourceUseDecisionV1` records selec
 
 | Runtime | Providers | Key boundary |
 |---|---|---|
-| `claude-agent-sdk` | Anthropic, Bedrock, Vertex, Claude/Anthropic-compatible providers, local Claude Code fallback | Local Claude login only applies to source runs; Docker, portable, and npm CLI need explicit provider/env configuration |
+| `claude-agent-sdk` | Anthropic, Bedrock, Vertex, Claude/Anthropic-compatible providers | All run modes require explicit provider/env credentials; Claude Code login does not establish SDK readiness |
 | `openai-agents-sdk` | OpenAI, Ollama, OpenAI-compatible providers | Credentials and Responses/chat-completions protocol are validated by OpenAI runtime rules |
 | `pi-agent-core` | Custom providers | Requires explicit Pi model JSON or equivalent env; does not read `.pi` project config, package extensions, shell tools, or file tools |
 | `opencode` | Custom providers | Requires explicit OpenCode/OpenAI-compatible model config; uses an isolated OpenCode server and request-scoped MCP tools, not personal OpenCode login/project state |

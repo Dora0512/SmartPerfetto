@@ -7,7 +7,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it, jest } from '@jest/globals';
 import { computePaths, ensureLayout, ensureSessionLayout, sessionPaths } from '../../io/paths';
-import { commitTurnOutputs } from '../turnPersistence';
+import { commitSourceSupplementOutput, commitTurnOutputs } from '../turnPersistence';
+import {loadCliAnalysisEvidence} from '../analysisResultPresentation';
 import type { Renderer } from '../../repl/renderer';
 import type { RunTurnOutput } from '../cliAnalyzeService';
 import {clearCodeAwareOutputGuards, registerCodeAwareCanary} from '../../../services/security/codeAwareOutputRegistry';
@@ -26,6 +27,93 @@ function rendererStub(): Renderer {
 }
 
 describe('commitTurnOutputs', () => {
+  it('rebinds per-turn and latest evidence after appending a source supplement', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-cli-source-supplement-'));
+    const paths = computePaths(home);
+    ensureLayout(paths);
+    const sessionId = 'session-source-supplement';
+    const sp = sessionPaths(paths, sessionId);
+    ensureSessionLayout(sp);
+    const renderer = rendererStub();
+    const result: RunTurnOutput = {
+      sessionId,
+      traceId: 'trace-1',
+      codeAwareMode: 'provider_send',
+      result: {
+        sessionId, success: true, findings: [], hypotheses: [], conclusion: 'Primary conclusion.',
+        confidence: 0.8, rounds: 1, totalDurationMs: 1,
+      },
+    };
+    const initialMarkdown = '# Turn 1\n\nPrimary conclusion.\n';
+    try {
+      const analysisEvidence = commitTurnOutputs({
+        paths, sp, renderer, sessionId, turn: 1, query: 'query', result,
+        config: {sessionId, tracePath: '/tmp/trace', traceId: 'trace-1', createdAt: 1, lastTurnAt: 2, turnCount: 1},
+        turnMarkdown: initialMarkdown,
+        indexEntry: {sessionId, createdAt: 1, lastTurnAt: 2, tracePath: '/tmp/trace', traceFilename: 'trace',
+          firstQuery: 'query', turnCount: 1, status: 'completed'},
+      });
+      commitSourceSupplementOutput({
+        sp, renderer, sessionId, turn: 1, analysisEvidence,
+        supplement: {message: 'Bounded source follow-up.', metrics: {searchCalls: 1, readCalls: 2, durationMs: 3}},
+      });
+
+      const turnMarkdown = fs.readFileSync(path.join(sp.turnsDir, '001.md'), 'utf8');
+      expect(turnMarkdown).toContain('Bounded source follow-up.');
+      expect(loadCliAnalysisEvidence({sp, sessionId, turn: 1, conclusion: 'Primary conclusion.', turnMarkdown}))
+        .toMatchObject({status: 'available'});
+      expect(loadCliAnalysisEvidence({sp, sessionId, turn: 1, conclusion: 'Primary conclusion.', turnMarkdown, latest: true}))
+        .toMatchObject({status: 'available'});
+      expect(JSON.parse(fs.readFileSync(path.join(sp.dir, 'analysis-evidence.json'), 'utf8')))
+        .toEqual(JSON.parse(fs.readFileSync(path.join(sp.turnsDir, '001.analysis-evidence.json'), 'utf8')));
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+
+  it('keeps the conclusion durable when evidence projection is unavailable', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-cli-evidence-unavailable-'));
+    const paths = computePaths(home);
+    ensureLayout(paths);
+    const sessionId = 'session-evidence-unavailable';
+    const sp = sessionPaths(paths, sessionId);
+    ensureSessionLayout(sp);
+    const renderer = rendererStub();
+    const result: RunTurnOutput = {
+      sessionId,
+      traceId: 'trace-1',
+      codeAwareMode: 'off',
+      result: {
+        sessionId, success: true, findings: [], hypotheses: [], conclusion: 'body remains',
+        confidence: 0.5, rounds: 1, totalDurationMs: 1,
+        conclusionContract: {
+          schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [], evidenceChain: [],
+          claims: [{text: 'claim', references: [{rowSelector: {invalid: undefined as never}}]}],
+          uncertainties: [], nextSteps: [],
+        },
+      },
+    };
+    try {
+      commitTurnOutputs({
+        paths, sp, renderer, sessionId, turn: 1, query: 'query', result,
+        config: {sessionId, tracePath: '/tmp/trace', traceId: 'trace-1', createdAt: 1, lastTurnAt: 2, turnCount: 1},
+        turnMarkdown: '# Turn 1\n\nbody remains\n',
+        indexEntry: {sessionId, createdAt: 1, lastTurnAt: 2, tracePath: '/tmp/trace', traceFilename: 'trace',
+          firstQuery: 'query', turnCount: 1, status: 'completed'},
+      });
+      expect(fs.readFileSync(sp.conclusion, 'utf8')).toBe('body remains');
+      expect(JSON.parse(fs.readFileSync(path.join(sp.dir, 'analysis-evidence.json'), 'utf8'))).toMatchObject({
+        schemaVersion: 'cli_analysis_evidence@1', evidence: null,
+        unavailableReason: 'analysis_evidence_projection_invalid',
+      });
+      expect(renderer.printConclusion).toHaveBeenCalledWith('body remains', expect.objectContaining({
+        analysisEvidence: expect.objectContaining({evidence: null}),
+      }));
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+
   it('writes analysis receipt sidecars with the CLI turn path', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-cli-receipt-'));
     const paths = computePaths(home);
@@ -209,7 +297,14 @@ describe('commitTurnOutputs', () => {
           conclusions: [{rank: 1, statement: 'Foo.run is compatible with the trace.'}],
           clusters: [],
           evidenceChain: [],
-          claims: [{id: 'claim-1', text: 'Foo.run is compatible with the trace.', references: []}],
+          claims: [{
+            id: 'claim-1',
+            text: 'Foo.run is compatible with the trace.',
+            references: [{evidenceRefId: 'trace-evidence-1', rowIndex: 0, column: 'value', value: null}],
+            rawSemantics: 'RAW_SEMANTICS_CANARY',
+            rawReferences: 'RAW_REFERENCES_CANARY',
+            semanticsParseIssues: [{code: 'invalid_semantics', path: 'claims[0].semantics'}],
+          }],
           sourceUseDecision,
           sourceReferences: sourceUseDecision.references,
           sourceClaimBindings: [{
@@ -225,11 +320,13 @@ describe('commitTurnOutputs', () => {
       },
     };
 
+    const renderer = rendererStub();
+    const originalResult = structuredClone(result.result);
     try {
       commitTurnOutputs({
         paths,
         sp,
-        renderer: rendererStub(),
+        renderer,
         sessionId,
         turn: 1,
         query: 'analyze Foo.run',
@@ -281,12 +378,30 @@ describe('commitTurnOutputs', () => {
         traceEvidenceRefIds: ['trace-evidence-1'],
       }]);
       const markdown = fs.readFileSync(path.join(sp.turnsDir, '001.md'), 'utf8');
-      expect(markdown).toContain('source_use_decision@1');
-      expect(markdown).toContain('provider_send');
-      expect(markdown).toContain('corroborated');
-      expect(markdown).toContain('compatible');
-      expect(markdown).toContain('claim-1');
-      const durableText = [storedDecision, storedBindings, markdown]
+      expect(markdown).toBe('# Turn 1\n\n## Conclusion\n\nFoo.run is compatible with the trace.\n');
+      const evidence = JSON.parse(fs.readFileSync(
+        path.join(sp.turnsDir, '001.analysis-evidence.json'),
+        'utf8',
+      ));
+      expect(evidence).toMatchObject({
+        schemaVersion: 'cli_analysis_evidence@1',
+        binding: {sessionId, turn: 1},
+        evidence: {
+          claims: [{id: 'claim-1', references: [{rowIndex: 0, value: null}]}],
+          sourceUseDecision: {status: 'corroborated'},
+          sourceReferences: [{id: reference.id}],
+          sourceClaimBindings: [{claimId: 'claim-1', mechanismStatus: 'compatible'}],
+        },
+      });
+      expect(JSON.stringify(evidence)).not.toContain('RAW_SEMANTICS_CANARY');
+      expect(JSON.stringify(evidence)).not.toContain('RAW_REFERENCES_CANARY');
+      expect(JSON.parse(fs.readFileSync(path.join(sp.dir, 'analysis-evidence.json'), 'utf8'))).toEqual(evidence);
+      expect(renderer.printConclusion).toHaveBeenCalledWith(
+        result.result.conclusion,
+        expect.objectContaining({analysisEvidence: evidence}),
+      );
+      expect(result.result).toEqual(originalResult);
+      const durableText = [storedDecision, storedBindings, evidence, markdown]
         .map(value => JSON.stringify(value))
         .join('\n');
       expect(durableText).not.toContain('/Users/chris');

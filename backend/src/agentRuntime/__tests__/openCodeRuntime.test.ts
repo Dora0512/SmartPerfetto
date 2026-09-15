@@ -24,6 +24,7 @@ import {
   getOpenCodePlanCompletionStatus,
   getOpenCodeEngineCapabilities,
   getOpenCodeRuntimeDiagnostics,
+  validateOpenCodeModelConfiguration,
   __testing as openCodeTesting,
   projectOpenCodeEventToStreamingUpdate,
   runOpenCodePrompt,
@@ -64,6 +65,8 @@ import {
 import {createRuntimePerformanceRecorder} from '../runtimePerformance';
 import type {RunManifestAttributionSink} from '../../types/selfEvolution';
 import * as evaluationRuntimeHooks from '../../services/selfEvolution/evaluationRuntimeHooks';
+import {renderConclusionContractSidecar, type ConclusionContract} from '../../agent/core/conclusionContract';
+import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
 
 const mockOpenCodeIntentTransport = jest.fn<typeof runOpenCodeIntentTransport>();
 jest.mock('../engines/opencode/openCodeIntentTransport', () => ({
@@ -565,8 +568,8 @@ describe('OpenCode native turn intent and delivery', () => {
     }});
     const sessionId = `opencode-advisory-${nativeError}`;
     const result = await harness.runtime.analyze('Read the current value', sessionId, 'trace-opencode', {runId: sessionId});
-    expect(harness.prompts).toHaveLength(2); // One intent request and one answer request.
-    expect(result.conclusion).toBe(body);
+    expect(harness.prompts).toHaveLength(nativeError ? 2 : 3);
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
     expect(result.completion).toMatchObject({status: nativeError ? 'failed' : 'completed',
       conclusionFingerprint: analysisDeliveryFingerprint(body)});
     expect(result.success).toBe(!nativeError);
@@ -582,6 +585,62 @@ describe('OpenCode native turn intent and delivery', () => {
     expect(snapshot.claudeHypotheses).toEqual([expect.objectContaining({id: 'open-hypothesis', status: 'formed'})]);
   }));
 
+  it('uses the reserved no-tools delivery turn for an unchanged full declaration candidate', async () => withBackendDataDir(async () => {
+    const body = `${'启动正文保持完整。'.repeat(850)}\n${'Native body remains unchanged. '.repeat(170)}`.trimEnd();
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(8 * 1024);
+    const sidecar = renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+      conclusions: [{rank: 1, statement: 'The authored body is preserved.'}], clusters: [], evidenceChain: [],
+      claims: [], uncertainties: [], nextSteps: []} as ConclusionContract);
+    const repaired = `${body}\n${sidecar}`;
+    const harness = createNativeIntentHarness({answer: body, closeoutAnswer: repaired});
+    const result = await harness.runtime.analyze('same scope', 'opencode-missing-declaration', 'trace-opencode', {
+      analysisMode: 'full', runId: 'opencode-missing-declaration',
+    });
+    expect(harness.prompts).toHaveLength(3);
+    expect(harness.configs[2].agent.smartperfetto.maxSteps).toBe(1);
+    expect(Object.values(harness.prompts[2].body.tools).every(value => value === false)).toBe(true);
+    expect(harness.prompts[2].body.parts[0].text).toContain('missing_declaration');
+    expect(inspectCandidateProtocol(repaired).canonicalBody.trim()).toBe(body);
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed'});
+    const context = finalizationContext.takeFinalizationContext(result)!;
+    try { expect(context.getNativeDeclaration(result, new AbortController().signal)?.raw).toBe(repaired); }
+    finally { context.dispose(); }
+  }));
+
+  it('does not dispatch declaration completion when the original body cannot fit the OpenCode output cap', async () => withBackendDataDir(async () => {
+    const body = 'x'.repeat(64 * 1024);
+    const harness = createNativeIntentHarness({answer: body});
+    const result = await harness.runtime.analyze('same scope', 'opencode-declaration-output-cap', 'trace-opencode', {
+      analysisMode: 'full',
+    });
+    expect(harness.prompts).toHaveLength(2);
+    expect(harness.configs).toHaveLength(2);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed'});
+  }));
+
+  it('retains the original OpenCode attempt when a dispatched declaration completion changes the body', async () => withBackendDataDir(async () => {
+    const body = 'Original bounded answer.';
+    const changed = `Changed bounded answer.\n${renderConclusionContractSidecar({
+      schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [],
+      evidenceChain: [], claims: [], uncertainties: [], nextSteps: [],
+    })}`;
+    const harness = createNativeIntentHarness({answer: body, closeoutAnswer: changed});
+    const updates: unknown[] = [];
+    harness.runtime.on('update', update => updates.push(update));
+    const result = await harness.runtime.analyze('same scope', 'opencode-declaration-rejected', 'trace-opencode', {
+      analysisMode: 'full', runId: 'opencode-declaration-rejected',
+    });
+    expect(harness.prompts).toHaveLength(3);
+    expect(harness.configs).toHaveLength(3);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed', runId: 'opencode-declaration-rejected',
+      conclusionFingerprint: analysisDeliveryFingerprint(body)});
+    expect(JSON.stringify(updates)).not.toContain('Changed bounded answer');
+    expect(harness.serverCloses.every(close => close.mock.calls.length === 1)).toBe(true);
+  }));
+
   it('attaches a single final context to the exact projected object and dispatches review on the pinned main model', async () => withBackendDataDir(async () => {
     const attach = jest.spyOn(finalizationContext, 'attachFinalizationContext');
     const readView = jest.spyOn(ArtifactStore.prototype, 'createEvidenceReadView');
@@ -595,7 +654,7 @@ describe('OpenCode native turn intent and delivery', () => {
       }});
       const options = {runId: 'final-run', referenceTraceId: 'trace-reference', codeAwareMode: 'off' as const,
         tenantId: 'tenant-opencode', workspaceId: 'workspace-opencode', userId: 'user-opencode',
-        analysisContextFingerprint: ''};
+        analysisContextFingerprint: '', selectionContext: {kind: 'track_event' as const, eventId: 7, ts: 42}};
       const analysisContextFingerprint = buildAnalysisContextAuthorizationFingerprint(options, resolveKnowledgeScope(options));
       options.analysisContextFingerprint = analysisContextFingerprint;
       const result = await harness.runtime.analyze('same scope', 'final-context', 'trace-opencode', options);
@@ -610,6 +669,8 @@ describe('OpenCode native turn intent and delivery', () => {
       const providerQuery = context!.getProviderQuery(new AbortController().signal);
       expect(providerQuery).toEqual({text: 'same scope', analysisContextFingerprint});
       expect(Object.isFrozen(providerQuery)).toBe(true);
+      expect(context!.getSelection(new AbortController().signal)).toEqual({present: true, kind: 'track_event',
+        context: options.selectionContext, sideResolution: {status: 'unknown'}});
       expect(JSON.stringify(result)).not.toContain('"providerQuery"');
       expect(finalizationContext.takeFinalizationContext(result)).toBeUndefined();
       expect(context?.traceIdentity).toEqual({currentTraceId: 'trace-opencode', referenceTraceId: 'trace-reference'});
@@ -782,8 +843,8 @@ describe('OpenCode native turn intent and delivery', () => {
     expect(result.completion).toMatchObject({status: 'completed', runId: 'current-run',
       sdkFinishReason: 'stop', conclusionFingerprint: analysisDeliveryFingerprint(answer)});
     expect(result.outputOrigin).toBe('sdk_final');
-    expect(harness.configs.map(config => config.agent.smartperfetto.maxSteps)).toEqual([1, 8]);
-    expect(harness.prompts).toHaveLength(2);
+    expect(harness.configs.map(config => config.agent.smartperfetto.maxSteps)).toEqual([1, 8, 1]);
+    expect(harness.prompts).toHaveLength(3);
     expect(harness.traceProcessor.query).not.toHaveBeenCalled();
     expect(harness.serverCloses.every(close => close.mock.calls.length === 1)).toBe(true);
     expect(fs.existsSync(path.dirname(harness.directories[0]))).toBe(false);
@@ -794,7 +855,7 @@ describe('OpenCode native turn intent and delivery', () => {
     const result = await harness.runtime.analyze('same scope', 'intent-comparison', 'trace-opencode', {
       analysisMode: 'fast', referenceTraceId: 'trace-reference',
     });
-    expect(result.quickRun).toMatchObject({enforcement: 'timeout_only', hardCapTurns: 3, actualTurns: 1});
+    expect(result.quickRun).toMatchObject({enforcement: 'timeout_only', hardCapTurns: 3, actualTurns: 2});
     expect(harness.configs[0]).toMatchObject({model: 'smartperfetto/light-model', mcp: {}, instructions: [],
       provider: {smartperfetto: {models: {'light-model': {id: 'light-model'}}}}});
     expect(Object.values(harness.configs[0].tools).every(value => value === false)).toBe(true);
@@ -3998,7 +4059,7 @@ describe('experimental OpenCode runtime contract', () => {
       SMARTPERFETTO_OPENCODE_SERVER_PORT: '4107',
       SMARTPERFETTO_OPENCODE_SERVER_TIMEOUT_MS: '5000',
     }, EXPERIMENTAL_OPENCODE_RUNTIME_KIND)).toMatchObject({
-      configured: true,
+      configured: false,
       runtime: EXPERIMENTAL_OPENCODE_RUNTIME_KIND,
       experimental: true,
       package: '@opencode-ai/sdk',
@@ -4023,6 +4084,28 @@ describe('experimental OpenCode runtime contract', () => {
       modelConfigured: true,
       package: '@opencode-ai/sdk',
       cliPackage: 'opencode-ai',
+    });
+  });
+
+  it('does not expose malformed OpenCode model JSON through validation', () => {
+    const secret = 'sk-opencode-runtime-secret';
+    const result = validateOpenCodeModelConfiguration({
+      SMARTPERFETTO_OPENCODE_MODEL_JSON: `{"apiKey":"${secret}",`,
+    }, {kind: 'opencode', source: 'env'});
+
+    expect(result).toEqual({
+      configured: false,
+      reason: 'invalid_json',
+      error: 'OpenCode model configuration is invalid or incomplete; set valid SMARTPERFETTO_OPENCODE_MODEL_JSON or an OpenAI-compatible model and base URL.',
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+
+    expect(validateOpenCodeModelConfiguration({
+      SMARTPERFETTO_OPENCODE_MODEL_JSON: '{}',
+    }, {kind: 'opencode', source: 'env'})).toEqual({
+      configured: false,
+      reason: 'incomplete',
+      error: 'OpenCode model configuration is invalid or incomplete; set valid SMARTPERFETTO_OPENCODE_MODEL_JSON or an OpenAI-compatible model and base URL.',
     });
   });
 });

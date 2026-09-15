@@ -90,7 +90,7 @@ SmartPerfetto 在 Perfetto Trace 之上增加 AI 分析层。加载 Trace、用�
 ### 2. 配置一个 AI Provider
 
 Web UI 启动后，打开 **AI Assistant 设置 → Providers**，添加一个 Provider，依次保存、
-测试并激活。本地源码运行也可以直接复用同一终端中已有的 Claude Code 登录态。
+测试并激活。本地源码运行也可在 `backend/.env` 配置凭据；Claude Code 登录态不能作为 SDK 已配置的依据。
 第一次启动不需要配置所有 Runtime；只选一条 Provider 路径，按
 [配置指南](docs/getting-started/configuration.md)操作即可。Qoder 高级用户也可以按文档
 配置 BYOK 模型路由；Qoder PAT 或 `qodercli` 认证仍是独立且必需的。
@@ -145,3 +145,5 @@ SmartPerfetto 核心代码使用 [AGPL-3.0-or-later](LICENSE)；`perfetto/` subm
 ## 跨场景系统调查
 
 性能调查会按问题关联关键任务、CPU 频率、系统负载、线程状态、核运行分布和调度证据。根因策略详情完整读取；缺少的证据明确说明。调查覆盖独立于报告章节和运行时完成状态核验，使用方式见 [基本使用](docs/getting-started/usage.md)。
+
+结论正文完整保留。Web、CLI 和导出报告显示每条声明的证据与服务器核验详情，包括未通过或未核验的项。找到来源并不代表声明或根因已经得到验证。

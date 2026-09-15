@@ -29,6 +29,12 @@ describe('provider CLI command', () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.OPENAI_MODEL;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.SMARTPERFETTO_OPENCODE_MODEL;
+    delete process.env.SMARTPERFETTO_OPENCODE_MODEL_JSON;
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.CLAUDE_CODE_USE_VERTEX;
     delete process.env.SMARTPERFETTO_AI_ENABLED;
     delete process.env.SMARTPERFETTO_QODER_SDK_MODULE_PATH;
     resetProviderService();
@@ -43,6 +49,94 @@ describe('provider CLI command', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+  });
+
+  test.each([undefined, '   ', 'your_anthropic_api_key_here', 'sk-test'])(
+    'system check requires credentials as well as an executable SDK (%s)', async (apiKey) => {
+      process.env.CLAUDE_BINARY_PATH = process.execPath;
+      process.env.ANTHROPIC_BASE_URL = 'https://proxy.example/anthropic';
+      if (apiKey !== undefined) process.env.ANTHROPIC_API_KEY = apiKey;
+      const exitCode = await runProviderTestCommand({
+        envFile, sessionDir: path.join(tmpDir, 'home'), format: 'json',
+      });
+      const lastCall = consoleLogSpy.mock.calls[consoleLogSpy.mock.calls.length - 1];
+      const payload = JSON.parse(String(lastCall?.[0] ?? '{}'));
+      const configured = apiKey === 'sk-test';
+      expect(exitCode).toBe(configured ? 0 : 1);
+      expect(payload).toMatchObject({ok: configured, diagnostics: {configured}});
+      expect(payload.note).not.toContain('fallback');
+      if (!configured) {
+        expect(payload.note).toContain('smp config init');
+        expect(payload.note).toContain('Providers');
+        expect(payload.note).toContain('~/.smartperfetto/runtime/data/providers.json');
+        expect(payload.note).toContain('backend/data/providers.json');
+        expect(payload.note).toContain('SMARTPERFETTO_BACKEND_DATA_DIR');
+        expect(payload.note).not.toContain('share the same Provider configuration');
+      }
+    },
+  );
+
+  test('system test uses Pi diagnostics and setup guidance instead of the Claude binary guard', async () => {
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'pi-agent-core';
+    delete process.env.SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON;
+    delete process.env.SMARTPERFETTO_PI_AGENT_CORE_FAKE_STREAM;
+    const exitCode = await runProviderTestCommand({envFile, sessionDir: path.join(tmpDir, 'home'), format: 'json'});
+    const calls = consoleLogSpy.mock.calls;
+    const payload = JSON.parse(String(calls[calls.length - 1]?.[0] ?? '{}'));
+    expect(exitCode).toBe(1);
+    expect(payload).toMatchObject({ok: false, diagnostics: {runtime: 'pi-agent-core', configured: false}});
+    expect(payload.note).toContain('smp config init');
+    expect(payload.note).toContain('~/.smartperfetto/runtime/data/providers.json');
+    expect(payload.note).not.toContain('Claude Agent SDK native binary');
+  });
+
+  test.each([undefined, 'not-json', '{}'])(
+    'system test rejects OpenCode without a parseable model configuration (%s)',
+    async (modelJson) => {
+      process.env.SMARTPERFETTO_AGENT_RUNTIME = 'opencode';
+      if (modelJson !== undefined) process.env.SMARTPERFETTO_OPENCODE_MODEL_JSON = modelJson;
+      const exitCode = await runProviderTestCommand({
+        envFile, sessionDir: path.join(tmpDir, 'home'), format: 'json',
+      });
+      const calls = consoleLogSpy.mock.calls;
+      const payload = JSON.parse(String(calls[calls.length - 1]?.[0] ?? '{}'));
+      expect(exitCode).toBe(1);
+      expect(payload).toMatchObject({ok: false, diagnostics: {runtime: 'opencode'}});
+      expect(payload.note).toContain('SMARTPERFETTO_OPENCODE_MODEL_JSON');
+      expect(payload.note).toContain('smp config init');
+    },
+  );
+
+  test('system test accepts complete OpenCode OpenAI-compatible model configuration', async () => {
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'opencode';
+    process.env.OPENAI_MODEL = 'openai-compatible-model';
+    process.env.OPENAI_BASE_URL = 'http://127.0.0.1:11434/v1';
+    const exitCode = await runProviderTestCommand({
+      envFile, sessionDir: path.join(tmpDir, 'home'), format: 'json',
+    });
+    const calls = consoleLogSpy.mock.calls;
+    const payload = JSON.parse(String(calls[calls.length - 1]?.[0] ?? '{}'));
+    expect(exitCode).toBe(0);
+    expect(payload).toMatchObject({
+      ok: true,
+      diagnostics: {runtime: 'opencode', modelConfigured: true},
+      note: 'OpenCode model configuration detected.',
+    });
+  });
+
+  test('system test does not expose malformed OpenCode model JSON', async () => {
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'opencode';
+    process.env.SMARTPERFETTO_OPENCODE_MODEL_JSON = '{"apiKey":"sk-opencode-secret",';
+    const exitCode = await runProviderTestCommand({
+      envFile, sessionDir: path.join(tmpDir, 'home'), format: 'json',
+    });
+    const calls = consoleLogSpy.mock.calls;
+    const payloadText = String(calls[calls.length - 1]?.[0] ?? '{}');
+    const payload = JSON.parse(payloadText);
+    expect(exitCode).toBe(1);
+    expect(payload).toMatchObject({ok: false, diagnostics: {runtime: 'opencode', configured: false}});
+    expect(payload.note).toContain('invalid or incomplete');
+    expect(payloadText).not.toContain('sk-opencode-secret');
   });
 
   test('system test fails when Claude runtime binary is not executable', async () => {

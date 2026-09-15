@@ -20,8 +20,8 @@ const ENV_TEMPLATE = `# SmartPerfetto CLI user environment
 # First setup: choose ONE provider path. Do not enable Claude-compatible and
 # OpenAI-compatible blocks together.
 
-# Default runtime keeps Claude Agent SDK behavior. Claude local login fallback
-# is valid when no explicit Anthropic/Bedrock/Vertex credentials are set.
+# Claude Agent SDK requires explicit API key/auth token or Bedrock/Vertex
+# configuration. A local Claude Code login does not configure this runtime.
 # Leave model envs unset to use SmartPerfetto defaults, or set provider-specific
 # model names when your provider requires them.
 # SMARTPERFETTO_AGENT_RUNTIME=claude-agent-sdk

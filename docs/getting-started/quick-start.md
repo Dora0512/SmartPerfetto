@@ -26,11 +26,11 @@
 
 ## 3. 准备模型配置
 
-不需要把所有 runtime 都配置一遍。第一次只选一个入口：本机 `claude`、UI Provider Manager、一个 Claude-compatible env block、一个 OpenAI-compatible env block、Pi Agent Core / OpenCode custom block，或显式安装的 Qoder SDK 加本机 CLI 登录态/PAT。
+不需要把所有 runtime 都配置一遍。第一次只选一个入口：UI Provider Manager、一个 Claude-compatible env block、一个 OpenAI-compatible env block、Pi Agent Core / OpenCode custom block，或显式安装的 Qoder SDK 加本机 CLI 登录态/PAT。
 
-本地源码运行时，如果这个终端里的 Claude Code 已经能正常写代码，可以不配置 API key；这也包括 Claude Code 自己已经接入第三方模型的情况。先运行 `claude` 验证。
+Claude Agent SDK 需要在 Provider Manager 或 env 中显式配置 API key/token，或 Bedrock/Vertex 认证。已有 Claude Code 登录态或仅填写 Base URL 都不代表 SDK 已配置。
 
-显式 API key/proxy 场景再创建 env 文件：
+如果选择 env 配置方式，创建 env 文件：
 
 步骤 1：运行 `cp backend/.env.example backend/.env`。
 

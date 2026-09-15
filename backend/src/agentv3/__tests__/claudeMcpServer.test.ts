@@ -125,6 +125,7 @@ jest.mock('../artifactStore', () => ({
         ...(artifact.executionStatus ? { executionStatus: artifact.executionStatus } : {}),
         ...(artifact.executionMessage ? { executionMessage: artifact.executionMessage } : {}),
         ...(artifact.executionError ? { executionError: artifact.executionError } : {}),
+        ...(artifact.modelProjection ? {modelProjection: artifact.modelProjection} : {}),
       };
     }),
     updateQueryReview: jest.fn(function(
@@ -165,6 +166,7 @@ jest.mock('../artifactStore', () => ({
           executionStatus: artifact?.executionStatus,
           executionMessage: artifact?.executionMessage,
           executionError: artifact?.executionError,
+          modelProjection: artifact?.modelProjection,
         };
       }
       const effectiveOffset = offset ?? 0;
@@ -195,6 +197,7 @@ jest.mock('../artifactStore', () => ({
         executionStatus: artifact?.executionStatus,
         executionMessage: artifact?.executionMessage,
         executionError: artifact?.executionError,
+        modelProjection: artifact?.modelProjection,
       };
     }),
     get: jest.fn(function(this: any, id: string) {
@@ -270,6 +273,7 @@ import {
   MCP_NAME_PREFIX,
   loadLearnedSqlFixPairs,
   normalizeOptionalToolString,
+  requireToolDescription,
 } from '../claudeMcpServer';
 import {resolveRuntimeToolConcurrencyPolicy} from '../../agentRuntime/runtimeToolConcurrency';
 import {createJsonSchemaFromZodRawShape} from '../../agentRuntime/runtimeToolSpec';
@@ -399,7 +403,7 @@ function createTestServer(options: {
     setRunManifestAttributionSink: jest.fn(),
   };
 
-  const artifactStore = options.artifactStore || new ArtifactStore() as any;
+  const artifactStore = options.artifactStore === null ? undefined : options.artifactStore || new ArtifactStore() as any;
   const { server, allowedTools, toolDefinitions, sourceUse } = createClaudeMcpServer({
     traceId: 'test-trace-123',
     userQuery: options.userQuery,
@@ -1336,23 +1340,56 @@ describe('createClaudeMcpServer', () => {
         expect(description.length).toBeLessThanOrEqual(1000);
         expect(description).not.toMatch(/\n\nExamples:/);
       }
-      expect(runtimeDescriptions.join('\n')).toContain('SQL safety rules');
+      expect(runtimeDescriptions.join('\n')).toContain('Qualify JOIN columns');
       expect(runtimeDescriptions.join('\n')).toContain('expectedCalls');
 
       for (const name of ['execute_sql', 'execute_sql_on']) {
         const description = descriptionByName.get(name) ?? '';
-        expect(description).toContain('s.name AS slice_name');
-        expect(description).not.toContain('s. name');
-        expect(description).toContain('FrameTimeline rows expose upid');
+        const template = name === 'execute_sql'
+          ? 'prompt-execute-sql-tool-description' : 'prompt-execute-sql-on-tool-description';
+        expect(description).toBe(requireToolDescription(template) + '\n\n' +
+          requireToolDescription('prompt-sql-evidence-guidance'));
+        expect(description).toContain('Qualify JOIN columns');
+        expect(description).toContain('schema lookup when needed');
+        expect(description).not.toContain('schema lookup first');
+        expect(description).toContain('Prefer Skills; SQL for gaps');
+        expect(description).toContain('Show gaps');
+        expect(description).toContain('FrameTimeline: upid');
         expect(description).toContain('is_main_thread');
+        expect(description).toContain('Frames=count logical IDs/process');
+        expect(description).toContain('MIN(ts+dur,end)-MAX(ts,start)');
+        expect(description).toContain('Handle negative/unfinished dur first');
+        expect(description).toContain('Per-thread state sum<=window');
+        expect(description).toContain('ts<end AND ts+dur>start');
+        expect(description).toContain('Sched has idle; busy=is_idle=0, NULL=unknown');
+        expect(description).toContain('Zero dur!=zero count');
+        expect(description).toContain('parallel CPU!=wall');
+        expect(description).toContain('Counters=time-weighted holds+predecessor');
+        expect(description).toContain('numerator/denominator+unrounded REAL ratio');
+        expect(description).toContain('CAST/ROUND only display extras');
+        expect(description).toContain('aliases/formats grant no unit/investigation authority');
+        expect(description).not.toMatch(/COUNT\(\*\)|AVG\(value\)|ts BETWEEN|SUM\(dur\)/);
       }
-      expect(descriptionByName.get('execute_sql')).toContain('batch_frame_root_cause');
-      expect(descriptionByName.get('execute_sql')).toContain('use fetch_artifact');
+      expect(descriptionByName.get('execute_sql')).toContain('No __intrinsic_*/Skill-step tables');
+      expect(descriptionByName.get('execute_sql')).toContain('fetch_artifact, not VALUES');
+      expect(descriptionByName.get('execute_sql')).toContain('Current trace');
+      expect(descriptionByName.get('execute_sql_on')).toContain('trace=current/reference');
+      expect(descriptionByName.get('execute_sql_on')).toContain('summary=true: stats+samples');
       expect(descriptionByName.get('resolve_hypothesis')).toContain('exact immutable statement');
+      expect(descriptionByName.get('invoke_skill')).toContain('positive `upid`');
+      expect(descriptionByName.get('invoke_skill')).toContain('Never infer an UPID');
+      expect(descriptionByName.get('invoke_skill')).toContain('raw producer-declared units');
+      expect(descriptionByName.get('invoke_skill')).toContain('Missing means unknown');
+      const proposePatchDescription = descriptionByName.get('propose_patch') ?? '';
+      expect(proposePatchDescription).toBe(requireToolDescription('prompt-propose-patch-tool-description'));
+      expect(proposePatchDescription).toHaveLength(411);
+      expect(proposePatchDescription).toContain('result.hits[].chunkId');
+      expect(proposePatchDescription).toContain('context_chunk_ids');
+      expect(proposePatchDescription).toContain('Read/search/graph reference IDs');
       const sourceDecisionDescription = descriptionByName.get('record_source_use_decision') ?? '';
-      expect(sourceDecisionDescription).toContain('untrusted data');
-      expect(sourceDecisionDescription).toContain('no echo');
-      expect(sourceDecisionDescription).toContain('code/secret/root');
+      expect(sourceDecisionDescription).toContain('Owner may quote authorized source');
+      expect(sourceDecisionDescription).toContain('no secrets/root');
+      expect(sourceDecisionDescription).not.toContain('no echo code');
       expect(sourceDecisionDescription).toContain('metadata_only');
       expect(sourceDecisionDescription).toContain('locate-only');
       expect(sourceDecisionDescription).toContain('provider_send');
@@ -1379,6 +1416,14 @@ describe('createClaudeMcpServer', () => {
         .toEqual(sourceStopStates);
       expect(sourceDecisionDescription.trim().length).toBeGreaterThan(100);
       expect(descriptionByName.get('resolve_hypothesis')).toContain('submit a new hypothesis');
+    });
+
+    it('fails closed for missing or empty required tool-description templates', () => {
+      expect(() => requireToolDescription('missing-tool-description-fixture')).toThrow(
+        'Required tool description template is missing or empty');
+      expect(() => requireToolDescription('comments-only-fixture', '<!-- no tool contract -->')).toThrow(
+        'Required tool description template is missing or empty');
+      expect(requireToolDescription('inline-fixture', '<!-- comment -->\nUse positive `upid`.')).toBe('Use positive `upid`.');
     });
 
     it('keeps critical tool families available under the broadest scoped request', () => {
@@ -2555,6 +2600,69 @@ describe('createClaudeMcpServer', () => {
       expect(second.success).toBe(true);
       expect(mockTpService.query).toHaveBeenCalledTimes(2);
     });
+
+    it.each([
+      ['execute_sql', 'current', false], ['execute_sql', 'current', true],
+      ['execute_sql_on', 'current', false], ['execute_sql_on', 'current', true],
+      ['execute_sql_on', 'reference', false], ['execute_sql_on', 'reference', true],
+    ] as const)('exposes only captured units for %s %s summary=%s', async (toolName, trace, summary) => {
+      const evidence = jest.requireActual<typeof import('../../services/evidence/evidenceCapture')>(
+        '../../services/evidence/evidenceCapture');
+      const {tools, mockTpService, emittedUpdates} = createTestServer({
+        referenceTraceId: 'reference-unit-trace', artifactStore: null,
+      });
+      const rows = Array.from({length: summary ? 201 : 2}, (_, index) =>
+        [index === 1 ? null : 42000000 + index, 42.125]);
+      const result = {columns: ['dur', 'derived_ms'], rows, durationMs: 1,
+        columnUnits: {derived_ms: 'ms'}};
+      const witness = evidence.captureEvidenceTable(result, {dur: {
+        origin: {kind: 'native_producer', definitionFingerprint: 'unit-projection-fixture-private'}, unit: 'ns',
+      }});
+      const before = evidence.capturedEvidenceTable(witness);
+      // This boundary test supplies the issued capture; native SQL attribution has its own real-TP gate.
+      const capture = jest.spyOn(evidence, 'captureRawSqlEvidence').mockReturnValue(witness);
+      mockTpService.query.mockResolvedValue(result);
+      try {
+        const payload = await callTool(tools, toolName, {sql: 'SELECT dur, 42.125 AS derived_ms FROM slice',
+          summary, ...(toolName === 'execute_sql_on' ? {trace} : {})});
+        expect(capture).toHaveBeenCalledWith(result, {
+          traceId: trace === 'reference' ? 'reference-unit-trace' : 'test-trace-123', traceSide: trace,
+        });
+        expect(payload.columnUnits).toEqual({dur: 'ns'});
+        expect(payload.totalRows).toBe(rows.length);
+        if (!summary) expect(payload.rows).toEqual(rows);
+        expect(result.rows).toEqual(rows);
+        expect(evidence.capturedEvidenceTable(witness)).toEqual(before);
+        expect(JSON.stringify(payload)).not.toContain('unit-projection-fixture-private');
+        expect(JSON.stringify(emittedUpdates)).not.toContain('columnUnits');
+      } finally { capture.mockRestore(); }
+    });
+
+    it.each(['no_native_capture', 'unissued_capture', 'changed_rows'] as const)(
+      'does not infer SQL units from names or serialized metadata: %s', async kind => {
+        const evidence = jest.requireActual<typeof import('../../services/evidence/evidenceCapture')>(
+          '../../services/evidence/evidenceCapture');
+        const result = {columns: ['dur', 'derived_ms'], rows: [[1, 2]], durationMs: 1,
+          columnUnits: {dur: 'ns', derived_ms: 'ms'}};
+        const witness = kind === 'unissued_capture' ? {captureId: 'forged-unit-capture'} :
+          evidence.captureEvidenceTable(kind === 'changed_rows' ? {...result, rows: [[9, 2]]} : result,
+            kind === 'changed_rows' ? {dur: {
+              origin: {kind: 'native_producer', definitionFingerprint: 'private-stale-unit'}, unit: 'ns',
+            }} : {});
+        const capture = jest.spyOn(evidence, 'captureRawSqlEvidence').mockReturnValue(witness);
+        try {
+          for (const toolName of ['execute_sql', 'execute_sql_on']) {
+            for (const summary of [false, true]) {
+              const {tools, mockTpService} = createTestServer({referenceTraceId: 'reference-unit-trace'});
+              mockTpService.query.mockResolvedValue(result);
+              const payload = await callTool(tools, toolName, {sql: 'SELECT 1 AS dur, 2 AS derived_ms', summary,
+                ...(toolName === 'execute_sql_on' ? {trace: 'reference'} : {})});
+              expect(payload.success).toBe(true);
+              expect(payload).not.toHaveProperty('columnUnits');
+            }
+          }
+        } finally { capture.mockRestore(); }
+      });
 
     it('execute_sql works without submitting an optional plan', async () => {
       const { tools, mockTpService, analysisPlan } = createTestServer();
@@ -7226,7 +7334,14 @@ describe('createClaudeMcpServer', () => {
         const root = path.join(tmpDir, 'app');
         fs.mkdirSync(path.join(root, '源码'), {recursive: true});
         const filePath = '源码/Startup Hooks.kt';
-        fs.writeFileSync(path.join(root, filePath), Array.from({length: 100}, (_, i) => `class Source${i}`).join('\n'));
+        const sourceLines = Array.from({length: 100}, (_, i) => `class Source${i}`);
+        sourceLines.splice(9, 5,
+          'object 启动入口 {',
+          '',
+          '  val api_key = "abcdefghijk"',
+          '  fun onCreate() = Unit',
+          '}');
+        fs.writeFileSync(path.join(root, filePath), sourceLines.join('\n'));
         const codebaseRegistry = new CodebaseRegistry(path.join(tmpDir, 'codebases.json'));
         const ref = codebaseRegistry.register({kind: 'app_source', displayName: 'Source', rootPath: root,
           rootAuthorization: 'native_picker', sendToProvider: true});
@@ -7236,6 +7351,35 @@ describe('createClaudeMcpServer', () => {
         const read = await callTool(tools, 'read_codebase_file', {file_path: filePath, start_line: 10, max_lines: 5});
         expect(read.success).toBe(true);
         expect(read.truncated).toBe(true);
+        expect(read.reference.lineRange).toEqual({start: 10, end: 14});
+        expect(read.window).toEqual({
+          totalLines: 100, omittedBefore: 9, omittedAfter: 86,
+          nextStartLine: 15, symbolCoverage: 'not_assessed',
+        });
+        if (mode === 'metadata_only') {
+          expect(read.reference).not.toHaveProperty('text');
+          expect(read).not.toHaveProperty('presentation');
+        } else {
+          expect(read.reference.text).toBe([
+            'object 启动入口 {',
+            '',
+            '  val [REDACTED_SECRET]',
+            '  fun onCreate() = Unit',
+            '}',
+          ].join('\n'));
+          expect(read.presentation).toEqual({
+            schemaVersion: 'source_read_presentation@1',
+            format: 'line_numbered',
+            numberedText: [
+              '10: object 启动入口 {',
+              '11: ',
+              '12:   val [REDACTED_SECRET]',
+              '13:   fun onCreate() = Unit',
+              '14: }',
+            ].join('\n'),
+          });
+          expect(read.reference).not.toHaveProperty('presentation');
+        }
         expect(read.sourceReferences).toEqual([expect.objectContaining({filePath, id: expect.stringMatching(/^source-ref-v1-/)})]);
         const actual = sourceUse.getSourceUseDecision()!;
         expect(actual.status).toBe(mode === 'provider_send' ? 'corroborated' : 'located');
@@ -7251,6 +7395,97 @@ describe('createClaudeMcpServer', () => {
               sourceReferenceIds: [read.sourceReferences[0].id], traceEvidenceRefIds: []}]}});
         expect(verification.status).toBe('passed');
       } finally { fs.rmSync(tmpDir, {recursive: true, force: true}); }
+    });
+
+    it('omits line-number presentation when redaction output no longer matches the declared range', async () => {
+      const sourceAccess = {
+        search: jest.fn<OnDemandSourceAccessService['search']>(),
+        read: jest.fn<OnDemandSourceAccessService['read']>(async () => ({
+          success: true,
+          codebaseId: 'app-a',
+          reference: {
+            referenceId: 'source-collapsed-redaction',
+            codebaseId: 'app-a',
+            filePath: 'src/Secret.kt',
+            lineRange: {start: 20, end: 22},
+            text: '[REDACTED_SECRET]',
+          },
+          truncated: false,
+        })),
+      };
+      const {tools} = createTestServer({
+        codeAwareMode: 'provider_send',
+        codebaseIds: ['app-a'],
+        onDemandSourceAccess: sourceAccess,
+      });
+
+      const read = await callTool(tools, 'read_codebase_file', {file_path: 'src/Secret.kt'});
+
+      expect(read).toEqual(expect.objectContaining({
+        success: true,
+        reference: expect.objectContaining({text: '[REDACTED_SECRET]'}),
+      }));
+      expect(read).not.toHaveProperty('presentation');
+    });
+
+    it.each([
+      {capTokens: 7, admitted: true},
+      {capTokens: 6, admitted: false},
+    ])('charges raw and numbered read text before admission at the $capTokens-token boundary', async ({capTokens, admitted}) => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-numbered-read-budget-'));
+      try {
+        const sourceAccess = {
+          search: jest.fn<OnDemandSourceAccessService['search']>(),
+          read: jest.fn<OnDemandSourceAccessService['read']>(async () => ({
+            success: true,
+            codebaseId: 'app-a',
+            reference: {
+              referenceId: 'source-numbered-budget',
+              codebaseId: 'app-a',
+              filePath: 'src/Foo.kt',
+              lineRange: {start: 10, end: 11},
+              text: 'alpha\nbeta',
+            },
+            truncated: false,
+          })),
+        };
+        const ledger = new CodeLookupLedger(
+          `numbered-budget-${capTokens}`,
+          capTokens,
+          1,
+          path.join(tmpDir, 'ledger.jsonl'),
+        );
+        const {tools, sourceUse} = createTestServer({
+          codeAwareMode: 'provider_send',
+          codebaseIds: ['app-a'],
+          onDemandSourceAccess: sourceAccess,
+          codeLookupLedger: ledger,
+        });
+
+        const read = await callTool(tools, 'read_codebase_file', {file_path: 'src/Foo.kt'});
+
+        if (admitted) {
+          expect(read.reference.text).toBe('alpha\nbeta');
+          expect(read.presentation).toEqual({
+            schemaVersion: 'source_read_presentation@1',
+            format: 'line_numbered',
+            numberedText: '10: alpha\n11: beta',
+          });
+          expect(ledger.getEntries()).toEqual([
+            expect.objectContaining({outcome: 'success', tokensSpent: 7, returnedReferenceCount: 1}),
+          ]);
+        } else {
+          expect(read).toEqual(expect.objectContaining({success: false, unsupportedReason: 'budget_exceeded'}));
+          expect(read).not.toHaveProperty('reference');
+          expect(read).not.toHaveProperty('presentation');
+          expect(sourceUse.getSourceUseDecision()).toMatchObject({references: [], usedCodebaseIds: []});
+          expect(ledger.getEntries()).toEqual([
+            expect.objectContaining({outcome: 'budget_exceeded', tokensSpent: 0, returnedReferenceCount: 0}),
+          ]);
+        }
+      } finally {
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
     });
 
     it('admits at most 100 distinct references across calls and codebases without delivering unrecorded bodies', async () => {
@@ -7521,7 +7756,7 @@ describe('createClaudeMcpServer', () => {
       } finally {fingerprint.mockRestore();}
     });
 
-    it('caps metadata lookup at located and lets provider source bodies corroborate', async () => {
+    it('caps metadata lookup, corroborates provider bodies, and reuses indexed hit ids for patch sketches', async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-source-use-levels-'));
       try {
         const scope = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
@@ -7578,16 +7813,40 @@ describe('createClaudeMcpServer', () => {
           snippet: 'class StartupHooks',
           indexedAt: Date.now(),
         }, scope);
+        const indexedLedger = new CodeLookupLedger(
+          'indexed-source-use-levels',
+          1000,
+          2,
+          path.join(tmpDir, 'indexed-ledger.jsonl'),
+        );
         const indexed = createTestServer({
           codeAwareMode: 'provider_send',
           codebaseIds: [ref.codebaseId],
           codebaseRegistry,
           ragStore,
           knowledgeScope: scope,
+          codeLookupLedger: indexedLedger,
         });
         const indexedResult = await callTool(indexed.tools, 'lookup_app_source', {
           query: 'StartupHooks',
         });
+        const contextChunkIds = indexedResult.result.hits.map((hit: {chunkId: string}) => hit.chunkId);
+        expect(contextChunkIds).toEqual(['indexed-startup-hooks']);
+        const proposal = await callTool(indexed.tools, 'propose_patch', {
+          context_chunk_ids: contextChunkIds,
+          problem: 'Move startup work outside the selected startup interval.',
+        });
+        expect(proposal).toMatchObject({success: true, result: {
+          patchStatus: 'sketch',
+          targetFiles: [{codebaseId: ref.codebaseId, path: 'src/StartupHooks.kt'}],
+          warnings: ['diff_not_supplied'],
+        }});
+        expect(indexedLedger.getEntries()).toEqual([
+          expect.objectContaining({toolName: 'lookup_app_source', outcome: 'success',
+            chunkIds: ['indexed-startup-hooks']}),
+          expect.objectContaining({toolName: 'propose_patch', outcome: 'patch_sketch',
+            chunkIds: ['indexed-startup-hooks']}),
+        ]);
         expect(indexedResult.result.sourceReferences).toEqual(indexed.sourceUse.getSourceUseDecision()?.references);
         const resolved = await callTool(indexed.tools, 'resolve_symbol', {symbol: 'StartupHooks'});
         expect(resolved.sourceReferences).toEqual([expect.objectContaining({chunkId: 'indexed-startup-hooks', lookupKind: 'metadata'})]);
@@ -8662,6 +8921,78 @@ describe('MCP exact scope with real execution and artifact persistence', () => {
       else existsMock.mockReset();
       loader.skillRegistry.getSkill.mockImplementation(previousGet);
       db.close();
+    }
+  });
+
+  it('sends typed witness cells to the model while SSE keeps display formatting', async () => {
+    const {ArtifactStore: RealArtifactStore} = jest.requireActual<typeof import('../artifactStore')>('../artifactStore');
+    const {attachEvidenceTable, captureEvidenceTable} = jest.requireActual<typeof import('../../services/evidence/evidenceCapture')>('../../services/evidence/evidenceCapture');
+    const store = new RealArtifactStore();
+    const existsMock = jest.mocked(fs.existsSync);
+    const previousExists = existsMock.getMockImplementation();
+    existsMock.mockImplementation(jest.requireActual<typeof fs>('fs').existsSync);
+    const server = createTestServer({lightweight: true, artifactStore: store});
+    const long = 'raw-'.repeat(40);
+    const origin = {kind: 'skill_literal' as const, definitionFingerprint: 'typed-v1', skillId: 'cpu_analysis'};
+    const displayResult: any = {stepId: 'typed', title: 'Typed', layer: 'list', format: 'table',
+      data: {columns: ['missing', 'enabled', 'detail', 'ttid_ms', 'busy_pct', 'ambiguous_pct'],
+        rows: [['-', '否', `${long.slice(0, 97)}...`, '1912.20 ms', '68.1%', '30%']]}};
+    attachEvidenceTable(displayResult, captureEvidenceTable({
+      columns: ['missing', 'enabled', 'detail', 'ttid_ms', 'busy_pct', 'ambiguous_pct'],
+      rows: [[null, false, long, 1912.2, 68.1, 0.3]],
+    }, {ttid_ms: {origin, unit: 'ms'}, busy_pct: {origin, unit: '%'}}));
+    server.mockSkillExecutor.execute.mockResolvedValueOnce({skillId: 'cpu_analysis', success: true,
+      displayResults: [displayResult], diagnostics: [], executionTimeMs: 1});
+
+    const result = await callTool(server.tools, 'invoke_skill', {skillId: 'cpu_analysis'});
+    expect(result.artifacts[0]).toMatchObject({preview: {missing: null, enabled: false, detail: long,
+      ttid_ms: 1912.2, busy_pct: 68.1, ambiguous_pct: 0.3}, modelProjection: {status: 'exact'},
+      columnUnits: {ttid_ms: 'ms', busy_pct: '%'}});
+    expect(result.artifacts[0].columnUnits).not.toHaveProperty('ambiguous_pct');
+    const artifactId = result.artifacts[0].id;
+    const summary = await callTool(server.tools, 'fetch_artifact', {artifactId, detail: 'summary'});
+    const rows = await callTool(server.tools, 'fetch_artifact', {artifactId, detail: 'rows', limit: 1});
+    const full = await callTool(server.tools, 'fetch_artifact', {artifactId, detail: 'full'});
+    expect(summary).toMatchObject({modelProjection: {status: 'exact'}, columnUnits: {ttid_ms: 'ms', busy_pct: '%'},
+      aggregate: {columns: expect.arrayContaining([
+        expect.objectContaining({column: 'enabled', observedType: 'boolean'}),
+      ])}});
+    expect(rows).toMatchObject({rows: [[null, false, long, 1912.2, 68.1, 0.3]],
+      modelProjection: {status: 'exact'}, columnUnits: {ttid_ms: 'ms', busy_pct: '%'}});
+    expect(full).toMatchObject({data: {rows: [[null, false, long, 1912.2, 68.1, 0.3]]},
+      modelProjection: {status: 'exact'}, columnUnits: {ttid_ms: 'ms', busy_pct: '%'}});
+    for (const fetched of [summary, rows, full]) expect(fetched.columnUnits).not.toHaveProperty('ambiguous_pct');
+    const envelopes = server.emittedUpdates.filter(update => update.type === 'data').flatMap(update => update.content);
+    expect(envelopes[0].data.rows).toEqual([['-', '否', `${long.slice(0, 97)}...`, '1912.20 ms', '68.1%', '30%']]);
+    expect(JSON.stringify(store.serialize())).not.toContain('captureId');
+    expect(JSON.stringify(store.serialize())).not.toContain('columnUnits');
+    if (previousExists) existsMock.mockImplementation(previousExists);
+    else existsMock.mockReset();
+  });
+
+  it('uses the same typed projection in the non-artifact tool response', async () => {
+    const {attachEvidenceTable, captureEvidenceTable} = jest.requireActual<typeof import('../../services/evidence/evidenceCapture')>('../../services/evidence/evidenceCapture');
+    const existsMock = jest.mocked(fs.existsSync);
+    const previousExists = existsMock.getMockImplementation();
+    existsMock.mockImplementation(jest.requireActual<typeof fs>('fs').existsSync);
+    try {
+      const server = createTestServer({artifactStore: null});
+      const origin = {kind: 'skill_literal' as const, definitionFingerprint: 'typed-v1', skillId: 'cpu_analysis'};
+      const displayResult: any = {stepId: 'typed', title: 'Typed', layer: 'list', format: 'table',
+        data: {columns: ['missing', 'enabled', 'ttid_ms', 'ambiguous_pct'], rows: [['-', '是', '10 ms', '30%']]}};
+      attachEvidenceTable(displayResult, captureEvidenceTable({columns: ['missing', 'enabled', 'ttid_ms', 'ambiguous_pct'],
+        rows: [[null, true, 10, 0.3]]}, {ttid_ms: {origin, unit: 'ms'}}));
+      server.mockSkillExecutor.execute.mockResolvedValueOnce({skillId: 'cpu_analysis', success: true,
+        displayResults: [displayResult], diagnostics: [], executionTimeMs: 1});
+      const result = await callTool(server.tools, 'invoke_skill', {skillId: 'cpu_analysis'});
+      expect(result.displayResults[0]).toMatchObject({data: {rows: [[null, true, 10, 0.3]]},
+        modelProjection: {status: 'exact'}, columnUnits: {ttid_ms: 'ms'}});
+      expect(result.displayResults[0].columnUnits).not.toHaveProperty('ambiguous_pct');
+      const envelopes = server.emittedUpdates.filter(update => update.type === 'data').flatMap(update => update.content);
+      expect(envelopes[0].data.rows).toEqual([['-', '是', '10 ms', '30%']]);
+    } finally {
+      if (previousExists) existsMock.mockImplementation(previousExists);
+      else existsMock.mockReset();
     }
   });
 });

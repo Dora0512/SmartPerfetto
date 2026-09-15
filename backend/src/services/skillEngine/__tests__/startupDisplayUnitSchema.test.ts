@@ -8,7 +8,13 @@ import yaml from 'js-yaml';
 import Database from 'better-sqlite3';
 import {describe, it, expect} from '@jest/globals';
 import {createSkillExecutor} from '../skillExecutor';
+import {normalizeSkillDefinition} from '../skillLoader';
 import {ArtifactStore} from '../../../agentv3/artifactStore';
+import {captureEvidenceTable, evidenceTableFor, getCapturedAnchorFacts} from '../../evidence/evidenceCapture';
+import {investigationCaptureFields} from '../../evidence/investigationEvidenceLedger';
+import {prepareClaimEvidence} from '../../evidence/claimEvidencePreparation';
+import {runClaimVerification} from '../../verifier/claimVerificationRunner';
+import {buildTraceProcessorQueryProvenance} from '../../traceProcessorConnectionModel';
 
 describe('startup display unit contracts', () => {
   const loadYaml = (relativePath: string) => {
@@ -22,9 +28,21 @@ describe('startup display unit contracts', () => {
     return column;
   };
 
+  it('keeps startup display tails on native half-open clipped methodology', () => {
+    const strategy = fs.readFileSync(path.join(process.cwd(), 'strategies/startup.strategy.md'), 'utf8');
+    expect(strategy).not.toContain('ts BETWEEN <end_ts>');
+    expect(strategy).not.toContain('dur / 1e6 AS dur_ms FROM thread_slice');
+    expect(strategy).toContain('[框架完成点, TTID 终点)');
+    expect(strategy).toContain('[TTID 终点, TTFD 终点)');
+    expect(strategy).toContain('原生 `upid/utid`');
+    expect(strategy).toContain('overlap 后裁剪到窗口');
+  });
+
   it('startup_events_in_range exposes ms display and ns jump fields consistently', () => {
     const skill = loadYaml('skills/atomic/startup_events_in_range.skill.yaml');
     const columns = skill.display?.columns || [];
+
+    expect(getColumn(columns, 'upid')).toMatchObject({type: 'number', hidden: true});
 
     // dur_ms is the visible human-readable column; dur_ns is hidden, used by
     // start_ts.clickAction navigate_range. Original spec had this swapped, but
@@ -56,6 +74,41 @@ describe('startup display unit contracts', () => {
     expect(ttfd.type).toBe('duration');
     expect(ttfd.format).toBe('duration_ms');
     expect(ttfd.unit).toBe('ms');
+  });
+
+  it('emits an exact launch UPID only when the startup process is unambiguous', () => {
+    const skill = loadYaml('skills/atomic/startup_events_in_range.skill.yaml');
+    const parent = loadYaml('skills/composite/startup_analysis.skill.yaml').steps
+      .find((step: any) => step.id === 'get_startups');
+    expect(getColumn(parent.display.columns, 'upid')).toMatchObject({type: 'number', hidden: true});
+    const sql = skill.sql
+      .replaceAll('${package}', '')
+      .replaceAll('${startup_id}', 'NULL')
+      .replaceAll('${startup_type}', '')
+      .replaceAll('${start_ts}', 'NULL')
+      .replaceAll('${end_ts}', 'NULL');
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE android_startups(startup_id INTEGER, package TEXT, startup_type TEXT, ts INTEGER, dur INTEGER);
+        CREATE TABLE android_startup_time_to_display(startup_id INTEGER, time_to_initial_display INTEGER, time_to_full_display INTEGER);
+        CREATE TABLE android_startup_threads(startup_id INTEGER, utid INTEGER, is_main_thread INTEGER, ts INTEGER, dur INTEGER);
+        CREATE TABLE thread_track(id INTEGER, utid INTEGER);
+        CREATE TABLE slice(track_id INTEGER, name TEXT, ts INTEGER, dur INTEGER);
+        CREATE TABLE android_startup_processes(startup_id INTEGER, upid INTEGER);
+        CREATE TABLE process(upid INTEGER, start_ts INTEGER);
+        INSERT INTO android_startups VALUES
+          (1, 'com.example', 'cold', 100, 1000),
+          (2, 'com.example', 'warm', 200, 2000),
+          (3, 'com.example', 'hot', 300, 3000);
+        INSERT INTO android_startup_processes VALUES (1, 42), (1, 42), (2, 43), (2, 44), (3, NULL);
+        INSERT INTO process VALUES (42, 100), (43, 200), (44, 200);
+      `);
+      const rows = db.prepare(sql).all() as Array<{startup_id: number; upid: number | null}>;
+      expect(Object.fromEntries(rows.map(row => [row.startup_id, row.upid]))).toEqual({1: 42, 2: null, 3: null});
+    } finally {
+      db.close();
+    }
   });
 
   it('startup_detail uses ms display units for startup and CPU/quadrant durations', () => {
@@ -90,10 +143,10 @@ describe('startup display unit contracts', () => {
     }
 
     // quadrant_analysis exposes per-quadrant *_ms columns + per-quadrant *_pct
-    // columns (Q1 big-running / Q2 little-running / Q3 runnable / Q4a io / Q4b sleep)
+    // columns (Q1 big-running / Q2 little-running / Q3 runnable / Q4a uninterruptible / Q4b sleep)
     // — there is no generic dur_ms / quadrant / percentage column.
     const quadrantCols = getStep('quadrant_analysis').display?.columns || [];
-    for (const name of ['q1_big_running_ms', 'q2_little_running_ms', 'q3_runnable_ms', 'q4a_io_blocked_ms', 'q4b_sleeping_ms', 'total_ms']) {
+    for (const name of ['q1_big_running_ms', 'q2_little_running_ms', 'q3_runnable_ms', 'q4a_uninterruptible_ms', 'q4b_sleeping_ms', 'total_ms']) {
       const col = getColumn(quadrantCols, name);
       expect(col.type).toBe('duration');
       expect(col.format).toBe('duration_ms');
@@ -106,18 +159,31 @@ describe('startup display unit contracts', () => {
     const q1Pct = getColumn(quadrantCols, 'q1_pct');
     expect(q1Pct.type).toBe('percentage');
     expect(q1Pct.format).toBe('percentage');
+
+    const criticalColumns = getStep('critical_tasks').display?.columns || [];
+    expect(getColumn(criticalColumns, 'q4a_uninterruptible_ms')).toMatchObject({
+      type: 'duration', format: 'duration_ms', unit: 'ms',
+    });
+    expect(criticalColumns.some((column: any) => column.name === 'q4a_io_blocked_ms')).toBe(false);
+    const atomicCriticalColumns = loadYaml('skills/atomic/startup_critical_tasks.skill.yaml').display.columns;
+    expect(getColumn(atomicCriticalColumns, 'q4a_uninterruptible_ms')).toMatchObject({
+      type: 'duration', format: 'duration_ms', unit: 'ms',
+    });
+    expect(atomicCriticalColumns.some((column: any) => column.name === 'q4a_io_blocked_ms')).toBe(false);
   });
 
   // Execute the maintained YAML queries, including their real target fragment.
   // Only fixture parameter substitution is local to this test.
   const query = (db: Database.Database, target: string, options: {
-    start?: number; end?: number; upid?: number | null; packageName?: string;
+    start?: number; end?: number; upid?: number | null; packageName?: string; topN?: number;
   } = {}) => {
     db.exec('UPDATE thread_state SET ucpu=cpu; UPDATE cpu_frequency_counters SET id=rowid,track_id=cpu,ucpu=cpu');
     const detail = loadYaml('skills/composite/startup_detail.skill.yaml');
     const node = target === 'critical_tasks'
       ? loadYaml('skills/atomic/startup_critical_tasks.skill.yaml')
-      : detail.steps.find((step: any) => step.id === target);
+      : target === 'hot_slice_states'
+        ? loadYaml('skills/atomic/startup_hot_slice_states.skill.yaml')
+        : detail.steps.find((step: any) => step.id === target);
     expect(node).toBeDefined();
     let sql = node.sql as string;
     for (const fragment of node.sql_fragments || []) {
@@ -130,6 +196,7 @@ describe('startup display unit contracts', () => {
       '__process_scope.upid': String(options.upid === null ? 'NULL' : options.upid ?? 42),
       package: options.packageName ?? 'com.example.app',
       'top_k|15': '15',
+      'top_n|10': String(options.topN ?? 3),
     };
     sql = sql.replace(/\$\{([^}]+)\}/g, (_, key: string) => {
       expect(parameters[key]).toBeDefined();
@@ -143,6 +210,8 @@ describe('startup display unit contracts', () => {
     db.exec(`
       CREATE TABLE process(upid INTEGER PRIMARY KEY, pid INTEGER, name TEXT);
       CREATE TABLE thread(utid INTEGER PRIMARY KEY, tid INTEGER, upid INTEGER, name TEXT,is_idle INTEGER DEFAULT 0);
+      CREATE TABLE thread_track(id INTEGER PRIMARY KEY,utid INTEGER);
+      CREATE TABLE slice(id INTEGER PRIMARY KEY,track_id INTEGER,ts INTEGER,dur INTEGER,name TEXT);
       CREATE TABLE sched_slice(id INTEGER PRIMARY KEY, ts INTEGER, dur INTEGER, cpu INTEGER,
         ucpu INTEGER, utid INTEGER, end_state TEXT, priority INTEGER);
       CREATE TABLE thread_state(id INTEGER PRIMARY KEY, ts INTEGER, dur INTEGER, cpu INTEGER,
@@ -162,6 +231,61 @@ describe('startup display unit contracts', () => {
     `);
     return db;
   };
+
+  it('keeps native hot-slice identity, clipped Top-N scope and missing state coverage', () => {
+    const db = fixture();
+    try {
+      db.exec(`
+        INSERT INTO thread_track VALUES (1,1),(2,4);
+        INSERT INTO slice VALUES
+          (10,1,5000000,13000000,'same_name'),
+          (11,1,10000000,8000000,'same_name'),
+          (12,1,30000000,-1,'unfinished'),
+          (13,1,20000000,6000000,'below_limit'),
+          (20,2,10000000,30000000,'other_process');
+        INSERT INTO thread_state(id,ts,dur,utid,state,io_wait,blocked_function) VALUES
+          (101,5000000,10000000,1,'Running',NULL,NULL),
+          (102,35000000,-1,1,'S',NULL,'futex_wait'),
+          (201,10000000,30000000,4,'Running',NULL,NULL);
+      `);
+      const rows = query(db, 'hot_slice_states');
+      expect(new Set(rows.map(row => row.slice_id))).toEqual(new Set([10, 11, 12]));
+      expect(rows.every(row => row.upid === 42 && row.utid === 1 && row.pid === 100 && row.tid === 100)).toBe(true);
+      expect(rows.find(row => row.slice_id === 12)).toMatchObject({
+        sample_rank: 1, slice_dur_ms: 10, raw_slice_end_ts: null,
+        right_censored: 1, is_unfinished: 1, state: 'S', state_dur_ms: 5,
+        state_coverage_ms: 5, state_coverage_pct: 50, uncovered_ms: 5,
+        sample_limit: 3, eligible_slice_count: 4, selected_slice_count: 3,
+        sampling_scope: 'top_by_clipped_duration_within_analysis_window',
+      });
+      expect(rows.find(row => row.slice_id === 10)).toMatchObject({
+        sample_rank: 2, slice_ts: '10000000', slice_end_ts: '18000000',
+        raw_slice_ts: '5000000', left_censored: 1, state_dur_ms: 5,
+        state_coverage_pct: 62.5, uncovered_ms: 3,
+      });
+      expect(rows.find(row => row.slice_id === 11)).toMatchObject({
+        sample_rank: 3, state: 'Running', state_dur_ms: 5,
+        state_coverage_pct: 62.5, uncovered_ms: 3,
+      });
+      expect(rows.some(row => row.slice_id === 13)).toBe(false);
+      expect(rows.every(row => row.state_coverage_ms <= row.slice_dur_ms)).toBe(true);
+
+      db.exec('DELETE FROM thread_state WHERE utid=1');
+      expect(query(db, 'hot_slice_states').find(row => row.slice_id === 12)).toMatchObject({
+        state: 'NotObserved', evidence_strength: 'state_coverage_missing',
+        state_dur_ms: 0, state_coverage_ms: 0, state_coverage_pct: 0, uncovered_ms: 10,
+      });
+    } finally { db.close(); }
+  });
+
+  it('projects every hot-slice identity, clipping, coverage and sampling field through startup_detail', () => {
+    const atomic = loadYaml('skills/atomic/startup_hot_slice_states.skill.yaml');
+    const composite = loadYaml('skills/composite/startup_detail.skill.yaml').steps
+      .find((step: any) => step.id === 'hot_slice_states');
+    expect(composite).toBeDefined();
+    expect(composite.display.columns.map((column: any) => column.name))
+      .toEqual(atomic.display.columns.map((column: any) => column.name));
+  });
 
   it('weights frequency only over the true intersection of running, counter and selected window', () => {
     const db = fixture();
@@ -340,13 +464,46 @@ describe('startup display unit contracts', () => {
       expect(quadrant).toMatchObject({q1_big_running_ms: 0, q2_little_running_ms: 0,
         q3_runnable_ms: 10, unknown_running_ms: 10, other_state_ms: 10, total_ms: 30});
       expect(quadrant.q1_big_running_ms + quadrant.q2_little_running_ms + quadrant.q3_runnable_ms +
-        quadrant.q4a_io_blocked_ms + quadrant.q4b_sleeping_ms + quadrant.unknown_running_ms + quadrant.other_state_ms)
+        quadrant.q4a_uninterruptible_ms + quadrant.q4b_sleeping_ms + quadrant.unknown_running_ms + quadrant.other_state_ms)
         .toBe(quadrant.total_ms);
-      expect(query(db, 'critical_tasks')).toEqual([
+      const critical = query(db, 'critical_tasks');
+      expect(critical).toEqual([
         expect.objectContaining({total_cpu_ms: 10, q1_big_running_ms: 0, q2_little_running_ms: 0,
-          unknown_running_ms: 10, other_state_ms: 10, q3_runnable_ms: 10, total_ms: 30}),
+          unknown_running_ms: 10, other_state_ms: 10, q3_runnable_ms: 10,
+          q4a_uninterruptible_ms: 0, big_core_pct: null, total_ms: 30}),
       ]);
+      expect(critical[0]).not.toHaveProperty('q4a_io_blocked_ms');
+      expect(critical[0]).not.toHaveProperty('unknown_running_unrounded_ms');
     } finally { db.close(); }
+  });
+
+  it('reports a big-core percentage only when every running interval has known topology', () => {
+    const run = (states: string) => {
+      const db = fixture();
+      try {
+        db.exec(`UPDATE cpu SET machine_id=1,capacity=NULL WHERE id=10; ${states}`);
+        return query(db, 'critical_tasks')[0];
+      } finally { db.close(); }
+    };
+
+    expect(run(`INSERT INTO thread_state(id,ts,dur,cpu,utid,state) VALUES
+      (1,10000000,10000000,0,1,'Running')`)).toMatchObject({
+      total_cpu_ms: 10, q1_big_running_ms: 0, q2_little_running_ms: 10,
+      unknown_running_ms: 0, big_core_pct: 0,
+    });
+    expect(run(`INSERT INTO thread_state(id,ts,dur,cpu,utid,state) VALUES
+      (1,10000000,5000000,0,1,'Running'),(2,15000000,5000000,7,1,'Running')`)).toMatchObject({
+      total_cpu_ms: 10, q1_big_running_ms: 5, q2_little_running_ms: 5,
+      unknown_running_ms: 0, big_core_pct: 50,
+    });
+    expect(run(`INSERT INTO thread_state(id,ts,dur,cpu,utid,state) VALUES
+      (1,10000000,10000000,0,1,'Running'),(2,20000000,1000000,10,1,'Running')`)).toMatchObject({
+      total_cpu_ms: 11, unknown_running_ms: 1, big_core_pct: null,
+    });
+    expect(run(`INSERT INTO thread_state(id,ts,dur,cpu,utid,state) VALUES
+      (1,10000000,10000000,0,1,'Running'),(2,20000000,1,10,1,'Running')`)).toMatchObject({
+      total_cpu_ms: 10, unknown_running_ms: 0, big_core_pct: null,
+    });
   });
 
   it('preserves every system evidence locator through production display projection and restored artifact fetch', async () => {
@@ -424,5 +581,335 @@ describe('startup display unit contracts', () => {
         }
       }
     } finally { db.close(); }
+  });
+});
+
+describe('nullable thread-state evidence', () => {
+  const loadSkill = (relativePath: string): any => yaml.load(
+    fs.readFileSync(path.join(process.cwd(), 'skills', relativePath), 'utf8'));
+
+  const withFragments = (node: any): string => {
+    let sql = node.sql as string;
+    for (const fragment of node.sql_fragments || []) {
+      const text = fs.readFileSync(path.join(process.cwd(), 'skills', fragment), 'utf8');
+      sql = sql.replace(/\bWITH\s+/i, `WITH ${text}\n,\n`);
+    }
+    return sql;
+  };
+
+  const render = (sql: string, parameters: Record<string, string>): string => sql.replace(
+    /\$\{([^}]+)\}/g, (_, key: string) => {
+      expect(parameters[key]).toBeDefined();
+      return parameters[key];
+    });
+
+  const fixture = () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE trace_bounds(start_ts INTEGER,end_ts INTEGER);
+      INSERT INTO trace_bounds VALUES(0,100000000);
+      CREATE TABLE process(upid INTEGER PRIMARY KEY,pid INTEGER,name TEXT);
+      INSERT INTO process VALUES(42,100,'com.example.app');
+      CREATE TABLE thread(utid INTEGER PRIMARY KEY,tid INTEGER,upid INTEGER,name TEXT,is_idle INTEGER DEFAULT 0);
+      INSERT INTO thread VALUES(1,100,42,'main',0);
+      CREATE TABLE thread_track(id INTEGER PRIMARY KEY,utid INTEGER);
+      INSERT INTO thread_track VALUES(1,1);
+      CREATE TABLE slice(id INTEGER PRIMARY KEY,track_id INTEGER,ts INTEGER,dur INTEGER,name TEXT,depth INTEGER DEFAULT 0);
+      INSERT INTO slice VALUES(10,1,10000000,12000000,'selected',0);
+      CREATE TABLE android_startups(startup_id INTEGER,package TEXT,startup_type TEXT,ts INTEGER,dur INTEGER);
+      INSERT INTO android_startups VALUES(7,'com.example.app','cold',10000000,12000000);
+      CREATE TABLE android_startup_threads(startup_id INTEGER,utid INTEGER,is_main_thread INTEGER,ts INTEGER,dur INTEGER);
+      INSERT INTO android_startup_threads VALUES(7,1,1,10000000,12000000);
+      CREATE TABLE thread_state(id INTEGER PRIMARY KEY,ts INTEGER,dur INTEGER,cpu INTEGER,ucpu INTEGER,
+        utid INTEGER,state TEXT,io_wait INTEGER,blocked_function TEXT,waker_utid INTEGER,irq_context INTEGER);
+      INSERT INTO thread_state VALUES
+        (1,10000000,2000000,NULL,NULL,1,'D',NULL,NULL,NULL,NULL),
+        (2,12000000,2000000,NULL,NULL,1,'D',0,'',NULL,NULL),
+        (3,14000000,2000000,NULL,NULL,1,'D',1,'io_schedule',NULL,NULL),
+        (4,16000000,2000000,NULL,NULL,1,'D',NULL,'filemap_fault',NULL,NULL),
+        (5,18000000,2000000,NULL,NULL,1,'S',NULL,'futex_wait',NULL,NULL),
+        (6,20000000,2000000,NULL,NULL,1,'D',0,'mutex_lock',NULL,NULL);
+    `);
+    return db;
+  };
+
+  const common = {
+    package: 'com.example.app', 'package|': 'com.example.app',
+    start_ts: '10000000', end_ts: '22000000', startup_id: '7', startup_type: 'cold',
+    '__process_scope.upid': '42', 'upid|0': '42', 'pid|0': '0',
+    'top_n|10': '10', 'top_k|10': '10', 'top_k|20': '20', 'min_block_ms|1': '1',
+    'target_process.data[0].upid': '42',
+  };
+
+  const expectStateRows = (rows: Array<Record<string, any>>, blockedColumn: string) => {
+    expect(rows.find(row => row.state === 'D' && row.io_wait === null && row[blockedColumn] === null))
+      .toMatchObject({evidence_strength: 'ambiguous_uninterruptible_wait'});
+    expect(rows.find(row => row.state === 'D' && row.io_wait === 0 && row[blockedColumn] === null))
+      .toMatchObject({evidence_strength: 'ambiguous_uninterruptible_wait'});
+    expect(rows.find(row => row.state === 'D' && row.io_wait === 1 && row[blockedColumn] === 'io_schedule'))
+      .toMatchObject({evidence_strength: 'direct_io_wait'});
+    expect(rows.find(row => row.state === 'D' && row.io_wait === null && row[blockedColumn] === 'filemap_fault'))
+      .toMatchObject({evidence_strength: 'inferred_io_or_page_cache'});
+    expect(rows.find(row => row.state === 'S' && row.io_wait === null && row[blockedColumn] === 'futex_wait'))
+      .toMatchObject({evidence_strength: 'lock_wait'});
+  };
+
+  it('preserves NULL, explicit false and true in startup_hot_slice_states', () => {
+    const db = fixture();
+    try {
+      const skill = loadSkill('atomic/startup_hot_slice_states.skill.yaml');
+      const rows = db.prepare(render(withFragments(skill), common)).all() as Array<Record<string, any>>;
+      expectStateRows(rows, 'blocked_functions');
+      db.exec('DELETE FROM thread_state');
+      expect((db.prepare(render(withFragments(skill), common)).get() as Record<string, any>)).toMatchObject({
+        state: 'NotObserved', io_wait: null, blocked_functions: null,
+        evidence_strength: 'state_coverage_missing',
+      });
+    } finally { db.close(); }
+  });
+
+  it('preserves NULL, explicit false and true in startup_main_thread_states_in_range', () => {
+    const db = fixture();
+    try {
+      const skill = loadSkill('atomic/startup_main_thread_states_in_range.skill.yaml');
+      const rows = db.prepare(render(skill.sql, common)).all() as Array<Record<string, any>>;
+      expectStateRows(rows, 'blocked_functions');
+    } finally { db.close(); }
+  });
+
+  it('preserves NULL, explicit false and true in main_thread_states_in_range', () => {
+    const db = fixture();
+    try {
+      const skill = loadSkill('atomic/main_thread_states_in_range.skill.yaml');
+      const rows = db.prepare(render(skill.sql, common)).all() as Array<Record<string, any>>;
+      expectStateRows(rows, 'blocked_function');
+    } finally { db.close(); }
+  });
+
+  it('preserves nullable io_wait in both cpu_analysis state outputs', () => {
+    const db = fixture();
+    try {
+      const skill = loadSkill('composite/cpu_analysis.skill.yaml');
+      const main = skill.steps.find((step: any) => step.id === 'main_thread_states');
+      const mainRows = db.prepare(render(withFragments(main), common)).all() as Array<Record<string, any>>;
+      expect(mainRows.some(row => row.state === 'D' && row.io_wait === null)).toBe(true);
+      expect(mainRows.some(row => row.state === 'D' && row.io_wait === 0)).toBe(true);
+      expect(mainRows.some(row => row.state === 'D' && row.io_wait === 1)).toBe(true);
+
+      const blocked = skill.steps.find((step: any) => step.id === 'blocked_functions');
+      const blockedRows = db.prepare(render(withFragments(blocked), common)).all() as Array<Record<string, any>>;
+      expect(blockedRows.find(row => row.io_wait === 1 && row.blocked_function === 'io_schedule'))
+        .toMatchObject({evidence_strength: 'direct_io_wait'});
+      expect(blockedRows.find(row => row.io_wait === null && row.blocked_function === 'filemap_fault'))
+        .toMatchObject({evidence_strength: 'inferred_io_or_page_cache'});
+      expect(blockedRows.find(row => row.io_wait === null && row.blocked_function === 'futex_wait'))
+        .toMatchObject({evidence_strength: 'lock_wait'});
+      expect(blockedRows.find(row => row.io_wait === 0 && row.blocked_function === 'mutex_lock'))
+        .toMatchObject({evidence_strength: 'ambiguous_uninterruptible_wait'});
+    } finally { db.close(); }
+  });
+
+  it('keeps missing and empty blocking functions NULL in startup_thread_blocking_graph', () => {
+    const db = fixture();
+    try {
+      const skill = loadSkill('atomic/startup_thread_blocking_graph.skill.yaml');
+      const rows = db.prepare(render(withFragments(skill), common)).all() as Array<Record<string, any>>;
+      expect(rows.find(row => row.thread_state_id === 1)).toMatchObject({
+        blocked_state: 'D', blocked_function: null,
+        relation_status: 'observed_wakeup_not_proven_blocking_cause',
+      });
+      expect(rows.find(row => row.thread_state_id === 2)).toMatchObject({blocked_function: null});
+      expect(rows.find(row => row.thread_state_id === 3)).toMatchObject({blocked_function: 'io_schedule'});
+    } finally { db.close(); }
+  });
+});
+
+describe('startup frequency and causal candidate boundaries', () => {
+  const skill = (file: string): any => yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills', file), 'utf8'));
+  function frequency(fixture: string, start: number, end: number): any[] {
+    const db = new Database(':memory:');
+    try {
+      db.function('trace_end', () => 400_000_000);
+      db.exec(`CREATE TABLE cpu(ucpu INTEGER,cpu INTEGER,machine_id INTEGER);
+        CREATE TABLE cpu_frequency_counters(ucpu INTEGER,ts INTEGER,dur INTEGER,freq REAL);${fixture}`);
+      return db.prepare(skill('atomic/startup_freq_rampup.skill.yaml').sql
+        .replaceAll('${start_ts}', String(start)).replaceAll('${end_ts}', String(end))).all();
+    } finally { db.close(); }
+  }
+  it('clips both stage boundaries and separates identical local CPUs on different machines', () => {
+    const rows = frequency(`INSERT INTO cpu VALUES(42,7,1),(43,7,2);
+      INSERT INTO cpu_frequency_counters VALUES(42,0,175000000,1000000),(42,175000000,75000000,3000000),
+      (42,250000000,100000000,9999000),(43,0,300000000,500000);`,50_000_000,250_000_000);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ucpu:42,cpu:7,machine_id:1,early_avg_freq_mhz:1000,
+      steady_avg_freq_mhz:2500,max_freq_mhz:3000,early_covered_ns:100_000_000,
+      steady_covered_ns:100_000_000,rampup_pct:150,assessment:'later_frequency_higher_observed'});
+    expect(rows[1]).toMatchObject({ucpu:43,cpu:7,machine_id:2,early_avg_freq_mhz:500,steady_avg_freq_mhz:500});
+    expect(rows[0].claim_boundary).toContain('not_capacity_throttling_or_governor_delay_proof');
+  });
+  it('keeps the absent later phase unknown for a short launch', () => {
+    expect(frequency('INSERT INTO cpu VALUES(1,0,NULL); INSERT INTO cpu_frequency_counters VALUES(1,0,200000000,1000000);',
+      50_000_000,80_000_000)[0]).toMatchObject({early_window_ns:30_000_000,early_covered_ns:30_000_000,
+      steady_window_ns:0,steady_covered_ns:0,steady_avg_freq_mhz:null,rampup_pct:null,assessment:'no_comparison_window'});
+  });
+  it('distinguishes missing samples from observed zero frequency', () => {
+    const rows = frequency('INSERT INTO cpu VALUES(1,0,NULL),(2,1,NULL); INSERT INTO cpu_frequency_counters VALUES(2,0,200000000,0);',0,200_000_000);
+    expect(rows[0]).toMatchObject({early_avg_freq_mhz:null,steady_avg_freq_mhz:null,early_covered_ns:0,
+      max_freq_mhz:null,rampup_pct:null,assessment:'insufficient_frequency_coverage'});
+    expect(rows[1]).toMatchObject({early_avg_freq_mhz:0,steady_avg_freq_mhz:0,early_covered_ns:100_000_000,max_freq_mhz:0,rampup_pct:null});
+  });
+  it('clips unfinished samples to trace end', () => {
+    expect(frequency('INSERT INTO cpu VALUES(1,0,NULL); INSERT INTO cpu_frequency_counters VALUES(1,0,-1,2000000);',
+      300_000_000,500_000_000)[0]).toMatchObject({early_avg_freq_mhz:2000,early_covered_ns:100_000_000,
+      steady_covered_ns:0,steady_avg_freq_mhz:null,assessment:'insufficient_frequency_coverage'});
+  });
+  it('does not hide overlapping spans behind missing coverage', () => {
+    expect(frequency(`INSERT INTO cpu VALUES(1,0,NULL); INSERT INTO cpu_frequency_counters VALUES
+      (1,0,40000000,1000000),(1,20000000,40000000,2000000),(1,100000000,100000000,3000000);`,0,200_000_000)[0])
+      .toMatchObject({early_avg_freq_mhz:null,early_covered_ns:80_000_000,steady_avg_freq_mhz:3000,
+        rampup_pct:null,assessment:'overlapping_frequency_spans'});
+  });
+  function reasonFixture(code: string, until: string, fixture: string): any {
+    const db = new Database(':memory:');
+    try {
+      db.function('trace_end', () => 200_000_000);
+      db.exec(fixture);
+      const sql = skill('atomic/startup_slow_reasons.skill.yaml').steps.find((s: any) => s.id === 'slow_reason_checks').sql;
+      const branch = sql.slice(sql.indexOf(`SELECT '${code}'`),sql.indexOf(`-- ${until}:`));
+      return db.prepare(`WITH result(reason_id,reason,severity,evidence,suggestion) AS (${branch}) SELECT * FROM result`).get();
+    } finally { db.close(); }
+  }
+  it('clips nanosleep waits and leaves their calling API unconfirmed', () => {
+    const row = reasonFixture('SR11','SR12',`CREATE TABLE startup_info(ts INTEGER,dur INTEGER);
+      INSERT INTO startup_info VALUES(10000000,10000000); CREATE TABLE main_thread(utid INTEGER); INSERT INTO main_thread VALUES(1);
+      CREATE TABLE thread_state(utid INTEGER,ts INTEGER,dur INTEGER,state TEXT,blocked_function TEXT);
+      INSERT INTO thread_state VALUES(1,5000000,10000000,'S','hrtimer_nanosleep'),(1,15000000,-1,'S','hrtimer_nanosleep'),
+        (1,20000000,10000000,'S','hrtimer_nanosleep'),(1,0,10000000,'S','hrtimer_nanosleep'),(2,10000000,10000000,'S','hrtimer_nanosleep');`);
+    expect(row.evidence).toContain('10.0 ms (2 次)');
+    expect(row.reason).toContain('调用 API 尚未确认');
+  });
+  it('clips only direct-child initialization work without claiming SDK identity', () => {
+    const row = reasonFixture('SR12','SR13',`CREATE TABLE startup_info(ts INTEGER,dur INTEGER); INSERT INTO startup_info VALUES(50000000,50000000);
+      CREATE TABLE main_thread(utid INTEGER); INSERT INTO main_thread VALUES(1);
+      CREATE TABLE thread_track(id INTEGER,utid INTEGER); INSERT INTO thread_track VALUES(1,1);
+      CREATE TABLE slice(id INTEGER,track_id INTEGER,ts INTEGER,dur INTEGER,depth INTEGER,name TEXT);
+      INSERT INTO slice VALUES(1,1,0,100000000,0,'bindApplication'),(2,1,0,90000000,1,'AppInit'),(3,1,5000000,80000000,2,'NestedWork');`);
+    expect(row.evidence).toContain('80.0%');
+    expect(row.evidence).toContain('40.0 ms');
+    expect(row.reason).toContain('尚未识别 SDK 或业务身份');
+  });
+  it('keeps per-CPU frequency coverage and boundaries in the parent artifact projection', () => {
+    const child = skill('atomic/startup_freq_rampup.skill.yaml');
+    const parent = skill('composite/startup_detail.skill.yaml').steps.find((s: any) => s.id === 'freq_rampup');
+    expect(parent.display.columns).toEqual(child.display.columns);
+  });
+  it('keeps wakeup identity and provenance in the parent artifact projection', () => {
+    const child = skill('atomic/startup_thread_blocking_graph.skill.yaml');
+    const parent = skill('composite/startup_detail.skill.yaml').steps.find((s: any) => s.id === 'thread_blocking_graph');
+    expect(parent.display.columns).toEqual(child.display.columns);
+  });
+});
+
+
+describe('startup primitive unit authority', () => {
+  it.each([
+    ['startup_main_thread_slices_in_range', 'total_dur_ms', 'ms', 'proved', 'numeric_operator_proved'],
+    ['startup_main_thread_states_in_range', 'total_dur_ms', 'ms', 'proved', 'numeric_operator_proved'],
+    ['startup_sched_latency_in_range', 'total_wait_ms', 'ms', 'proved', 'numeric_operator_proved'],
+    ['startup_breakdown_in_range', 'total_dur_ms', 'ms', 'proved', 'numeric_operator_proved'],
+    ['startup_breakdown_in_range', 'avg_dur_ms', 'ms', 'proved', 'numeric_operator_proved'],
+    ['startup_breakdown_in_range', 'max_dur_ms', 'ms', 'proved', 'numeric_operator_proved'],
+    ['startup_breakdown_in_range', 'percent', '%', 'candidate', 'unit_authority_unknown'],
+  ])('retains %s explicit units without inferring ambiguous percentage scale',
+    async (name, column, unit, status, reason) => {
+    const skill = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/atomic', `${name}.skill.yaml`), 'utf8')) as any;
+    const columns = skill.display.columns.map((item: any) => item.name);
+    const row = skill.display.columns.map((item: any) => item.type === 'string' ? 'observed' : 2);
+    const executor = createSkillExecutor({query: async () => ({columns, rows: [row], durationMs: 1})});
+    executor.registerSkill(normalizeSkillDefinition(skill, `${name}.skill.yaml`)!);
+    const params = {package: 'example.app', startup_id: 1, startup_type: 'cold', start_ts: 0, end_ts: 10000000, min_dur_ns: 0, top_k: 15};
+    let executedSkill = name;
+    let inputNames = skill.inputs.map((input: any) => input.name);
+    if (name === 'startup_breakdown_in_range') {
+      const parent = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/composite/startup_analysis.skill.yaml'), 'utf8')) as any;
+      const parentStep = parent.steps.find((step: any) => step.id === 'startup_breakdown');
+      const fixture = normalizeSkillDefinition({
+        name: 'startup_breakdown_parent_fixture', version: '1.0', type: 'composite', category: 'app_lifecycle', tier: 'B',
+        meta: {display_name: 'startup breakdown parent fixture', description: 'test fixture'}, inputs: parent.inputs,
+        steps: [{...parentStep, condition: undefined, synthesize: undefined}],
+      }, 'startup_breakdown_parent_fixture.skill.yaml')!;
+      executor.registerSkill(fixture);
+      executedSkill = fixture.name;
+      inputNames = parent.inputs.map((input: any) => input.name);
+    }
+    const result = await executor.execute(executedSkill, 'trace', Object.fromEntries(
+      Object.entries(params).filter(([key]) => inputNames.includes(key))));
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    const display = result.displayResults[0];
+    const store = new ArtifactStore();
+    const id = store.store({skillId: name, data: display.data, scopeProvenance: display.scopeProvenance, sourceToolCallId: 'invoke:unit',
+      traceProvenance: buildTraceProcessorQueryProvenance({traceId: 'trace', traceSide: 'current'})});
+    expect(store.registerEvidenceCapture(id, evidenceTableFor(display)!, {evidenceRefId: 'startup-metric'})).toBe(true);
+    const reference = {artifactId: id, rowIndex: 0, column, value: 2};
+    const conclusionContract: any = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+      conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [], bindingEligibility: 'eligible',
+      claims: [{id: 'metric', kind: 'numeric', text: `Observed value is 2 ${unit}`, references: [reference],
+        semantics: {schemaVersion: 'claim_semantics@1', predicate: 'numeric.cell', polarity: 'affirmed',
+          discourse: 'asserted', quantifier: 'one', modality: 'certain', scope: {population: 'cited_rows', subjectRefs: [reference]},
+          numeric: {operator: 'eq', value: 2, unit}}}]};
+    const view = store.createEvidenceReadView({ownerKey: 'test', allowedTraces: [{traceId: 'trace', traceSide: 'current'}]});
+    const resolution = await view.resolveReferences([{key: 'unit', reference, requiredColumns: [column]}]);
+    expect(resolution.map(item => ({status: item.status, reason: 'reason' in item ? item.reason : undefined}))).toEqual([{status: 'resolved', reason: undefined}]);
+    const preparedEvidence = await prepareClaimEvidence({conclusionContract, evidenceReadView: view});
+    const verified = runClaimVerification({conclusionContract, preparedEvidence});
+    expect(verified.claimVerificationResult.claimResults[0].deterministicProof).toMatchObject({status, reason});
+    const facts = getCapturedAnchorFacts(verified.claimSupport[0].anchors[0]);
+    if (status === 'proved') {
+      expect(facts?.fields[column]).toMatchObject({unit, origin: {kind: 'skill_literal', skillId: name}});
+      expect(facts?.fields[column]).not.toHaveProperty('clock');
+    } else {
+      expect(facts?.fields[column]).toBeUndefined();
+    }
+  });
+
+  it('keeps startup breakdown units identical in the atomic producer and parent projection', () => {
+    const atomic = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/atomic/startup_breakdown_in_range.skill.yaml'), 'utf8')) as any;
+    const parentSkill = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/composite/startup_analysis.skill.yaml'), 'utf8')) as any;
+    const parent = parentSkill.steps.find((step: any) => step.id === 'startup_breakdown');
+    for (const [column, unit] of [['total_dur_ms', 'ms'], ['avg_dur_ms', 'ms'], ['max_dur_ms', 'ms']]) {
+      expect(atomic.display.columns.find((item: any) => item.name === column)?.unit).toBe(unit);
+      expect(parent.display.columns.find((item: any) => item.name === column)?.unit).toBe(unit);
+    }
+    for (const producer of [atomic.display, parent.display]) {
+      expect(producer.columns.find((item: any) => item.name === 'percent')).toMatchObject({
+        type: 'percentage', format: 'percentage',
+      });
+      expect(producer.columns.find((item: any) => item.name === 'percent')).not.toHaveProperty('unit');
+    }
+  });
+
+  it('declares the system busy percentage as an authoritative Skill value', async () => {
+    const name = 'cpu_system_context_in_range';
+    const skillDef = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/atomic', `${name}.skill.yaml`), 'utf8')) as any;
+    const origin = {kind: 'skill_literal' as const, skillId: name, stepId: 'root',
+      definitionFingerprint: 'cpu-system-context-v1', selectedSqlHash: 'sql-v1'};
+    const fields = investigationCaptureFields(skillDef.investigation_evidence, origin);
+    expect(fields.busy_pct).toMatchObject({unit: '%', metricId: 'system.cpu.busy.percentage', origin});
+    const witness = captureEvidenceTable({columns: ['busy_pct'], rows: [[68.1201377940634]]}, fields);
+    const store = new ArtifactStore();
+    store.registerStandaloneEvidenceCapture(witness, {meta: {type: 'skill_result', version: '2.0.0', source: name,
+      timestamp: 1, skillId: name, stepId: 'root', executionStatus: 'observed', evidenceRefId: 'cpu-context',
+      traceId: 'trace', traceSide: 'current'}, display: {layer: 'deep', level: 'detail', format: 'table', title: 'CPU'}});
+    const reference = {evidenceRefId: 'cpu-context', rowIndex: 0, column: 'busy_pct', value: 68.1201377940634};
+    const contract: any = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [],
+      evidenceChain: [], uncertainties: [], nextSteps: [], bindingEligibility: 'eligible', claims: [{id: 'busy', kind: 'numeric',
+        text: 'CPU busy is exactly 68.1201377940634%.', references: [reference], semantics: {schemaVersion: 'claim_semantics@1',
+          predicate: 'numeric.cell', polarity: 'affirmed', discourse: 'asserted', quantifier: 'one', modality: 'certain',
+          scope: {population: 'cited_rows', subjectRefs: [reference]}, numeric: {operator: 'eq', value: 68.1201377940634, unit: '%'}}}]};
+    const preparedEvidence = await prepareClaimEvidence({conclusionContract: contract,
+      evidenceReadView: store.createEvidenceReadView({ownerKey: 'test', allowedTraces: [{traceId: 'trace', traceSide: 'current'}]})});
+    expect(runClaimVerification({conclusionContract: contract, preparedEvidence}).claimVerificationResult.claimResults[0]
+      .deterministicProof).toMatchObject({status: 'proved', reason: 'numeric_operator_proved'});
   });
 });

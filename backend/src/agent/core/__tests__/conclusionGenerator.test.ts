@@ -16,7 +16,8 @@ import type { Finding, Intent } from '../../types';
 import type { SharedAgentContext } from '../../types/agentProtocol';
 import type { ProgressEmitter } from '../orchestratorTypes';
 import type { ModelRouter } from '../modelRouter';
-import {parseConclusionContractSidecar, parseTypedConclusionContractJson, parseConclusionContractDeclaration, renderConclusionContractSidecar,
+import {parseConclusionContractSidecar, parseTypedConclusionContractJson, parseConclusionContractDeclaration,
+  parseDeclaredRelationProposals, renderConclusionContractSidecar,
   type ConclusionContract, type ClaimSemanticsV1,
 } from '../conclusionContract';
 
@@ -1531,6 +1532,80 @@ describe('versioned conclusion declaration sidecar', () => {
     const roundTrip = parseConclusionContractSidecar(renderConclusionContractMarkdown(parsed.contract!, {includeMachineSidecar: true}));
     expect(roundTrip.contract?.claims).toEqual(original.claims);
     expect(roundTrip.contract?.relationProposals).toEqual(original.relationProposals);
+  });
+
+  it('classifies every closed relation proposal shape failure without changing admission', () => {
+    const valid = () => ({schemaVersion: 'evidence_relation_candidate@1', id: 'proposal:relation-1',
+      kind: 'comparison_delta', direction: 'subject_to_object',
+      subject: {evidenceRefId: 'subject', rowIndex: 0, rowSelector: {side: 'current'}, column: 'value', value: null},
+      object: {artifactId: 'object', rowIndex: 1}, proof: {sourceToolCallId: 'proof'},
+      proofBindings: {subject: {endpointColumn: 'subject_id', proofColumn: 'left_id'},
+        object: {endpointColumn: 'object_id', proofColumn: 'right_id'}},
+      metricColumn: 'delta', value: 1, unit: 'ms', deltaDirection: 'current_minus_reference'} as any);
+    const cases: Array<[string, (proposal: any) => void]> = [
+      ['item_not_object', proposal => {proposal.valueOf = () => null;}],
+      ['unknown_field', proposal => {proposal.PRIVATE_RELATION_KEY_CANARY = true;}],
+      ['invalid_schema_version', proposal => {proposal.schemaVersion = 'other';}],
+      ['invalid_id', proposal => {proposal.id = 'not-a-proposal';}],
+      ['invalid_kind', proposal => {proposal.kind = 'causes';}],
+      ['invalid_direction', proposal => {proposal.direction = 'forward';}],
+      ['invalid_subject', proposal => {proposal.subject = {column: 'value'};}],
+      ['invalid_object', proposal => {proposal.object = {evidenceRefId: ''};}],
+      ['invalid_proof', proposal => {proposal.proof = {private: 'PRIVATE_RELATION_VALUE_CANARY'};}],
+      ['invalid_value', proposal => {proposal.value = null;}],
+      ['invalid_unit', proposal => {proposal.unit = ' ';}],
+      ['invalid_metric_column', proposal => {proposal.metricColumn = 1;}],
+      ['invalid_delta_direction', proposal => {proposal.deltaDirection = 'reference_minus_current';}],
+      ['invalid_proof_bindings', proposal => {delete proposal.proofBindings.object;}],
+    ];
+    for (const [reason, mutate] of cases) {
+      let proposal: any = valid();
+      if (reason === 'item_not_object') proposal = null;
+      else mutate(proposal);
+      const parsed = parseDeclaredRelationProposals([proposal]);
+      expect(parsed.relationProposals).toEqual([]);
+      expect(parsed.issues).toEqual([{code: 'invalid_relation_proposal', path: 'relationProposals[0]',
+        relationProposalDiagnostic: {scope: 'item', ordinal: 1, reason}}]);
+    }
+    expect(parseDeclaredRelationProposals([valid()])).toEqual({relationProposals: [valid()], issues: []});
+  });
+
+  it('keeps endpoint null distinct from proposal null and requires both proof binding sides', () => {
+    const base = structuredClone(contract().relationProposals![0]) as any;
+    base.subject.value = null;
+    expect(parseDeclaredRelationProposals([base]).issues).toEqual([]);
+    for (const mutate of [
+      (proposal: any) => {proposal.value = null;},
+      (proposal: any) => {proposal.proofBindings = {subject: {endpointColumn: 'a', proofColumn: 'b'}};},
+      (proposal: any) => {proposal.proofBindings = {object: {endpointColumn: 'a', proofColumn: 'b'}};},
+      (proposal: any) => {proposal.proofBindings = {subject: {endpointColumn: 'a', proofColumn: 'b'},
+        object: {endpointColumn: 'c', proofColumn: 'd', PRIVATE_RELATION_KEY_CANARY: true}};},
+    ]) {
+      const proposal = structuredClone(base);
+      mutate(proposal);
+      expect(parseDeclaredRelationProposals([proposal]).issues[0].relationProposalDiagnostic?.reason)
+        .toBe(proposal.value === null ? 'invalid_value' : 'invalid_proof_bindings');
+    }
+  });
+
+  it('uses original one-based relation ordinals up to 24 and never fabricates collection or later ordinals', () => {
+    const collection = parseDeclaredRelationProposals({PRIVATE_RELATION_VALUE_CANARY: true});
+    expect(collection.issues).toEqual([{code: 'invalid_relation_proposal', path: 'relationProposals',
+      relationProposalDiagnostic: {scope: 'collection', reason: 'collection_not_array'}}]);
+    expect(collection.issues[0].relationProposalDiagnostic).not.toHaveProperty('ordinal');
+
+    const proposals = Array.from({length: 25}, (_, index) => ({...structuredClone(contract().relationProposals![0]),
+      id: `proposal:item_${index + 1}`})) as any[];
+    for (const index of [0, 23, 24]) proposals[index].kind = 'invalid';
+    const issues = parseDeclaredRelationProposals(proposals).issues;
+    expect(issues.map(issue => issue.path)).toEqual([
+      'relationProposals[0]', 'relationProposals[23]', 'relationProposals[24]',
+    ]);
+    expect(issues.map(issue => issue.relationProposalDiagnostic)).toEqual([
+      {scope: 'item', ordinal: 1, reason: 'invalid_kind'},
+      {scope: 'item', ordinal: 24, reason: 'invalid_kind'},
+      undefined,
+    ]);
   });
 
   it.each(['rowSelector', 'numeric', 'proposal_value'] as const)(

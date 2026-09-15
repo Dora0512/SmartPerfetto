@@ -920,6 +920,12 @@ export function projectOwnerHypotheses(...args: Parameters<typeof projectPrivate
   return withOwnerCodeAwareProjection(() => projectPrivateHypotheses(...args));
 }
 
+export function projectOwnerConclusionContract(
+  ...args: Parameters<typeof projectPrivateConclusionContract>
+): ReturnType<typeof projectPrivateConclusionContract> {
+  return withOwnerCodeAwareProjection(() => projectPrivateConclusionContract(...args));
+}
+
 export function projectOwnerClaimVerification(...args: Parameters<typeof projectPrivateClaimVerification>): ReturnType<typeof projectPrivateClaimVerification> {
   return withOwnerCodeAwareProjection(() => projectPrivateClaimVerification(...args));
 }

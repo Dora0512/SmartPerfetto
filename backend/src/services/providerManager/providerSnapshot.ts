@@ -135,6 +135,9 @@ const OPENAI_RUNTIME_ENV_KEYS = [
   'OPENAI_FULL_PER_TURN_MS',
   'OPENAI_QUICK_PER_TURN_MS',
   'OPENAI_CLASSIFIER_TIMEOUT_MS',
+  // Bounds how far a progressing run may be extended; a session pins it like the per-turn budget.
+  'OPENAI_MAX_RUN_TIMEOUT_MS',
+  'AGENT_MAX_RUN_TIMEOUT_MS',
 ];
 
 const PI_AGENT_CORE_RUNTIME_ENV_KEYS = [

@@ -34,6 +34,34 @@ export interface CapturedAnchorFacts {
   readonly fields: Readonly<Record<string, CapturedFieldSemantics>>;
   readonly nativeRow?: CapturedNativeRow;
 }
+
+export const MODEL_EVIDENCE_STRING_MAX_BYTES = 4096;
+export const MODEL_EVIDENCE_TRUNCATED_CELL_LIMIT = 32;
+export const MODEL_EVIDENCE_UNIT_MAX_BYTES = 64;
+
+export type ModelEvidenceProjectionUnavailableReason =
+  | 'not_table'
+  | 'unissued_witness'
+  | 'unavailable_witness'
+  | 'row_mismatch'
+  | 'duplicate_columns'
+  | 'column_mismatch'
+  | 'unsupported_raw_cell';
+
+export interface ModelEvidenceProjectionStatus {
+  status: 'exact' | 'truncated' | 'unavailable';
+  reason?: ModelEvidenceProjectionUnavailableReason;
+  truncatedCellCount?: number;
+  truncatedCells?: Array<{rowIndex: number; column: string; originalBytes: number}>;
+  truncatedCellsOmitted?: number;
+}
+
+export interface ModelEvidenceProjection<T = unknown> {
+  data: T;
+  modelProjection: ModelEvidenceProjectionStatus;
+  /** Model context only; proof authority remains in the issued witness. */
+  columnUnits?: Readonly<Record<string, string>>;
+}
 const tables = new WeakMap<EvidenceTableWitness, CapturedEvidenceTable>();
 const nativeRows = new WeakMap<EvidenceTableWitness, readonly (CapturedNativeRow | undefined)[]>();
 const rawContexts = new WeakMap<EvidenceTableWitness, Readonly<{traceId: string; traceSide: 'current' | 'reference'}>>();
@@ -80,6 +108,131 @@ export function captureEvidenceTable(data: unknown,
 
 export function capturedEvidenceTable(witness: EvidenceTableWitness): CapturedEvidenceTable | undefined {
   return tables.get(witness);
+}
+
+function boundedModelString(value: string): {value: string; originalBytes?: number} {
+  const originalBytes = Buffer.byteLength(value, 'utf8');
+  if (originalBytes <= MODEL_EVIDENCE_STRING_MAX_BYTES) return {value};
+  let retained = '';
+  let retainedBytes = 0;
+  for (const codePoint of value) {
+    const bytes = Buffer.byteLength(codePoint, 'utf8');
+    if (retainedBytes + bytes > MODEL_EVIDENCE_STRING_MAX_BYTES) break;
+    retained += codePoint;
+    retainedBytes += bytes;
+  }
+  return {value: retained, originalBytes};
+}
+
+interface DirectModelProjectionTable {
+  display: Record<string, unknown>;
+  columns: string[];
+  displayRows: unknown[][];
+  table: CapturedEvidenceTable;
+  rawIndexes: number[];
+}
+
+function directModelProjectionTable<T>(displayData: T, witness?: EvidenceTableWitness):
+  DirectModelProjectionTable | ModelEvidenceProjectionUnavailableReason {
+  const display = displayData && typeof displayData === 'object' && !Array.isArray(displayData)
+    ? displayData as Record<string, unknown> : undefined;
+  const displayColumns = Array.isArray(display?.columns) ? display.columns : undefined;
+  const displayRows = Array.isArray(display?.rows) ? display.rows : undefined;
+  if (!displayColumns || !displayRows || displayColumns.some(column => typeof column !== 'string') ||
+      displayRows.some(row => !Array.isArray(row))) return 'not_table';
+  if (!witness) return 'unissued_witness';
+  const table = capturedEvidenceTable(witness);
+  if (!table || table.unavailableReason) return 'unavailable_witness';
+  if (displayRows.length !== table.rows.length) return 'row_mismatch';
+  const columns = displayColumns as string[];
+  if (new Set(columns).size !== columns.length || new Set(table.columns).size !== table.columns.length) {
+    return 'duplicate_columns';
+  }
+  const rawIndexes = columns.map(column => table.columns.indexOf(column));
+  if (rawIndexes.some(index => index < 0) || displayRows.some(row => (row as unknown[]).length !== columns.length)) {
+    return 'column_mismatch';
+  }
+  return {display: display as Record<string, unknown>, columns,
+    displayRows: displayRows as unknown[][], table, rawIndexes};
+}
+
+function safeModelUnit(field: CapturedFieldSemantics | undefined): string | undefined {
+  const unit = field?.unit;
+  const fingerprint = field?.origin.definitionFingerprint;
+  if (!field || !['skill_literal', 'native_producer'].includes(field.origin.kind) ||
+      typeof fingerprint !== 'string' || !fingerprint.trim() || typeof unit !== 'string' ||
+      !unit || unit.trim() !== unit || Buffer.byteLength(unit, 'utf8') > MODEL_EVIDENCE_UNIT_MAX_BYTES ||
+      /[\u0000-\u001f\u007f]/u.test(unit)) return undefined;
+  return unit;
+}
+
+function columnUnitsForModel(context: DirectModelProjectionTable): Readonly<Record<string, string>> | undefined {
+  const entries = context.columns.flatMap(column => {
+    const unit = safeModelUnit(context.table.fields[column]);
+    return unit ? [[column, unit] as const] : [];
+  });
+  return entries.length > 0 ? Object.freeze(Object.fromEntries(entries)) : undefined;
+}
+
+/** Current issued, direct-mapped producer units for model context; never evidence authority. */
+export function projectEvidenceColumnUnitsForModel<T>(displayData: T, witness?: EvidenceTableWitness):
+  Readonly<Record<string, string>> | undefined {
+  const context = directModelProjectionTable(displayData, witness);
+  if (typeof context === 'string' || context.table.rows.some((row, rowIndex) =>
+    context.rawIndexes.some((index, columnIndex) => {
+      const raw = row[index];
+      if (raw === undefined) return true;
+      const projected = typeof raw === 'string' ? boundedModelString(raw).value : raw;
+      return !Object.is(context.displayRows[rowIndex][columnIndex], projected);
+    }))) return undefined;
+  return columnUnitsForModel(context);
+}
+
+/**
+ * Produce bounded, typed cells for the model from the current issued witness.
+ * This is data only: capture identity, field semantics and proof authority stay
+ * in the WeakMap-backed witness and are never copied into the projection.
+ */
+export function projectEvidenceTableForModel<T>(displayData: T, witness?: EvidenceTableWitness): ModelEvidenceProjection<T> {
+  const context = directModelProjectionTable(displayData, witness);
+  if (typeof context === 'string') {
+    return {data: displayData, modelProjection: {status: 'unavailable', reason: context}};
+  }
+  const {display, columns, table, rawIndexes} = context;
+
+  const truncatedCells: Array<{rowIndex: number; column: string; originalBytes: number}> = [];
+  let truncatedCellCount = 0;
+  const rows: EvidenceScalar[][] = [];
+  for (let rowIndex = 0; rowIndex < table.rows.length; rowIndex += 1) {
+    const projected: EvidenceScalar[] = [];
+    for (let columnIndex = 0; columnIndex < rawIndexes.length; columnIndex += 1) {
+      const raw = table.rows[rowIndex][rawIndexes[columnIndex]];
+      if (raw === undefined) {
+        return {data: displayData, modelProjection: {status: 'unavailable', reason: 'unsupported_raw_cell'}};
+      }
+      if (typeof raw === 'string') {
+        const bounded = boundedModelString(raw);
+        projected.push(bounded.value);
+        if (bounded.originalBytes !== undefined) {
+          truncatedCellCount += 1;
+          if (truncatedCells.length < MODEL_EVIDENCE_TRUNCATED_CELL_LIMIT) {
+            truncatedCells.push({rowIndex, column: columns[columnIndex], originalBytes: bounded.originalBytes});
+          }
+        }
+      } else {
+        projected.push(raw);
+      }
+    }
+    rows.push(projected);
+  }
+  const modelProjection: ModelEvidenceProjectionStatus = truncatedCellCount > 0
+    ? {status: 'truncated', truncatedCellCount, truncatedCells,
+      ...(truncatedCellCount > truncatedCells.length
+        ? {truncatedCellsOmitted: truncatedCellCount - truncatedCells.length} : {})}
+    : {status: 'exact'};
+  const columnUnits = columnUnitsForModel(context);
+  return {data: {...display, columns: [...columns], rows} as T, modelProjection,
+    ...(columnUnits ? {columnUnits} : {})};
 }
 
 /** Only the original, sealed native response can attach row identity to a new capture. */
@@ -142,3 +295,14 @@ export function bindCapturedAnchorFacts(anchor: object, witness: EvidenceTableWi
   freezeEvidenceValue(anchor);
 }
 export function getCapturedAnchorFacts(anchor: object): CapturedAnchorFacts | undefined {return anchorFacts.get(anchor);}
+
+const unreadableAnchors = new WeakMap<object, string>();
+/**
+ * Issued by the claim builder from a typed read outcome that shows only that
+ * the product could not read the cited evidence. A copied or serialized anchor
+ * carries no mark, so a reason string alone never downgrades a missing reference.
+ */
+export function markUnreadableEvidenceAnchor(anchor: object, reason: string): void {
+  if (!unreadableAnchors.has(anchor)) unreadableAnchors.set(anchor, reason);
+}
+export function unreadableEvidenceAnchorReason(anchor: object): string | undefined {return unreadableAnchors.get(anchor);}

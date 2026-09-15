@@ -66,16 +66,38 @@ describe('OpenAI native intent transport', () => {
     }
   });
 
+  it.each(['responses', 'chat_completions'] as const)('requests official DeepSeek JSON mode only for %s final semantics', async protocol => {
+    const {input, fetchImpl} = fixture(protocol);
+    input.config.baseURL = 'https://api.deepseek.com/v1';
+    input.config.lightModel = 'arbitrary-provider-model';
+    input.purpose = 'final_semantic';
+    expect(await runOpenAiIntentTransport(input)).toMatchObject({status: 'ok'});
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchImpl.mock.calls[0][1]!.body as string);
+    if (protocol === 'responses') {
+      expect(body.text).toEqual({format: {type: 'json_object'}});
+      expect(body).not.toHaveProperty('response_format');
+    } else {
+      expect(body.response_format).toEqual({type: 'json_object'});
+      expect(body).not.toHaveProperty('text');
+    }
+    expect(body).not.toHaveProperty('thinking');
+    expect(body).not.toHaveProperty('reasoning');
+  });
+
   it.each(['https://api.deepseek.com:8443/v1', 'http://api.deepseek.com/v1',
     'https://api.deepseek.com.evil.test/v1', 'https://gateway.example/api.deepseek.com/v1'])(
-    'does not change reasoning behavior for classification through %s', baseURL => {
-      return Promise.all((['responses', 'chat_completions'] as const).map(async protocol => {
+    'does not add purpose options through unrecognized endpoint %s', baseURL => {
+      return Promise.all((['responses', 'chat_completions'] as const).flatMap(protocol =>
+        (['classification', 'final_semantic'] as const).map(async purpose => {
         const {input, fetchImpl} = fixture(protocol);
-        input.config.baseURL = baseURL; input.config.lightModel = 'deepseek-v4-flash'; input.purpose = 'classification';
+        input.config.baseURL = baseURL; input.config.lightModel = 'deepseek-v4-flash'; input.purpose = purpose;
         expect(await runOpenAiIntentTransport(input)).toMatchObject({status: 'ok'});
         const body = JSON.parse(fetchImpl.mock.calls[0][1]!.body as string);
         expect(body).not.toHaveProperty('thinking'); expect(body).not.toHaveProperty('reasoning');
-      }));
+        expect(body).not.toHaveProperty('response_format'); expect(body).not.toHaveProperty('text');
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      })));
     },
   );
 

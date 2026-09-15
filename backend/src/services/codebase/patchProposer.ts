@@ -45,13 +45,78 @@ function isPatchableKind(kind: RagChunk['kind']): boolean {
   return kind === 'app_source' || kind === 'aosp' || kind === 'kernel_source';
 }
 
-function parseDiffTargetFiles(diff: string): string[] {
-  const files = new Set<string>();
-  for (const line of diff.split(/\r?\n/)) {
-    const match = line.match(/^\+\+\+\s+b\/(.+)$/) ?? line.match(/^diff --git a\/.+ b\/(.+)$/);
-    if (match?.[1] && match[1] !== '/dev/null') files.add(match[1]);
+function canonicalPatchPath(
+  value: string,
+  expectedPrefix?: 'a/' | 'b/',
+  allowDevNull = false,
+): string | null | undefined {
+  if (allowDevNull && value === '/dev/null') return null;
+  if (expectedPrefix && !value.startsWith(expectedPrefix)) return undefined;
+  const relativePath = expectedPrefix ? value.slice(expectedPrefix.length) : value;
+  if (
+    relativePath.length === 0
+    || relativePath.startsWith('/')
+    || relativePath.endsWith('/')
+    || relativePath.includes('//')
+    || relativePath.includes('\\')
+    || /^[A-Za-z]:/.test(relativePath)
+    || /[\s"'\u0000-\u001f\u007f]/u.test(relativePath)
+    || relativePath.split('/').some(segment => segment === '.' || segment === '..')
+  ) {
+    return undefined;
   }
-  return Array.from(files);
+  return relativePath;
+}
+
+function parseDiffTargetFiles(diff: string): string[] | undefined {
+  const files = new Set<string>();
+  let inHunk = false;
+  const add = (value: string, expectedPrefix?: 'a/' | 'b/', allowDevNull = false): boolean => {
+    const parsed = canonicalPatchPath(value, expectedPrefix, allowDevNull);
+    if (parsed === undefined) return false;
+    if (parsed !== null) files.add(parsed);
+    return true;
+  };
+
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith('diff --git')) {
+      inHunk = false;
+      const match = line.match(/^diff --git (a\/\S+) (b\/\S+)$/u);
+      if (!match || !add(match[1], 'a/') || !add(match[2], 'b/')) return undefined;
+      continue;
+    }
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+
+    const isPathHeader = line.startsWith('---')
+      || line.startsWith('+++')
+      || line.startsWith('rename from')
+      || line.startsWith('rename to')
+      || line.startsWith('copy from')
+      || line.startsWith('copy to');
+    if (inHunk) {
+      // Without parsing hunk line counts, these are ambiguous with a new file
+      // header. Reject rather than mistake source content for authorization.
+      if (isPathHeader) return undefined;
+      continue;
+    }
+
+    const fileHeader = line.match(/^(---|\+\+\+) (.+)$/u);
+    if (fileHeader) {
+      const prefix = fileHeader[1] === '---' ? 'a/' : 'b/';
+      if (!add(fileHeader[2], prefix, true)) return undefined;
+      continue;
+    }
+    const extendedHeader = line.match(/^(rename from|rename to|copy from|copy to) (.+)$/u);
+    if (extendedHeader) {
+      if (!add(extendedHeader[2])) return undefined;
+      continue;
+    }
+    if (isPathHeader) return undefined;
+  }
+  return files.size > 0 ? Array.from(files) : undefined;
 }
 
 export class PatchProposer {
@@ -142,8 +207,8 @@ export class PatchProposer {
     }
 
     const diffFiles = parseDiffTargetFiles(input.proposedDiff);
-    const outside = diffFiles.filter(file => !allowedFiles.has(file));
-    if (diffFiles.length === 0 || outside.length > 0) {
+    const outside = diffFiles?.filter(file => !allowedFiles.has(file)) ?? [];
+    if (!diffFiles || outside.length > 0) {
       this.record(input.turn ?? 0, input.contextChunkIds, 'patch_unverified');
       return {
         patchProposalId,
@@ -161,6 +226,7 @@ export class PatchProposer {
 
     const apply = spawnSync('git', [
       ...hardenedGitPrefixArguments(ref.rootRealpath),
+      `--work-tree=${ref.rootRealpath}`,
       'apply',
       '--check',
       '-',

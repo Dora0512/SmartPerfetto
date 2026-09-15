@@ -171,7 +171,7 @@
       "goldenPoints": [
         "Treat the trace marker occurrence and duration as trace-authoritative facts; a CodeRef alone cannot prove that the event occurred.",
         "Identify StartupHooks.initializeOnMainThread in StartupHooks.kt with the exact generated line and call chain.",
-        "Map the trace marker to the source mechanism and recommend the bounded post-first-frame seam without exposing raw source text."
+        "Map the trace marker to the source mechanism established by the exact authorized read and recommend the bounded post-first-frame seam; owner-facing quotations are allowed with relative source references, while credentials, private canaries, registered absolute roots, and private-knowledge material outside the authorized inputs remain excluded."
       ],
       "split": "holdout",
       "createdAt": "2026-08-28T00:00:00.000Z"

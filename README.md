@@ -100,8 +100,8 @@ The complete prerequisites and distribution choices are in the
 ### 2. Configure One AI Provider
 
 After the Web UI starts, open **AI Assistant Settings → Providers**, add one
-provider, save it, test it, and activate it. Local source runs may instead use
-an existing Claude Code login from the same terminal. Do not configure every
+provider, save it, test it, and activate it. Local source runs may instead configure explicit provider credentials in
+`backend/.env`. Claude Code login does not configure the SDK. Do not configure every
 runtime for the first launch; choose one provider path and follow the
 [Configuration Guide](docs/getting-started/configuration.en.md). Advanced
 Qoder users can also route models through the documented BYOK policy while
@@ -165,3 +165,5 @@ WeChat: `553000664`.
 ## System investigation across scenes
 
 Performance investigations relate critical tasks to CPU frequency, system load, thread states, CPU placement and scheduling evidence when relevant to the question. Root-cause strategy details are read in full. Answers report missing evidence explicitly; investigation coverage is assessed independently of report headings and native runtime completion. See [Basic Usage](docs/getting-started/usage.en.md).
+
+The conclusion body is retained in full. Web, CLI and exported reports expose each claim's evidence and server verification details, including failed or unchecked claims. Finding a source does not establish that a claim or root cause is verified.

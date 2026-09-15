@@ -6,10 +6,11 @@ import { createRenderer, parseOutputFormat, parseTextJsonFormat } from '../rende
 
 describe('CLI renderer', () => {
   test('renders one JSON object after completion', () => {
+    const analysisEvidence = evidenceBundle();
     const output = captureStdout(() => {
       const renderer = createRenderer({ verbose: false, useColor: false, format: 'json' });
       renderer.onEvent({ type: 'progress', content: { phase: 'x', message: 'ignored' } } as any);
-      renderer.printConclusion('done', { confidence: 0.8, rounds: 2, durationMs: 1234 });
+      renderer.printConclusion('done', { confidence: 0.8, rounds: 2, durationMs: 1234, analysisEvidence });
       renderer.printCompletion({ sessionId: 's1', sessionDir: '/tmp/s1', reportPath: '/tmp/s1/report.html' });
     });
 
@@ -21,6 +22,7 @@ describe('CLI renderer', () => {
       confidence: 0.8,
       rounds: 2,
       durationMs: 1234,
+      analysisEvidence,
     });
   });
 
@@ -50,6 +52,7 @@ describe('CLI renderer', () => {
   });
 
   test('machine conclusion includes deterministic verifier verdict', () => {
+    const analysisEvidence = evidenceBundle();
     const output = captureStdout(() => {
       const renderer = createRenderer({ verbose: false, useColor: false, format: 'ndjson' });
       renderer.printConclusion('done', {
@@ -60,6 +63,7 @@ describe('CLI renderer', () => {
           unsupportedClaimCount: 0,
           issueCount: 0,
         },
+        analysisEvidence,
       });
     });
 
@@ -70,7 +74,21 @@ describe('CLI renderer', () => {
         status: 'passed',
         checkedClaimCount: 1,
       },
+      analysisEvidence,
     });
+  });
+
+  test('text output renders every claim issue and source binding exactly once', () => {
+    const output = captureStdout(() => {
+      const renderer = createRenderer({verbose: false, useColor: false, format: 'text'});
+      renderer.printConclusion('done', {analysisEvidence: evidenceBundle()});
+    });
+
+    expect(output.match(/## 证据详情|## Evidence details/g)).toHaveLength(1);
+    expect(output).toContain('issue-9');
+    expect(output).toContain('source-binding-21');
+    expect(output).toContain('evidence-ref-declared');
+    expect(output).toContain('native-anchor');
   });
 
   test('machine completion reflects failed analysis status', () => {
@@ -169,4 +187,45 @@ function captureStdout(fn: () => void): string {
     console.log = originalConsoleLog;
   }
   return output;
+}
+
+function evidenceBundle(): any {
+  return {
+    schemaVersion: 'cli_analysis_evidence@1',
+    binding: {
+      sessionId: 's1',
+      turn: 1,
+      conclusionFingerprint: 'a'.repeat(64),
+      turnMarkdownFingerprint: 'b'.repeat(64),
+      candidate: null,
+    },
+    evidenceFingerprint: 'c'.repeat(64),
+    evidence: {
+      conclusionBindingEligibility: 'eligible',
+      claims: [{id: 'claim-1', text: 'declared', references: [{evidenceRefId: 'evidence-ref-declared'}]}],
+      claimSupport: [{
+        claimId: 'claim-1', kind: 'categorical', text: 'declared', supportLevel: 'verified',
+        anchors: [{anchorId: 'native-anchor'}],
+      }],
+      claimVerificationResult: {
+        schemaVersion: 'claim_verifier@2', status: 'failed', policy: 'record_only', passed: false,
+        checkedClaimCount: 1, unsupportedClaimCount: 1,
+        claimResults: [{claimId: 'claim-1', status: 'unsupported', referenceResults: [{status: 'missing'}]}],
+        issues: Array.from({length: 9}, (_, index) => ({
+          claimId: 'claim-1', severity: 'error', code: `issue-${index + 1}`, message: `issue-${index + 1}`,
+        })),
+      },
+      identityResolutions: [],
+      investigationAssessment: null,
+      deliveryAssurance: null,
+      sourceUseDecision: null,
+      sourceReferences: [],
+      sourceClaimBindings: Array.from({length: 21}, (_, index) => ({
+        claimId: `source-binding-${index + 1}`,
+        mechanismStatus: 'compatible',
+        sourceReferenceIds: [`source-${index + 1}`],
+        traceEvidenceRefIds: [`trace-${index + 1}`],
+      })),
+    },
+  };
 }

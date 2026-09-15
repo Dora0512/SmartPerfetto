@@ -171,15 +171,30 @@ describe('constructed source/trace ground truth', () => {
     )) as Record<string, any>;
 
     expect(source).toContain(`TRACE_SOURCE_MARKER = "${groundTruth.marker}"`);
-    expect(sourceLines[groundTruth.lineRange.start - 1]).toContain('fun initializeOnMainThread');
+    expect(sourceLines[groundTruth.lineRange.start - 1]).toContain('fun initializeOnMainThread(policyFile: File)');
+    expect(sourceLines[groundTruth.sourceLines.beginLine - 1]).toContain('Trace.beginSection(TRACE_SOURCE_MARKER)');
+    expect(sourceLines[groundTruth.sourceLines.policyLine - 1])
+      .toContain('val startupPolicy = readStartupPolicySynchronously(policyFile)');
+    expect(sourceLines[groundTruth.sourceLines.readLine - 1]).toContain('policyFile.readText()');
+    expect(sourceLines[groundTruth.sourceLines.endLine - 1]).toContain('Trace.endSection()');
+    expect(sourceLines[groundTruth.sourceLines.callerLine - 1])
+      .toContain('StartupHooks.initializeOnMainThread(policyFile)');
     expect(groundTruth).toMatchObject({
       relativeSourcePath: 'backend/tests/e2e/context-fixtures/app/StartupHooks.kt',
       symbol: 'StartupHooks.initializeOnMainThread',
+      firstFrameMarker: 'StartupHooks.onFirstFrame#synthetic-first-frame-boundary',
       callChain: [
         'Application.onCreate',
         'StartupHooks.initializeOnMainThread',
-        'synchronous startup policy check',
+        'StartupHooks.readStartupPolicySynchronously',
+        'File.readText',
       ],
+      compatibility: {buildLink: 'synthetic_constructed_pair_only', causalStatus: 'candidate',
+        baseAndroidStartupLinked: false},
+      traceFacts: {selectedThreadStateNs: {Running: 22_000_000, D: 20_000_000, total: 42_000_000},
+        firstFrame: {marker: 'StartupHooks.onFirstFrame#synthetic-first-frame-boundary',
+          process: 'com.smartperfetto.fixture', thread: 'main', atNs: 200_000_000,
+          durationNs: 1_000_000, markerEndsBeforeStart: true}},
       trace: {
         materialization: 'committed-base-plus-overlay',
         overlaySha256: caseDefinition.trace.sha256,
@@ -334,7 +349,7 @@ describe('real-provider semantic delta wrapper contract', () => {
     ) => string[];
     evaluateSemanticConditionReport?: (input: Record<string, unknown>) => Record<string, any>;
     runSemanticPreflight: (options: Record<string, unknown>) => Record<string, unknown>;
-    scenarioSliceSelector: (caseId: string, scenario: unknown) => Record<string, string>;
+    scenarioSliceSelector: (caseId: string, scenario: unknown, targetName: unknown) => Record<string, string>;
     realProviderAvailability?: (
       runtime: string,
       env?: Record<string, string | undefined>,
@@ -391,11 +406,29 @@ describe('real-provider semantic delta wrapper contract', () => {
   it('uses one scenario-derived target for all source conditions without changing any query', () => {
     const scenario = JSON.parse(fs.readFileSync(path.join(repoRoot,
       'Trace/constructed/source-analysis-semantic/scenario.json'), 'utf8'));
-    const selected = wrapper.scenarioSliceSelector('source-analysis-semantic', scenario);
+    const groundTruth = loadConstructedSourceGroundTruth(repoRoot);
+    const selected = wrapper.scenarioSliceSelector('source-analysis-semantic', scenario, groundTruth.traceFacts.marker);
+    expect(groundTruth.traceFacts.marker).toBe(groundTruth.marker);
     expect(selected).toEqual({processName: 'com.smartperfetto.fixture', threadName: 'main',
       eventName: 'StartupHooks.initializeOnMainThread#before-first-frame-sync-policy'});
+    const selectedSignal = scenario.signals.find((signal: Record<string, unknown>) =>
+      signal.type === 'atrace-slice' && signal.name === selected.eventName);
+    const firstFrame = scenario.signals.find((signal: Record<string, unknown>) =>
+      signal.type === 'atrace-slice' && signal.name === 'StartupHooks.onFirstFrame#synthetic-first-frame-boundary');
+    expect(selectedSignal).toMatchObject({at_ns: '120000000', duration_ns: '42000000',
+      process: 'app', thread: 'main'});
+    expect(firstFrame).toMatchObject({at_ns: '200000000', duration_ns: '1000000',
+      process: 'app', thread: 'main'});
+    expect(Number(selectedSignal.at_ns) + Number(selectedSignal.duration_ns)).toBeLessThan(Number(firstFrame.at_ns));
+    expect(scenario.signals.filter((signal: Record<string, unknown>) => signal.type === 'sched-running' &&
+      signal.thread === 'main' && ['120000000', '148000000', '199000000'].includes(String(signal.at_ns))))
+      .toEqual([
+        expect.objectContaining({at_ns: '120000000', duration_ns: '8000000', end_state: 'D'}),
+        expect.objectContaining({at_ns: '148000000', duration_ns: '14000000', end_state: 'S'}),
+        expect.objectContaining({at_ns: '199000000', duration_ns: '3000000', end_state: 'S'}),
+      ]);
     const originalQueries = [
-      '诊断这次启动变慢的主要机制，区分本次 Trace 事实与源码机制解释。',
+      '诊断选中的启动标记区间的主要耗时机制，区分本次 Trace 事实与源码机制解释。',
       'Trace 中 StartupHooks.initializeOnMainThread#before-first-frame-sync-policy 这个标记区间持续多久？只回答 Trace 中的量化事实。',
       '指出本次启动标记对应的源码位置、调用链和最小可操作修改点。',
     ];
@@ -413,13 +446,26 @@ describe('real-provider semantic delta wrapper contract', () => {
     }
     const durationChanged = structuredClone(scenario);
     durationChanged.signals.forEach((signal: Record<string, unknown>) => { signal.duration_ns = '999'; });
-    expect(wrapper.scenarioSliceSelector('source-analysis-semantic', durationChanged)).toEqual(selected);
+    expect(wrapper.scenarioSliceSelector('source-analysis-semantic', durationChanged, groundTruth.traceFacts.marker)).toEqual(selected);
     const ambiguous = structuredClone(scenario);
-    ambiguous.signals.push(ambiguous.signals[ambiguous.signals.length - 1]);
-    expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', ambiguous)).toThrow('exactly one target slice');
+    ambiguous.signals.push(structuredClone(selectedSignal));
+    expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', ambiguous, groundTruth.traceFacts.marker))
+      .toThrow('exactly one target slice');
+    for (const targetName of [undefined, null, 7, ' ']) {
+      expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', scenario, targetName))
+        .toThrow('receive one target slice name');
+    }
+    expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', scenario,
+      'SmartPerfetto::CASE::source-analysis-semantic'))
+      .toThrow('cannot select its case marker');
+    const missingSignals = structuredClone(scenario);
+    missingSignals.signals = undefined;
+    expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', missingSignals,
+      groundTruth.traceFacts.marker)).toThrow('signals must be an array');
     const missingActor = structuredClone(scenario);
     missingActor.actors.threads = [];
-    expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', missingActor)).toThrow('identities are missing or ambiguous');
+    expect(() => wrapper.scenarioSliceSelector('source-analysis-semantic', missingActor, groundTruth.traceFacts.marker))
+      .toThrow('identities are missing or ambiguous');
   });
 
   it('writes unavailable preflight evidence without starting a provider or claiming full acceptance', () => {
@@ -445,7 +491,7 @@ describe('real-provider semantic delta wrapper contract', () => {
   it('keeps the real privacy canary inside the unchanged source ground-truth read window', () => {
     const groundTruth = loadConstructedSourceGroundTruth(repoRoot);
     const lines = fs.readFileSync(path.join(sourceRoot, 'StartupHooks.kt'), 'utf8').split(/\r?\n/);
-    expect(lines[8]).toContain('fun initializeOnMainThread()');
+    expect(lines[groundTruth.lineRange.start - 1]).toContain('fun initializeOnMainThread(policyFile: File)');
     expect(lines.slice(groundTruth.lineRange.start - 1, groundTruth.lineRange.end).join('\n'))
       .toContain('SEMANTIC_DELTA_PRIVATE_SOURCE_CANARY_NEVER_EMIT');
   });
@@ -464,12 +510,139 @@ describe('real-provider semantic delta wrapper contract', () => {
     expect(evaluatePrivacy()).toBe(false);
   });
 
-  it('keeps Claude independently available when local Claude auth exists', () => {
-    expect(wrapper.realProviderAvailability?.(
-      'claude-agent-sdk',
-      {CLAUDE_CODE_OAUTH_TOKEN: 'present'},
-      () => false,
-    )).toMatchObject({available: true});
+  it('allows authorized owner source quotes while keeping A0 and privacy canaries strict', () => {
+    const canary = 'SEMANTIC_DELTA_PRIVATE_SOURCE_CANARY_NEVER_EMIT';
+    const query = wrapper.semanticDeltaQueries!()[0];
+    const report = {
+      analysisContext: {codebaseIds: []},
+      checks: {[`forbidsText:${canary}`]: true},
+      summary: {
+        forbiddenTextMatches: {[canary]: false},
+        terminalAnalysis: {conclusion: 'val startupPolicy = "avoid synchronous disk I/O before first frame"'},
+        toolCallCounts: {},
+      },
+    };
+    const evaluate = (condition: 'A0' | 'A2' | 'A3') =>
+      wrapper.evaluateSemanticConditionReport!({query, report, condition, sourceRoot});
+
+    expect(evaluate('A0')).toMatchObject({privacyPassed: true, sourceLeakFree: false});
+    expect(evaluate('A2')).toMatchObject({privacyPassed: true, sourceLeakFree: true});
+    expect(evaluate('A3')).toMatchObject({privacyPassed: true, sourceLeakFree: true});
+
+    for (const forbiddenContent of [canary, sourceRoot]) {
+      report.summary.terminalAnalysis.conclusion = forbiddenContent;
+      for (const condition of ['A0', 'A2', 'A3'] as const) {
+        expect(evaluate(condition).privacyPassed).toBe(false);
+      }
+    }
+
+    report.summary.terminalAnalysis.conclusion = 'Safe conclusion.';
+    report.summary.forbiddenTextMatches[canary] = true;
+    for (const condition of ['A0', 'A2', 'A3'] as const) {
+      expect(evaluate(condition).privacyPassed).toBe(false);
+    }
+  });
+
+  it('does not treat Trace stack locations as source access while rejecting actual A0 source signals', () => {
+    const query = wrapper.semanticDeltaQueries!()[0];
+    const summary = {
+      terminalAnalysis: {conclusion: 'Trace stack: ActivityTaskManagerService.java:6883'},
+      conclusionHasConcreteCodeRefs: true,
+      analysisCompletedHasConcreteCodeRefs: true,
+      forbiddenTextMatches: {},
+      toolCallCounts: {execute_sql: 1},
+    };
+    const evaluate = (overrides: Record<string, unknown> = {}) =>
+      wrapper.evaluateSemanticConditionReport!({query, condition: 'A0', sourceRoot,
+        report: {analysisContext: {codebaseIds: []}, summary: {...summary, ...overrides}}});
+    expect(evaluate()).toMatchObject({privacyPassed: true, sourceLeakFree: true,
+      traceFactPassed: false, overallTaskChecksPassed: false});
+    for (const overrides of [
+      {terminalAnalysis: {conclusion: 'val startupPolicy = "not authorized"'}},
+      ...['backend/tests/e2e/context-fixtures/app/StartupHooks.kt', 'StartupHooks.kt', '[Code:']
+        .map(text => ({forbiddenTextMatches: {[text]: true}})),
+      {analysisCompletedSourceReferenceCount: 1},
+      {analysisCompletedSourceBindingCount: 1},
+      ...['search_codebase', 'read_codebase_file', 'lookup_app_source']
+        .map(tool => ({toolCallCounts: {[tool]: 1}})),
+    ]) {
+      expect(evaluate(overrides).sourceLeakFree).toBe(false);
+    }
+  });
+
+  it('requires explicit Claude runtime configuration instead of local Claude login', () => {
+    expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {
+      CLAUDE_CODE_OAUTH_TOKEN: 'local-login-token',
+    })).toEqual({
+      available: false,
+      reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
+    });
+    expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {})).toEqual({
+      available: false,
+      reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
+    });
+    expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {}, () => true)).toEqual({
+      available: false,
+      reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
+    });
+  });
+
+  it('uses a concrete Anthropic auth token when the API key is a placeholder', () => {
+    expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {
+      ANTHROPIC_API_KEY: 'your_anthropic_api_key_here',
+      ANTHROPIC_AUTH_TOKEN: 'valid-auth-token',
+    })).toEqual({available: true, credentialKind: 'ANTHROPIC_AUTH_TOKEN'});
+
+    for (const env of [
+      {ANTHROPIC_API_KEY: 'placeholder'},
+      {ANTHROPIC_AUTH_TOKEN: 'your_auth_token_here'},
+    ]) {
+      expect(wrapper.realProviderAvailability?.('claude-agent-sdk', env)).toEqual({
+        available: false,
+        reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
+      });
+    }
+  });
+
+  it.each(['1', 'TRUE', ' yes ', 'On'])(
+    'accepts the same explicit Bedrock flags as the product runtime (%s)',
+    (flag) => {
+      expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {
+        CLAUDE_CODE_USE_BEDROCK: flag,
+      })).toEqual({available: true, credentialKind: 'AWS_BEDROCK_AUTH'});
+    },
+  );
+
+  it.each(['false', 'off'])(
+    'does not accept AWS credentials when Bedrock is disabled (%s)',
+    (flag) => {
+      expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {
+        CLAUDE_CODE_USE_BEDROCK: flag,
+        AWS_PROFILE: 'default',
+        AWS_ACCESS_KEY_ID: 'test-access-key',
+        AWS_SECRET_ACCESS_KEY: 'test-secret-key',
+      })).toEqual({
+        available: false,
+        reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
+      });
+    },
+  );
+
+  it('requires both the Vertex flag and a concrete project', () => {
+    expect(wrapper.realProviderAvailability?.('claude-agent-sdk', {
+      CLAUDE_CODE_USE_VERTEX: 'true',
+      ANTHROPIC_VERTEX_PROJECT_ID: 'vertex-project',
+    })).toEqual({available: true, credentialKind: 'GOOGLE_VERTEX_AUTH'});
+    for (const env of [
+      {CLAUDE_CODE_USE_VERTEX: 'true'},
+      {CLAUDE_CODE_USE_VERTEX: 'false', ANTHROPIC_VERTEX_PROJECT_ID: 'vertex-project'},
+      {CLAUDE_CODE_USE_VERTEX: 'true', ANTHROPIC_VERTEX_PROJECT_ID: 'placeholder'},
+    ]) {
+      expect(wrapper.realProviderAvailability?.('claude-agent-sdk', env)).toEqual({
+        available: false,
+        reason: 'CLAUDE_EXPLICIT_CONFIGURATION_MISSING',
+      });
+    }
   });
 
   it('makes A0 source leakage an explicit failure instead of missing-key evidence', () => {
@@ -577,7 +750,7 @@ describe('real-provider semantic delta wrapper contract', () => {
   });
 
   it('records every missing Qoder authentication boundary without calling it a pass', () => {
-    expect(wrapper.realProviderAvailability?.('qoder-agent-sdk', {}, () => false)).toEqual({
+    expect(wrapper.realProviderAvailability?.('qoder-agent-sdk', {})).toEqual({
       available: false,
       reason:
         'DEEPSEEK_API_KEY_OR_OPENAI_API_KEY_MISSING;QODER_PERSONAL_ACCESS_TOKEN_OR_QODERCLI_PATH_MISSING',
@@ -641,6 +814,7 @@ describe('real-provider task fact configuration', () => {
 
   it('accepts verified source bindings after a located lookup without a corroborated audit ceremony', () => {
     const query = wrapper.semanticDeltaQueries()[0];
+    const groundTruth = loadConstructedSourceGroundTruth(repoRoot);
     const report = {traceId: 'trace', analysisContext: {codebaseIds: ['cb-source']},
       taskVerification: {checks: {originalClaimsVerified: true, 'fact:source_marker_duration': true},
       facts: {source_marker_duration: {matched: true, proposition: 'proved',
@@ -659,7 +833,8 @@ describe('real-provider task fact configuration', () => {
             propositionCoverage: {status: 'complete', uncovered: []},
             referenceCells: [{anchorId: 'anchor-marker', evidenceRefId: 'data-marker', column: 'dur', status: 'matched'}]}]},
           conclusionContract: {claims: [{id: 'trace-duration', kind: 'numeric'}], sourceUseDecision: {references: [{id: 'source-ref-v1-issued',
-          codebaseId: 'cb-source', lookupKind: 'body', filePath: 'StartupHooks.kt', lineRange: {start: 1, end: 20}}]}}}}};
+          codebaseId: 'cb-source', lookupKind: 'body', filePath: 'StartupHooks.kt',
+          lineRange: groundTruth.lineRange}]}}}}};
     expect(wrapper.evaluateSemanticConditionReport({query, report, condition: 'A3', sourceRoot}))
       .toMatchObject({sourceSemanticPassed: true, privacyCanaryCovered: true});
     const reference = report.summary.terminalAnalysis.conclusionContract.sourceUseDecision.references[0];

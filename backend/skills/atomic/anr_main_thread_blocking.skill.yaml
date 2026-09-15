@@ -266,8 +266,28 @@ steps:
       layer: list
       title: "主线程唤醒链（谁唤醒了主线程）"
       columns:
+        - {name: upid, label: "upid", type: number}
+        - {name: utid, label: "utid", type: number}
+        - {name: thread_state_id, label: "等待事件ID", type: number}
+        - {name: raw_start_ts, label: "原始等待开始", type: timestamp, unit: ns}
+        - {name: raw_end_ts, label: "原始等待结束", type: timestamp, unit: ns}
+        - {name: start_ts, label: "窗口内等待开始", type: timestamp, unit: ns}
+        - {name: end_ts, label: "窗口内等待结束", type: timestamp, unit: ns}
+        - {name: is_unfinished, label: "未结束等待", type: number}
+        - {name: left_censored, label: "左边界裁剪", type: number}
+        - {name: right_censored, label: "右边界裁剪", type: number}
+        - {name: wakeup_state_id, label: "后继状态ID", type: number}
+        - {name: waker_utid, label: "唤醒线程身份", type: number}
+        - {name: waker_upid, label: "唤醒进程身份", type: number}
+        - {name: observed_waker_utid, label: "原始唤醒线程字段", type: number}
+        - {name: irq_context, label: "IRQ上下文", type: number}
+        - {name: wakeup_status, label: "唤醒证据状态", type: string}
+        - {name: relation_status, label: "关系证据边界", type: string}
+        - {name: evidence_scope, label: "证据范围", type: string}
+        - {name: wait_span_count, label: "等待区间数", type: number}
+        - {name: blocked_state, label: "等待状态", type: string}
         - name: ts
-          label: "唤醒时间"
+          label: "后继 Runnable 事件时间"
           type: timestamp
           unit: ns
           clickAction: navigate_timeline
@@ -278,7 +298,7 @@ steps:
           label: "唤醒者进程"
           type: string
         - name: sleep_dur_ms
-          label: "Sleep 时长(ms)"
+          label: "窗口内等待时长(ms)"
           type: duration
           format: duration_ms
           unit: ms
@@ -286,60 +306,62 @@ steps:
           label: "阻塞函数"
           type: string
         - name: wakeup_count
-          label: "唤醒次数"
+          label: "有唤醒元数据的事件数"
           type: number
           format: compact
+    sql_fragments:
+      - fragments/system_thread_state_spans.sql
     sql: |
-      WITH analysis_window AS (
-        SELECT
-          COALESCE(${start_ts},
-            CASE WHEN ${anr_ts} IS NOT NULL THEN ${anr_ts} - 5000000000 ELSE NULL END,
-            (SELECT MIN(ts) FROM thread_state)
-          ) as w_start,
-          COALESCE(${end_ts},
-            CASE WHEN ${anr_ts} IS NOT NULL THEN ${anr_ts} + 1000000000 ELSE NULL END,
-            (SELECT MAX(ts + dur) FROM thread_state)
-          ) as w_end
+      WITH system_windows AS (
+        SELECT 0 AS window_id,
+          COALESCE(${start_ts},${anr_ts}-5000000000,(SELECT start_ts FROM trace_bounds)) AS window_start_ts,
+          COALESCE(${end_ts},${anr_ts}+1000000000,(SELECT end_ts FROM trace_bounds)) AS window_end_ts
       ),
       main_thread AS (
-        SELECT t.utid
-        FROM thread t
-        JOIN process p ON t.upid = p.upid
-        WHERE p.name GLOB '${process_name}*'
-          AND (t.is_main_thread = 1 OR t.tid = p.pid)
-        LIMIT 1
+        SELECT t.utid,t.upid FROM thread t JOIN process p ON t.upid=p.upid
+        WHERE (p.name='${process_name}' OR p.name GLOB '${process_name}:*') AND t.tid=p.pid
       ),
-      wakeups AS (
-        SELECT
-          ts_tbl.ts + ts_tbl.dur as wakeup_ts,
-          ts_tbl.dur as sleep_dur,
-          ts_tbl.blocked_function,
-          ts_tbl.waker_utid,
-          wt.name as waker_thread_name,
-          wp.name as waker_process_name
-        FROM thread_state ts_tbl
-        CROSS JOIN analysis_window aw
-        CROSS JOIN main_thread mt
-        LEFT JOIN thread wt ON ts_tbl.waker_utid = wt.utid
-        LEFT JOIN process wp ON wt.upid = wp.upid
-        WHERE ts_tbl.utid = mt.utid
-          AND ts_tbl.state IN ('S', 'D')
-          AND ts_tbl.waker_utid IS NOT NULL
-          AND ts_tbl.ts + ts_tbl.dur > aw.w_start
-          AND ts_tbl.ts < aw.w_end
+      system_target_threads AS (
+        SELECT w.window_id,t.upid,t.utid,'main' AS role FROM system_windows w CROSS JOIN main_thread t
+      ),
+      wakeup_events AS (
+        SELECT e.utid,e.ts,COUNT(*) AS event_rows,
+          CASE WHEN COUNT(*)=1 THEN MAX(e.id) END AS wakeup_state_id,
+          CASE WHEN COUNT(*)=1 THEN MAX(e.waker_utid) END AS observed_waker_utid,
+          CASE WHEN COUNT(*)=1 THEN MAX(e.irq_context) END AS irq_context
+        FROM thread_state e JOIN main_thread t ON t.utid=e.utid CROSS JOIN system_windows w
+        WHERE e.state IN ('R','R+') AND e.ts>=w.window_start_ts AND e.ts<w.window_end_ts
+        GROUP BY e.utid,e.ts
+      ),
+      waits AS (
+        SELECT s.*,e.event_rows,e.wakeup_state_id,e.observed_waker_utid,e.irq_context AS wake_irq_context,
+          CASE WHEN e.event_rows=1 THEN e.ts END AS wakeup_ts,
+          CASE WHEN e.event_rows=1 AND COALESCE(e.irq_context,0)!=1 THEN e.observed_waker_utid END AS resolved_waker_utid,
+          CASE WHEN e.event_rows>1 THEN 'ambiguous_successor'
+            WHEN e.irq_context=1 THEN 'observed_irq'
+            WHEN e.observed_waker_utid IS NOT NULL THEN 'observed_thread'
+            WHEN e.event_rows=1 THEN 'successor_without_wake_metadata'
+            ELSE 'no_in_window_wakeup' END AS wakeup_status
+        FROM system_thread_state_spans s
+        LEFT JOIN wakeup_events e ON e.utid=s.utid AND e.ts=s.raw_end_ts
+        WHERE s.state IN ('S','I','D','DK') AND s.dur_ns>0
       )
-      SELECT
-        printf('%d', MIN(wakeup_ts)) as ts,
-        waker_thread_name,
-        waker_process_name,
-        ROUND(MAX(sleep_dur) / 1e6, 2) as sleep_dur_ms,
-        blocked_function,
-        COUNT(*) as wakeup_count
-      FROM wakeups
-      WHERE waker_thread_name IS NOT NULL
-      GROUP BY waker_thread_name, waker_process_name, blocked_function
-      ORDER BY MAX(sleep_dur) DESC
-      LIMIT 20
+      SELECT w.upid,w.utid,w.thread_state_id,w.state AS blocked_state,w.blocked_function,
+        printf('%d',w.raw_start_ts) AS raw_start_ts,
+        CASE WHEN w.raw_end_ts IS NOT NULL THEN printf('%d',w.raw_end_ts) END AS raw_end_ts,
+        printf('%d',w.clipped_start_ts) AS start_ts,printf('%d',w.clipped_end_ts) AS end_ts,
+        w.is_unfinished,w.left_censored,w.right_censored,
+        w.wakeup_state_id,CASE WHEN w.wakeup_ts IS NOT NULL THEN printf('%d',w.wakeup_ts) END AS ts,
+        w.observed_waker_utid,w.wake_irq_context AS irq_context,w.resolved_waker_utid AS waker_utid,wt.upid AS waker_upid,
+        COALESCE(wt.name,'unknown') AS waker_thread_name,COALESCE(wp.name,'unknown') AS waker_process_name,
+        ROUND(w.dur_ns/1e6,2) AS sleep_dur_ms,
+        CASE WHEN w.wakeup_status IN ('observed_irq','observed_thread') THEN 1 ELSE 0 END AS wakeup_count,
+        1 AS wait_span_count,w.wakeup_status,
+        'observed_wakeup_not_proven_blocking_cause' AS relation_status,
+        'one_wait_span_clipped_to_window' AS evidence_scope
+      FROM waits w LEFT JOIN thread wt ON wt.utid=w.resolved_waker_utid
+      LEFT JOIN process wp ON wp.upid=wt.upid
+      ORDER BY w.dur_ns DESC,w.thread_state_id LIMIT 20
     save_as: wakeup_chain
     optional: true
 

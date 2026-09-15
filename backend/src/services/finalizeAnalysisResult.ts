@@ -7,7 +7,7 @@ import type {AnalysisResult} from '../agent/core/orchestratorTypes';
 import type {ConclusionBindingEligibility, ConclusionContract} from '../agent/core/conclusionContract';
 import {isIssuedFinalizationContext, type RuntimeFinalizationContext} from '../agentRuntime/analysisFinalizationContext';
 import type {ComparisonReportSection} from '../agentv3/sessionStateSnapshot';
-import {getFinalReportContract, loadPromptTemplate} from '../agentv3/strategyLoader';
+import {getFinalReportContract} from '../agentv3/strategyLoader';
 import type {DataEnvelope} from '../types/dataContract';
 import {analysisDeliveryFingerprint, reportRequirementsFingerprint, sameAnalysisCandidate,
   type AnalysisCandidateIdentity, type AnalysisCaseRetrievalState, type AnalysisDeliveryContext,
@@ -19,18 +19,23 @@ import {prepareAnalysisRelations} from './evidence/analysisRelationPreparation';
 import {prepareClaimEvidence, preparedClaimEvidenceSnapshot, preparedIdentityResolutions} from './evidence/claimEvidencePreparation';
 import {runClaimVerification, collectMatchedTraceEvidenceRefIdsByClaimId,
   collectVerifiedTraceOccurrenceRefIdsByClaimId} from './verifier/claimVerificationRunner';
-import {assessFinalSemantics, FINAL_SEMANTIC_INPUT_BYTE_LIMIT, type FinalSemanticAssessment, type FinalSemanticSnapshot} from './finalSemanticAssessment';
+import {assessFinalSemantics, buildFinalSemanticPrompt, FINAL_SEMANTIC_INPUT_BYTE_LIMIT,
+  type FinalSemanticAssessment, type FinalSemanticSnapshot} from './finalSemanticAssessment';
 import {applyFinalResultQualityGate, type FinalResultComparisonIdentity, type FinalResultQualityIssue} from './finalResultQualityGate';
 import {projectCodeAwareStructuredText, withOwnerCodeAwareProjection} from './security/codeAwareOutputRegistry';
 import {projectConclusionSemanticInput} from './security/conclusionProtocolProjection';
+import {projectStoredConclusionSourceMetadata} from './security/analysisDeliveryProjection';
+import {compactSemanticEvidenceSnapshot} from './evidence/semanticEvidenceSnapshot';
+import {compactSemanticSourceSnapshot} from './evidence/semanticSourceSnapshot';
+import {compactInvestigationEvidenceForSemantic} from './evidence/investigationEvidenceLedger';
 import {applySourceLocationProofs} from './codebase/sourceLocationProof';
 import {isUnusedSourceDecision, type SourceExecutionScopeV1, type SourceUseDecisionV1} from './codebase/sourceUseDecision';
-import {projectOwnerClaimVerification, projectOwnerClaimSupport} from './security/privateAnalysisProjection';
+import {projectOwnerClaimVerification, projectOwnerClaimSupport,
+  projectOwnerConclusionContract} from './security/privateAnalysisProjection';
 import {resolveAnalysisInvestigationRequirements} from '../agentRuntime/analysisInvestigationRequirements';
 import {assessInvestigationAcquisition} from './finalInvestigationContractGate';
 import type {ResolvedAnalysisInvestigationRequirements} from '../types/analysisInvestigation';
 import type {FinalInvestigationAssessment} from '../types/analysisInvestigationAssessment';
-import {compactInvestigationEvidence} from './evidence/investigationEvidenceLedger';
 
 export interface AnalysisFinalizationOwner {
   runId: string;
@@ -302,41 +307,69 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
     let semantic: FinalSemanticAssessment | undefined;
     if (context) {
       const diagnostics = canonical.protocolDiagnostics;
+      const selectionScope = context.getSelection(owner.signal);
       const snapshot: FinalSemanticSnapshot = {inputCoverage: 'complete', declarationBindingEligibility: canonical.bindingEligibility,
         query: providerQuery?.text ?? query,
         body: result.conclusion, conclusionContract: validationContract, evidenceSnapshot, sourceUse,
         capabilitySnapshot: context.capabilityEvidence, reportRequirements: requirements, caseRetrieval,
         investigationRequirements,
+        ...(selectionScope ? {selectionScope} : {}),
         protocolDiagnostics: diagnostics ? {sidecar: {status: diagnostics.sidecar.status,
           issues: diagnostics.sidecar.issues, bindingEligibility: diagnostics.sidecar.bindingEligibility,
           rawPayload: diagnostics.sidecar.rawPayload},
           conversation: diagnostics.conversation ? {status: diagnostics.conversation.status,
             issues: diagnostics.conversation.issues} : undefined} : undefined};
-      if (context.investigationEvidence) {
-        // Keep the original whole-body/claim request budget. Omitted ledger
-        // cohorts remain visible as investigation gaps, not a second request.
-        try {
-          const remainingBytes = FINAL_SEMANTIC_INPUT_BYTE_LIMIT - 8192 -
-            Buffer.byteLength(JSON.stringify(snapshot), 'utf8') -
-            Buffer.byteLength(loadPromptTemplate('prompt-final-semantic-assessment') ?? '', 'utf8');
-          snapshot.investigationEvidence = compactInvestigationEvidence(context.investigationEvidence,
-            Math.max(0, Math.min(64 * 1024, remainingBytes)));
-        } catch {
-          // The existing semantic boundary owns missing-template/error status.
-          // Optional sizing must never prevent the accepted body from delivery.
-        }
-      }
       // This query was accepted as provider input in the same run. The echo guard
       // still protects it in output and in every other role in this snapshot.
-      const projected = withOwnerCodeAwareProjection(() => projectConclusionSemanticInput({sessionId: result.sessionId, snapshot, prepared,
-        providerQuery: providerQuery?.text, nativeDeclaration,
-        ...(isIssuedFinalizationContext(context) ? {canonicalProjection: canonical.projection,
-          canonicalCandidate: candidate, runId: context.runId} : {})}));
-      const safeSnapshot: FinalSemanticSnapshot = projected.changed
-        ? {...snapshot, inputCoverage: 'incomplete', query: '', body: result.conclusion,
+      const projectSnapshot = (value: FinalSemanticSnapshot) => withOwnerCodeAwareProjection(() =>
+        projectConclusionSemanticInput({sessionId: result.sessionId, snapshot: value, prepared,
+          providerQuery: providerQuery?.text, providerSelection: selectionScope, nativeDeclaration,
+          ...(isIssuedFinalizationContext(context) ? {canonicalProjection: canonical.projection,
+            canonicalCandidate: candidate, runId: context.runId} : {})}));
+      const safeProjection = (value: FinalSemanticSnapshot, projected: ReturnType<typeof projectSnapshot>): FinalSemanticSnapshot =>
+        projected.changed ? {...value, inputCoverage: 'incomplete',
+          inputProjectionIssue: projected.limited ? 'structure_limit' : 'content_projection', query: '', body: result.conclusion,
           conclusionContract: undefined, protocolDiagnostics: undefined, evidenceSnapshot: null,
           sourceUse: undefined, capabilitySnapshot: undefined, caseRetrieval: undefined, investigationEvidence: undefined}
-        : projected.value;
+          : compactSemanticSourceSnapshot({...projected.value,
+            evidenceSnapshot: compactSemanticEvidenceSnapshot(projected.value.evidenceSnapshot)});
+      let safeSnapshot: FinalSemanticSnapshot;
+      if (!context.investigationEvidence) {
+        safeSnapshot = safeProjection(snapshot, projectSnapshot(snapshot));
+      } else {
+        // Select the largest complete-cohort ledger projection that fits the exact
+        // shared prompt assembly. Every candidate crosses the same security boundary.
+        let low = 0, high = FINAL_SEMANTIC_INPUT_BYTE_LIMIT;
+        let best: FinalSemanticSnapshot | undefined;
+        let smallestOverLimit: {budget: number; snapshot: FinalSemanticSnapshot} | undefined;
+        let unsafe: FinalSemanticSnapshot | undefined;
+        let templateUnavailable: FinalSemanticSnapshot | undefined;
+        while (low <= high) {
+          const budget = Math.floor((low + high) / 2);
+          const ledger = compactInvestigationEvidenceForSemantic(context.investigationEvidence, budget);
+          if (!ledger) {low = budget + 1; continue;}
+          const value = {...snapshot, investigationEvidence: ledger};
+          const projected = projectSnapshot(value);
+          const candidateSnapshot = safeProjection(value, projected);
+          if (projected.changed) {unsafe = candidateSnapshot; break;}
+          let assembled: ReturnType<typeof buildFinalSemanticPrompt>;
+          try {assembled = buildFinalSemanticPrompt({snapshot: candidateSnapshot, intent: context.turnIntent,
+            traceIdentity: context.traceIdentity, registryFingerprint: context.strategyRegistry.registryFingerprint});}
+          catch {templateUnavailable = candidateSnapshot; break;}
+          if (!assembled) {templateUnavailable = candidateSnapshot; break;}
+          const bytes = Buffer.byteLength(assembled.prompt, 'utf8');
+          if (bytes <= FINAL_SEMANTIC_INPUT_BYTE_LIMIT) {best = candidateSnapshot; low = budget + 1;}
+          else {
+            if (!smallestOverLimit || budget < smallestOverLimit.budget) smallestOverLimit = {budget, snapshot: candidateSnapshot};
+            high = budget - 1;
+          }
+        }
+        const baseProjection = safeProjection(snapshot, projectSnapshot(snapshot));
+        const noLedgerFits = baseProjection.inputCoverage === 'complete'
+          ? {...baseProjection, inputCoverage: 'incomplete' as const, inputProjectionIssue: 'semantic_input_limit' as const}
+          : baseProjection;
+        safeSnapshot = unsafe ?? templateUnavailable ?? best ?? smallestOverLimit?.snapshot ?? noLedgerFits;
+      }
       assertOwner(owner);
       semantic = await assessFinalSemantics({context, canonicalCandidate: candidate, snapshot: safeSnapshot, signal: owner.signal});
       assertOwner(owner);
@@ -357,7 +390,13 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
       matchedTraceEvidenceRefIdsByClaimId: collectMatchedTraceEvidenceRefIdsByClaimId(result.claimVerificationResult),
       verifiedTraceOccurrenceRefIdsByClaimId: collectVerifiedTraceOccurrenceRefIdsByClaimId(result.claimVerificationResult)});
     if (nativeDeclaration) {
-      // The verdict is computed from original values. Only its public projection enters delivery artifacts.
+      // The verdict is computed from original values. Only its owner-safe projection enters private delivery artifacts.
+      const storedContract = projectStoredConclusionSourceMetadata(validationContract, result.sourceUseDecision);
+      const ownerContract = projectOwnerConclusionContract(result.sessionId, storedContract);
+      if (!ownerContract && ((validationContract?.claims?.length ?? 0) > 0 || result.claimVerificationResult.passed)) {
+        throw new Error('owner_conclusion_contract_projection_failed');
+      }
+      result.conclusionContract = ownerContract;
       result.claimVerificationResult = projectOwnerClaimVerification(result.sessionId, result.claimVerificationResult)!;
       result.claimSupport = projectOwnerClaimSupport(result.sessionId, result.claimSupport);
     }

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2024-2026 Gracker (Chris) | SmartPerfetto -->
 
-This investigation reached its turn budget. Use the single delivery call reserved inside the total budget to give a limited conclusion. Tools are disabled. Do not acquire new evidence. The investigation remains incomplete even if this answer finishes normally.
+This investigation exhausted its budget ({{budget_exhausted}}: turn_limit is the turn cap, timeout is the time limit). Use the single delivery call reserved inside the total budget to give a limited conclusion. Tools are disabled. Do not acquire new evidence. The investigation remains incomplete even if this answer finishes normally.
 
 Answer the original question directly. State findings supported by returned data, missing evidence, hypotheses still unresolved, and focused questions or input the user can provide next. If evidence cannot establish the root cause, explicitly say the root cause is not established. Plans, tool requests, completed phase labels, historical conclusions and earlier drafts are not independent proof. Never invent values, citation IDs, sources or evidence that did not return. Failed or pending calls provide no facts. Explain empty or omitted data honestly; do not guess omitted content.
 
@@ -16,4 +16,4 @@ Earlier emitted conclusion or draft:
 Current-run returned data and omission, failure and pending records:
 {{returned_data}}
 
-Write a complete, self-contained, concise answer and preserve the applicable conclusion declaration protocol. Do not remove existing declarations to evade verification; unsupported propositions must remain unknown or unverified. Do not claim that tools can continue running.
+Write a complete, self-contained answer and preserve the applicable conclusion declaration protocol. Retain each material finding supported by returned evidence, its interval, adjacent readable evidence and source mechanism; deduplicate wording without collapsing distinct findings into one dominant cause. An unfinished investigation still explains each known finding and its gaps; the draft itself is not evidence. Do not remove existing declarations to evade verification; unsupported propositions must remain unknown or unverified. Do not claim that tools can continue running.

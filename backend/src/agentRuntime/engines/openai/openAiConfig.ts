@@ -9,6 +9,7 @@ import { hasConcreteEnvValue, redactUrlForDiagnostics } from '../../envCredentia
 import { resolveAgentRuntimeBudgetConfig } from '../../../config';
 import {
   DEFAULT_FULL_REQUEST_TIMEOUT_MS,
+  DEFAULT_MAX_RUN_TIMEOUT_MS,
   DEFAULT_OPENAI_HISTORY_MAX_BYTES,
   DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
 } from '../../runtimeLimits';
@@ -27,6 +28,8 @@ export interface OpenAIAgentConfig {
   fullPathPerTurnMs: number;
   fullRequestTimeoutMs: number;
   streamIdleTimeoutMs: number;
+  /** Maximum run time a progressing run may be extended to; never below the base budget. */
+  maxRunTimeoutMs: number;
   maxHistoryBytes: number;
   quickPathPerTurnMs: number;
   classifierTimeoutMs: number;
@@ -120,6 +123,8 @@ export function loadOpenAIConfig(providerId?: string | null, providerScope?: Pro
         DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
       ),
     ),
+    maxRunTimeoutMs: parsePositiveIntEnv(env, 'OPENAI_MAX_RUN_TIMEOUT_MS',
+      parsePositiveIntEnv(env, 'AGENT_MAX_RUN_TIMEOUT_MS', DEFAULT_MAX_RUN_TIMEOUT_MS)),
     maxHistoryBytes: parsePositiveIntEnv(
       env,
       'OPENAI_MAX_HISTORY_BYTES',
@@ -166,6 +171,7 @@ export function getOpenAIRuntimeDiagnostics(providerId?: string | null, provider
     maxOutputTokens: config.maxOutputTokens,
     fullRequestTimeoutMs: config.fullRequestTimeoutMs,
     streamIdleTimeoutMs: config.streamIdleTimeoutMs,
+    maxRunTimeoutMs: config.maxRunTimeoutMs,
     maxHistoryBytes: config.maxHistoryBytes,
     outputLanguage: {
       value: config.outputLanguage,

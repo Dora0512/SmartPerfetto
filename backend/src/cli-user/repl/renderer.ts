@@ -14,10 +14,20 @@
  * is passed — ensures `smartperfetto analyze ... > log.txt` stays clean.
  */
 
-import {investigationStatusLines} from '../../services/analysisInvestigationPresentation';
+import {
+  claimVerificationStatusLine,
+  investigationStatusLines,
+  type ClaimVerificationStatusSummary,
+  type DeliveryVerdict,
+} from '../../services/analysisInvestigationPresentation';
 import type {AnalysisDeliveryAssurance} from '../../types/analysisDelivery';
 import type { StreamingUpdate } from '../../agent/types';
 import {localize, parseOutputLanguage} from '../../agentv3/outputLanguage';
+import {
+  loadedCliAnalysisEvidence,
+  renderCliAnalysisEvidence,
+  type CliAnalysisEvidenceOutput,
+} from '../services/analysisResultPresentation';
 
 export interface RendererOptions {
   verbose: boolean;
@@ -25,12 +35,7 @@ export interface RendererOptions {
   format?: OutputFormat;
 }
 
-interface ClaimVerificationSummary {
-  status?: string;
-  checkedClaimCount?: number;
-  unsupportedClaimCount?: number;
-  issueCount?: number;
-}
+type ClaimVerificationSummary = ClaimVerificationStatusSummary & {issueCount?: number};
 
 export type OutputFormat = 'text' | 'json' | 'ndjson';
 export type TextJsonFormat = Extract<OutputFormat, 'text' | 'json'>;
@@ -62,19 +67,26 @@ interface CompletionMetadata {
   terminationReason?: string;
   terminationMessage?: string;
   hasConclusion?: boolean;
+  /** Absent for callers that predate it; the marker then follows success/partial only. */
+  deliveryVerdict?: DeliveryVerdict;
+}
+
+interface ConclusionMetadata {
+  confidence?: number;
+  /** False when confidence is the fixed no-findings baseline, which the text view omits. */
+  confidenceGrounded?: boolean;
+  rounds?: number;
+  durationMs?: number;
+  claimVerification?: ClaimVerificationSummary;
+  investigationAssurance?: Pick<AnalysisDeliveryAssurance, 'investigation' | 'investigationEvidence'>;
+  analysisEvidence?: CliAnalysisEvidenceOutput;
 }
 
 export interface Renderer {
   format: OutputFormat;
   onEvent(update: StreamingUpdate): void;
   /** Called once after the SDK result arrives — prints the conclusion block. */
-  printConclusion(conclusion: string, meta: {
-    confidence?: number;
-    rounds?: number;
-    durationMs?: number;
-    claimVerification?: ClaimVerificationSummary;
-    investigationAssurance?: Pick<AnalysisDeliveryAssurance, 'investigation' | 'investigationEvidence'>;
-  }): void;
+  printConclusion(conclusion: string, meta: ConclusionMetadata): void;
   /** Called on fatal errors that abort the run. */
   printError(message: string): void;
   /** Called last to summarize report path + any diagnostics. */
@@ -196,13 +208,7 @@ export function createRenderer(opts: RendererOptions): Renderer {
 
   function printConclusion(
     conclusion: string,
-    meta: {
-      confidence?: number;
-      rounds?: number;
-      durationMs?: number;
-      claimVerification?: ClaimVerificationSummary;
-      investigationAssurance?: Pick<AnalysisDeliveryAssurance, 'investigation' | 'investigationEvidence'>;
-    }
+    meta: ConclusionMetadata,
   ): void {
     closeAnswerStream();
     const bar = '─'.repeat(Math.min(60, (process.stdout.columns || 80) - 4));
@@ -213,14 +219,25 @@ export function createRenderer(opts: RendererOptions): Renderer {
       parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE),
       '未生成可交付结论。', 'No deliverable conclusion was generated.',
     )));
+    if (meta.analysisEvidence) {
+      console.log('');
+      console.log(renderCliAnalysisEvidence(
+        loadedCliAnalysisEvidence(meta.analysisEvidence),
+        parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE),
+      ));
+    }
     console.log(cyan(bar));
     const bits: string[] = [];
-    if (meta.confidence !== undefined) bits.push(`confidence ${(meta.confidence * 100).toFixed(0)}%`);
+    if (meta.confidence !== undefined && meta.confidenceGrounded !== false) {
+      bits.push(`confidence ${(meta.confidence * 100).toFixed(0)}%`);
+    }
     if (meta.rounds !== undefined) bits.push(`${meta.rounds} rounds`);
     if (meta.durationMs !== undefined) bits.push(`${Math.round(meta.durationMs / 100) / 10}s`);
     if (bits.length) console.log(dim(bits.join(' · ')));
-    for (const line of investigationStatusLines(meta.investigationAssurance,
-      parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE))) console.log(dim(line));
+    const language = parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
+    const claimLine = claimVerificationStatusLine(meta.claimVerification, language);
+    if (claimLine) console.log(dim(claimLine));
+    for (const line of investigationStatusLines(meta.investigationAssurance, language)) console.log(dim(line));
   }
 
   function printError(message: string): void {
@@ -232,9 +249,17 @@ export function createRenderer(opts: RendererOptions): Renderer {
     closeAnswerStream();
     // A truncated run reached this point with a plain green tick, which is the
     // same thing a complete run prints. Say which one happened.
-    const mark = meta.success === false ? red('✗') : meta.partial ? yellow('!') : green('✓');
+    const verdict: DeliveryVerdict = meta.deliveryVerdict ??
+      (meta.success === false ? 'failed' : meta.partial ? 'partial' : 'completed');
+    const mark = verdict === 'failed' ? red('✗') : verdict === 'partial' ? yellow('!')
+      : verdict === 'unverified' ? cyan('~') : green('✓');
     console.log(`\n${mark} session ${bold(meta.sessionId)}`);
-    if (meta.partial || meta.success === false) {
+    if (verdict === 'unverified') {
+      const language = parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
+      console.log(dim(`  ${localize(language, '结论已交付，但核验未完成或覆盖不全，不能视为已核验结论',
+        'the conclusion was delivered, but its checks did not complete; do not treat it as verified')}`));
+    }
+    if (verdict === 'partial' || verdict === 'failed') {
       const language = parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
       const reason = meta.terminationReason ? ` (${meta.terminationReason})` : '';
       const message = meta.hasConclusion === false
@@ -266,6 +291,7 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
     durationMs?: number;
     claimVerification?: ClaimVerificationSummary;
     investigationAssurance?: Pick<AnalysisDeliveryAssurance, 'investigation' | 'investigationEvidence'>;
+    analysisEvidence?: CliAnalysisEvidenceOutput;
   } | null = null;
 
   function emit(obj: Record<string, unknown>, stream: NodeJS.WriteStream = process.stdout): void {
@@ -283,13 +309,7 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
 
   function printConclusion(
     conclusion: string,
-    meta: {
-      confidence?: number;
-      rounds?: number;
-      durationMs?: number;
-      claimVerification?: ClaimVerificationSummary;
-      investigationAssurance?: Pick<AnalysisDeliveryAssurance, 'investigation' | 'investigationEvidence'>;
-    },
+    meta: ConclusionMetadata,
   ): void {
     conclusionPayload = { conclusion, ...meta };
     if (format === 'ndjson') {
@@ -316,6 +336,7 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
         ...(meta.terminationReason ? { terminationReason: meta.terminationReason } : {}),
         ...(meta.terminationMessage ? { terminationMessage: meta.terminationMessage } : {}),
         ...(meta.hasConclusion !== undefined ? { hasConclusion: meta.hasConclusion } : {}),
+        ...(meta.deliveryVerdict ? { deliveryVerdict: meta.deliveryVerdict } : {}),
         type: 'complete',
         sessionId: meta.sessionId,
         sessionDir: meta.sessionDir,
@@ -331,6 +352,7 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
       ...(meta.terminationReason ? { terminationReason: meta.terminationReason } : {}),
       ...(meta.terminationMessage ? { terminationMessage: meta.terminationMessage } : {}),
       ...(meta.hasConclusion !== undefined ? { hasConclusion: meta.hasConclusion } : {}),
+      ...(meta.deliveryVerdict ? { deliveryVerdict: meta.deliveryVerdict } : {}),
       sessionId: meta.sessionId,
       sessionDir: meta.sessionDir,
       reportPath: meta.reportPath,

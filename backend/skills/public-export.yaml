@@ -1520,6 +1520,24 @@ strategies:
   backend/strategies/prompt-conversation.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime session and conversation orchestration
+  backend/strategies/prompt-execute-sql-on-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto comparison MCP tool description and runtime schema lookup
+  backend/strategies/prompt-execute-sql-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto current-trace MCP tool description and runtime schema lookup
+  backend/strategies/prompt-investigation-findings.template.md:
+    disposition: product-only
+    reason: SmartPerfetto typed-turn finding presentation and runtime strategy discovery
+  backend/strategies/prompt-invoke-skill-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto MCP artifact projection and exact process handoff guidance
+  backend/strategies/prompt-strategy-detail-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto MCP strategy catalog and detail tool description
+  backend/strategies/prompt-source-finding-binding.template.md:
+    disposition: product-only
+    reason: SmartPerfetto current-run source reference binding and visible finding contract
   backend/strategies/prompt-code-reference-contract-en.template.md:
     disposition: product-only
     reason: SmartPerfetto source lookup tools and codebase-aware report orchestration
@@ -1541,6 +1559,21 @@ strategies:
   backend/strategies/prompt-final-report-correction-system-zh.template.md:
     disposition: product-only
     reason: SmartPerfetto final-report runtime orchestration
+  backend/strategies/prompt-native-declaration-completion-en.template.md:
+    disposition: product-only
+    reason: SmartPerfetto native conclusion declaration delivery orchestration
+  backend/strategies/prompt-native-declaration-completion-zh.template.md:
+    disposition: product-only
+    reason: SmartPerfetto native conclusion declaration delivery orchestration
+  backend/strategies/prompt-propose-patch-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto provider-consented codebase patch proposal tool contract
+  backend/strategies/prompt-relation-proposal-recovery-en.template.md:
+    disposition: product-only
+    reason: SmartPerfetto native evidence relation candidate recovery protocol
+  backend/strategies/prompt-relation-proposal-recovery-zh.template.md:
+    disposition: product-only
+    reason: SmartPerfetto native evidence relation candidate recovery protocol
   backend/strategies/prompt-final-report-missing-sections-en.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
@@ -1630,6 +1663,9 @@ strategies:
   backend/strategies/prompt-runtime-sql-pitfalls-zh.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime memory and SQL retry orchestration
+  backend/strategies/prompt-sql-evidence-guidance.template.md:
+    disposition: product-only
+    reason: SmartPerfetto Skill and MCP evidence acquisition contract
   backend/strategies/prompt-runtime-trace-context-en.template.md:
     disposition: product-only
     reason: SmartPerfetto frontend pre-query and evidence-reference orchestration

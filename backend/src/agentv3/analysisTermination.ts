@@ -139,6 +139,18 @@ export function estimateAnalysisConfidence(input: {
   return partial ? capPartialConfidence(average, true) : average;
 }
 
+/**
+ * Whether a result's confidence number carries information. With no findings
+ * the estimate is the fixed baseline above, and under the typed conclusion
+ * protocol prose findings are almost always empty — Round 60 printed
+ * "confidence 35%" for all seven conclusions. User-facing surfaces omit such a
+ * number instead of presenting it as a measurement; the field itself is kept
+ * for its existing consumers (pattern memory, case evolution thresholds).
+ */
+export function analysisConfidenceIsGrounded(result: {findings?: readonly unknown[]}): boolean {
+  return (result.findings?.length ?? 0) > 0;
+}
+
 function formatPositiveInteger(value: unknown): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;

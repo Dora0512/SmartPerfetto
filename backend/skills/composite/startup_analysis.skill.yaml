@@ -125,6 +125,10 @@ steps:
         - name: startup_id
           label: "启动 ID"
           type: number
+        - name: upid
+          label: "UPID"
+          type: number
+          hidden: true
         - name: package
           label: "包名"
           type: string

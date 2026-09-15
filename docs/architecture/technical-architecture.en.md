@@ -119,7 +119,7 @@ shared `IOrchestrator` contract:
 
 | Runtime | Primary providers | Resume state |
 |---|---|---|
-| `claude-agent-sdk` | Anthropic, Bedrock, Vertex, Claude-compatible, local Claude login | Claude session id |
+| `claude-agent-sdk` | Anthropic, Bedrock, Vertex, Claude-compatible | Claude session id |
 | `openai-agents-sdk` | OpenAI Responses, OpenAI-compatible, Ollama/chat-completions | history + response id |
 | `pi-agent-core` | Provider Manager custom profile / Pi model config | opaque transcript |
 | `opencode` | OpenCode SDK and custom providers | OpenCode session id + isolated directories |
@@ -137,9 +137,9 @@ snapshot, `SMARTPERFETTO_AGENT_RUNTIME`, then the default runtime. A session
 pins its provider/runtime at creation; resume must not silently follow a newly
 activated profile.
 
-Provider Manager profiles override `.env` fallback. Docker and portable
-authentication environments differ from the host, so source-only Claude login
-cannot be documented as universal.
+Provider Manager profiles override `.env` fallback. Claude Agent SDK requires
+explicit provider/env credentials in every run mode; Claude Code login does not
+establish SDK readiness.
 
 ## 5. MCP Tool Surface
 

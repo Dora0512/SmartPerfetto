@@ -15,6 +15,8 @@
 
 import markdownit from 'markdown-it';
 import {investigationStatusLines} from './analysisInvestigationPresentation';
+import {analysisConfidenceIsGrounded} from '../agentv3/analysisTermination';
+import {projectAnalysisEvidenceForDisplay} from './evidence/analysisEvidencePresentation';
 import {
   AnalysisSession,
   CollectedResult,
@@ -1436,8 +1438,7 @@ export class HTMLReportGenerator {
                   ${this.escapeHtml(subTitle)}
                   <span style="font-weight: normal; color: #666; font-size: 12px; margin-left: 8px;">(${dataCount} 条)</span>
                 </h4>
-                ${this.generateTable(columns, subData.data.slice(0, 20))}
-                ${dataCount > 20 ? `<div style="text-align: center; padding: 8px; color: #666; font-size: 12px;">... 还有 ${dataCount - 20} 条</div>` : ''}
+                ${this.generateTable(columns, subData.data)}
               </div>
             `;
           }
@@ -1685,15 +1686,14 @@ export class HTMLReportGenerator {
     const visibleRows = rows.slice(0, defaultVisibleRows);
     const hiddenRows = hasMore ? rows.slice(defaultVisibleRows) : [];
 
-    // Build the constant column info for the table header
-    // 【P2 Fix】使用可配置的元数据列名代替硬编码
+    // Columns removed from each row must remain visible as values shared by all rows.
     const constantColumnLabels = Object.entries(constantColumns)
-      .filter(([col]) => this.isMetadataColumn(col))
       .map(([col, value]) => `<span style="color: #666; font-size: 12px; margin-left: 8px;">${this.escapeHtml(col)}: <strong>${this.escapeHtml(this.stringifyValueForDisplay(value, 160))}</strong></span>`)
       .join('');
 
     return `
       <div class="table-container ${totalRows > defaultVisibleRows ? 'scrollable' : ''}">
+        ${constantColumnLabels ? `<div class="table-constant-values">${constantColumnLabels}</div>` : ''}
         <table>
         <thead>
         <tr>
@@ -4157,6 +4157,7 @@ export class HTMLReportGenerator {
   generateAgentDrivenHTML(data: AgentDrivenReportData): string {
     const { traceId, query, result, hypotheses, dialogue, conversationTimeline, timestamp, queryHistory, conclusionHistory } = data;
     const outputLanguage = data.outputLanguage ?? this.getOutputLanguage();
+    const evidencePresentation = this.projectReportEvidence(result);
     const htmlLang = outputLanguage === 'en' ? 'en' : 'zh-CN';
     const locale = this.getReportLocale(outputLanguage);
     const dataEnvelopes = this.prepareAgentDrivenEnvelopes(data.dataEnvelopes || []);
@@ -4378,7 +4379,12 @@ export class HTMLReportGenerator {
     .claim-source-ref {
       display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: #334155; line-height: 1.45;
     }
-    .claim-source-ref-text { min-width: 0; }
+    .claim-source-ref-text { min-width: 0; overflow-wrap: anywhere; }
+    .claim-source-card pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .formal-evidence-fields { margin: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+    .formal-evidence-fields dt { font-weight: 600; color: #475569; }
+    .formal-evidence-fields dd { margin: 0 0 6px 16px; }
+    .formal-evidence-list { padding-left: 22px; }
     .claim-source-ref-detail { color: #64748b; margin-top: 2px; word-break: break-word; }
     .claim-source-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .claim-source-table th {
@@ -4625,10 +4631,13 @@ export class HTMLReportGenerator {
           <div class="value">${(result.totalDurationMs / 1000).toFixed(1)}s</div>
           <div class="label">${localize(outputLanguage, '总耗时', 'Total Duration')}</div>
         </div>
-        <div class="metric-card">
+        ${analysisConfidenceIsGrounded(result) || !result.claimVerificationResult ? `<div class="metric-card">
           <div class="value">${(result.confidence * 100).toFixed(0)}%</div>
           <div class="label">${localize(outputLanguage, '置信度', 'Confidence')}</div>
-        </div>
+        </div>` : `<div class="metric-card">
+          <div class="value">${result.claimVerificationResult.claimResults.filter(claim => claim.status === 'verified').length}/${result.claimVerificationResult.claimResults.length}</div>
+          <div class="label">${localize(outputLanguage, '已核验断言', 'Verified Claims')}</div>
+        </div>`}
         <div class="metric-card">
           <div class="value">${data.conversationTurns ?? result.rounds}</div>
           <div class="label">${localize(outputLanguage, '对话轮次', 'Conversation Turns')}</div>
@@ -4651,29 +4660,29 @@ export class HTMLReportGenerator {
     ${this.renderAnalysisReceiptSection(result.analysisReceipt, outputLanguage)}
     <div class="section">
       <h2 class="section-title">${localize(outputLanguage, '系统调查范围与证据', 'System investigation scope and evidence')}</h2>
-      ${investigationStatusLines(result.deliveryAssurance, outputLanguage).map(line => `<p>${this.escapeHtml(line)}</p>`).join('')}
-      ${result.investigationAssessment?.requirements.length ? `
+      ${investigationStatusLines(evidencePresentation?.deliveryAssurance ?? undefined, outputLanguage).map(line => `<p>${this.escapeHtml(line)}</p>`).join('')}
+      ${evidencePresentation?.investigationAssessment?.requirements.length ? `
       <details><summary>${localize(outputLanguage, '查看全部调查维度与证据引用', 'All investigation dimensions and evidence references')}</summary>
         <table><thead><tr>
           <th>${localize(outputLanguage, '调查维度', 'Investigation dimension')}</th>
           <th>${localize(outputLanguage, '适用性 / 内容覆盖', 'Applicability / content coverage')}</th>
           <th>${localize(outputLanguage, '采集状态 / 范围匹配', 'Acquisition / scope match')}</th>
           <th>${localize(outputLanguage, '证据引用', 'Evidence references')}</th>
-        </tr></thead><tbody>${result.investigationAssessment.requirements.map(requirement => `<tr>
+        </tr></thead><tbody>${evidencePresentation.investigationAssessment.requirements.map(requirement => `<tr>
           <td>${this.escapeHtml(requirement.domain)} / ${this.escapeHtml(requirement.requirementId)}</td>
           <td>${this.escapeHtml(requirement.applicability)} / ${this.escapeHtml(requirement.coverage)}</td>
           <td>${this.escapeHtml(requirement.acquisition)} / ${this.escapeHtml(requirement.scopeMatch)}</td>
           <td>${requirement.evidenceRecordIds.map(id => this.escapeHtml(id)).join(', ') || '—'}</td>
         </tr>`).join('')}</tbody></table>
       </details>` : ''}
-      ${result.investigationAssessment?.evidenceRecords?.length ? `
+      ${evidencePresentation?.investigationAssessment?.evidenceRecords?.length ? `
       <details><summary>${localize(outputLanguage, '查看全部系统证据记录', 'All system evidence records')}</summary>
         <table><thead><tr>
           <th>${localize(outputLanguage, '记录 / 指标', 'Record / metric')}</th>
           <th>${localize(outputLanguage, 'Trace / 任务 / 范围', 'Trace / task / window')}</th>
           <th>${localize(outputLanguage, '原始值 / 单位 / 覆盖', 'Original value / unit / coverage')}</th>
           <th>${localize(outputLanguage, '状态 / 来源', 'Status / provenance')}</th>
-        </tr></thead><tbody>${result.investigationAssessment.evidenceRecords.map(row => `<tr>
+        </tr></thead><tbody>${evidencePresentation.investigationAssessment.evidenceRecords.map(row => `<tr>
           <td>${this.escapeHtml(row.recordId)} / ${this.escapeHtml(row.metricId)}</td>
           <td>${this.escapeHtml(row.traceSide)}: ${this.escapeHtml(row.traceId)};
             UPID ${row.upid ?? '—'} / UTID ${row.utid ?? '—'};
@@ -4748,9 +4757,14 @@ export class HTMLReportGenerator {
       </div>`}
     </div>
 
-    ${this.renderConclusionClaimSourcesSection(result.conclusionContract, dataEnvelopes, outputLanguage)}
+    ${evidencePresentation ? this.renderConclusionClaimSourcesSection({claims: evidencePresentation.claims}, dataEnvelopes,
+      outputLanguage, evidencePresentation.claimVerificationResult ?? undefined, evidencePresentation.claimSupport) : ''}
 
-    ${this.renderClaimVerificationSection(result.claimSupport, result.claimVerificationResult, result.identityResolutions, outputLanguage)}
+    ${evidencePresentation
+      ? this.renderClaimVerificationSection(evidencePresentation.claimSupport, evidencePresentation.claimVerificationResult ?? undefined,
+          evidencePresentation.identityResolutions, outputLanguage, evidencePresentation.claims)
+      : `<div class="section"><h2 class="section-title">${localize(outputLanguage, '核验详情不可用', 'Verification details unavailable')}</h2>
+          <div class="claim-source-note">${localize(outputLanguage, '结构化记录无法安全完整呈现；上方结论正文仍保留。', 'The structured records cannot be rendered safely and completely. The conclusion body above is retained.')}</div></div>`}
 
     <div class="footer">
       <p>${localize(outputLanguage, '由 SmartPerfetto Agent-Driven Orchestrator 生成', 'Generated by SmartPerfetto Agent-Driven Orchestrator')}</p>
@@ -5364,20 +5378,16 @@ export class HTMLReportGenerator {
           }).join('')}</ul>
         </div>`
       : '';
-    const visibleBindings = bindings.slice(0, 20);
-    const bindingsHtml = visibleBindings.length > 0
+    const bindingsHtml = bindings.length > 0
       ? `<div class="source-context-column">
           <div class="source-context-title">${localize(outputLanguage, '机制绑定', 'Mechanism bindings')}</div>
           <ul class="source-context-list">
-            ${visibleBindings.map(binding => `
+            ${bindings.map(binding => `
               <li class="source-context-item">
                 <div class="source-context-name"><code>${this.escapeHtml(binding.claimId)}</code> · <code>${this.escapeHtml(binding.mechanismStatus)}</code></div>
                 <div class="source-context-meta">source=${binding.sourceReferenceIds.map(id => this.escapeHtml(id)).join(', ')} · trace=${binding.traceEvidenceRefIds.map(id => this.escapeHtml(id)).join(', ') || '-'}</div>
               </li>`).join('')}
           </ul>
-          ${bindings.length > visibleBindings.length
-            ? `<div class="empty-state">${this.escapeHtml(localize(outputLanguage, `另有 ${bindings.length - visibleBindings.length} 条绑定未展开`, `${bindings.length - visibleBindings.length} more bindings omitted`))}</div>`
-            : ''}
         </div>`
       : '';
     return `
@@ -5635,10 +5645,69 @@ export class HTMLReportGenerator {
       .filter(Boolean);
   }
 
+  /** Historical reports may carry pre-canonical field aliases. Only display adapts them. */
+  private projectReportEvidence(result: AgentDrivenReportData['result']) {
+    const read = (record: unknown, keys: readonly string[]): unknown => {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('invalid_report_record');
+      for (const key of keys) {
+        const descriptor = Object.getOwnPropertyDescriptor(record, key);
+        if (!descriptor) continue;
+        if (!('value' in descriptor) || !descriptor.enumerable) throw new Error('invalid_report_accessor');
+        return descriptor.value;
+      }
+      return undefined;
+    };
+    const mapFields = (record: unknown, fields: Record<string, readonly string[]>) => Object.fromEntries(
+      Object.entries(fields).map(([key, aliases]) => [key, read(record, aliases)]));
+    const readResultField = <K extends keyof AgentDrivenReportData['result']>(key: K) =>
+      read(result, [key]) as AgentDrivenReportData['result'][K];
+    const mapArray = (value: unknown, mapper: (item: unknown) => unknown): unknown[] => {
+      if (!Array.isArray(value)) throw new Error('invalid_report_array');
+      return Array.from({length: value.length}, (_, index) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new Error('invalid_report_array_item');
+        return mapper(descriptor.value);
+      });
+    };
+    try {
+      const contract = read(result, ['conclusionContract']);
+      if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return projectAnalysisEvidenceForDisplay({result});
+      const aliases = Object.prototype.hasOwnProperty.call(contract, 'claims') ? ['claims']
+        : ['claim_refs', 'claimRefs', 'claimReferences', '逐句数据引用']
+          .filter(key => Object.prototype.hasOwnProperty.call(contract, key));
+      if (aliases.length === 0) return projectAnalysisEvidenceForDisplay({result});
+      if (aliases.length !== 1) return undefined;
+      const claims = mapArray(read(contract, aliases), claim => ({
+        ...mapFields(claim, {
+          id: ['id', 'claimId', 'claim_id'], conclusionId: ['conclusionId', 'conclusion_id'],
+          text: ['text', 'statement', 'claim', '断言'], kind: ['kind'], supportLevel: ['supportLevel'],
+          semantics: ['semantics'], artifactRefs: ['artifactRefs'], relationRefs: ['relationRefs'],
+        }),
+        references: mapArray(read(claim, ['references', 'refs', 'evidenceRefs', 'evidence_refs']) ?? [], ref => mapFields(ref, {
+          evidenceRefId: ['evidenceRefId', 'evidence_ref_id', 'evidenceId', 'evidence_id'],
+          sourceToolCallId: ['sourceToolCallId', 'source_tool_call_id', 'toolCallId', 'tool_call_id'],
+          sourceRef: ['sourceRef', 'source_ref'], artifactId: ['artifactId'], sourceArtifactId: ['sourceArtifactId'],
+          rowIndex: ['rowIndex', 'row_index'], rowSelector: ['rowSelector', 'row_selector', 'selector'],
+          column: ['column', 'col'], value: ['value'],
+        })),
+      }));
+      return projectAnalysisEvidenceForDisplay({result: {
+        conclusionContract: {claims, bindingEligibility: read(contract, ['bindingEligibility'])},
+        claimSupport: readResultField('claimSupport'), claimVerificationResult: readResultField('claimVerificationResult'),
+        identityResolutions: readResultField('identityResolutions'), investigationAssessment: readResultField('investigationAssessment'),
+        deliveryAssurance: readResultField('deliveryAssurance'),
+      }});
+    } catch {
+      return undefined;
+    }
+  }
+
   private renderConclusionClaimSourcesSection(
     contract: unknown,
     envelopes: DataEnvelope[],
     outputLanguage: OutputLanguage = DEFAULT_OUTPUT_LANGUAGE,
+    verification?: ClaimVerificationResult,
+    claimSupport: readonly ClaimSupportV1[] = [],
   ): string {
     const contractRecord = this.asReportRecord(contract);
     if (!contractRecord) return '';
@@ -5653,17 +5722,13 @@ export class HTMLReportGenerator {
     if (claims.length === 0) return '';
 
     const sourceLookup = this.buildClaimSourceLookup(envelopes, outputLanguage);
-    const metadata = this.asReportRecord(contractRecord.metadata);
-    const derivedFromNarrativeEvidenceMatch = metadata?.derivedFromNarrativeEvidenceMatch === true ||
-      metadata?.claimDerivation === 'narrative_evidence_match' ||
-      metadata?.claimVerificationScope === 'sampled_narrative_evidence';
-    const maxClaims = 3;
-    const maxReferencesPerClaim = 1;
-    const visibleClaims = claims.slice(0, maxClaims);
-    const omittedClaims = claims.length - visibleClaims.length;
+    const uniqueClaims = this.uniqueReportClaimEntries(claims, claim =>
+      this.readReportAliasedString(claim, ['id', 'claimId', 'claim_id']));
+    const verifiedClaims = this.uniqueReportClaimEntries(verification?.claimResults ?? [], claim => claim.claimId);
 
-    const claimCards = visibleClaims.map((claim, index) => {
-      const claimId = this.readReportAliasedString(claim, ['id', 'claimId', 'claim_id']) || `claim-${index + 1}`;
+    const claimCards = claims.map((claim, index) => {
+      const declaredId = this.readReportAliasedString(claim, ['id', 'claimId', 'claim_id']);
+      const claimId = declaredId || `claim-${index + 1}`;
       const conclusionId = this.readReportAliasedString(claim, ['conclusionId', 'conclusion_id']);
       const claimText = this.readReportAliasedString(claim, ['text', 'statement', 'claim', '断言']) || '';
       const references = this.readReportAliasedRecords(claim, [
@@ -5672,17 +5737,35 @@ export class HTMLReportGenerator {
         'evidenceRefs',
         'evidence_refs',
       ]);
-      const visibleReferences = references.slice(0, maxReferencesPerClaim);
-      const omittedReferences = references.length - visibleReferences.length;
       const idLabel = [claimId, conclusionId].filter(Boolean).join(' / ');
-
-      const referencesHtml = visibleReferences.length
-        ? `
-        <ul class="claim-source-compact">
-          ${visibleReferences.map(ref => this.renderClaimReferenceSummaryItem(ref, sourceLookup, outputLanguage)).join('')}
-          ${omittedReferences > 0 ? `<li class="claim-source-ref"><span class="claim-source-ref-detail">${this.escapeHtml(localize(outputLanguage, `还有 ${omittedReferences} 条引用未展开`, `${omittedReferences} more references omitted`))}</span></li>` : ''}
-        </ul>`
-        : `<div class="empty-state">${this.escapeHtml(localize(outputLanguage, '该断言没有结构化数据引用', 'This claim has no structured data references'))}</div>`;
+      const semantics = this.asReportRecord(claim.semantics);
+      const scope = this.asReportRecord(semantics?.scope);
+      const groups: Array<[string, Record<string, unknown>[]]> = [
+        [localize(outputLanguage, '证据引用', 'Evidence references'), references],
+        [localize(outputLanguage, '制品引用', 'Artifact references'), this.readReportAliasedRecords(claim, ['artifactRefs'])],
+        [localize(outputLanguage, '主体引用', 'Subject references'), this.readReportAliasedRecords(scope, ['subjectRefs'])],
+        [localize(outputLanguage, '客体引用', 'Object references'), this.readReportAliasedRecords(scope, ['objectRefs'])],
+      ];
+      const renderedGroups = groups.filter(([, refs]) => refs.length).map(([label, refs]) => `
+        <div class="claim-source-ref-detail">${this.escapeHtml(label)}</div>
+        <ul class="claim-source-compact">${refs.map(ref => this.renderClaimReferenceSummaryItem(ref, sourceLookup, outputLanguage)).join('')}</ul>`);
+      const relationRefs = Array.isArray(claim.relationRefs) ? claim.relationRefs.filter((ref): ref is string => typeof ref === 'string') : [];
+      if (relationRefs.length) renderedGroups.push(`
+        <div class="claim-source-ref-detail">${localize(outputLanguage, '关系引用', 'Relation references')}</div>
+        <ul>${relationRefs.map(ref => `<li><code>${this.escapeHtml(ref)}</code></li>`).join('')}</ul>`);
+      const source = this.asReportRecord(semantics?.source);
+      if (source) {
+        const range = this.asReportRecord(source.lineRange);
+        const location = {sourceReferenceId: source.sourceReferenceId, filePath: source.filePath,
+          ...(range ? {lineRange: {start: range.start, end: range.end}} : {})};
+        renderedGroups.push(`<div class="claim-source-ref-detail">${localize(outputLanguage, '源码位置声明', 'Declared source location')}</div>
+          <pre>${this.escapeHtml(this.formatCompleteClaimValue(location, outputLanguage))}</pre>`);
+      }
+      const referencesHtml = renderedGroups.join('') ||
+        `<div class="empty-state">${this.escapeHtml(localize(outputLanguage, '该断言没有结构化数据引用', 'This claim has no structured data references'))}</div>`;
+      const supports = claimSupport.filter(claim => claim.claimId === declaredId);
+      const supportConflict = supports.length > 1 || supports.some(claim => claim.text !== claimText);
+      const status = declaredId && uniqueClaims.has(declaredId) && !supportConflict ? verifiedClaims.get(declaredId)?.status : undefined;
 
       return `
       <div class="claim-source-card">
@@ -5690,26 +5773,22 @@ export class HTMLReportGenerator {
           <span class="claim-source-id">${this.escapeHtml(idLabel || `claim-${index + 1}`)}</span>
           <span class="claim-source-text">${this.escapeHtml(claimText)}</span>
         </div>
+        <div class="claim-source-note">${localize(outputLanguage, '核验状态', 'Verification status')}: ${this.escapeHtml(this.formatClaimVerificationStatus(status, outputLanguage))}</div>
         ${referencesHtml}
       </div>`;
     }).join('');
 
     return `
     <div class="section">
-      <h2 class="section-title">${localize(outputLanguage, '证据引用摘要', 'Evidence Reference Summary')}</h2>
+      <h2 class="section-title">${localize(outputLanguage, '逐条结论与证据', 'Claims and Evidence')}</h2>
       <div class="claim-source-note">
         ${this.escapeHtml(localize(
           outputLanguage,
-          derivedFromNarrativeEvidenceMatch
-            ? `以下为抽样证据摘要：展示 ${visibleClaims.length}/${claims.length} 条自动匹配断言，每条最多 ${maxReferencesPerClaim} 个来源；完整机器可读契约保留在报告数据中。`
-            : `以下为证据摘要：展示 ${visibleClaims.length}/${claims.length} 条结构化断言，每条最多 ${maxReferencesPerClaim} 个来源；完整机器可读契约保留在报告数据中。`,
-          derivedFromNarrativeEvidenceMatch
-            ? `Sampled evidence summary: showing ${visibleClaims.length}/${claims.length} automatically matched claims with at most ${maxReferencesPerClaim} sources each; the full machine-readable contract remains in the report data.`
-            : `Evidence summary: showing ${visibleClaims.length}/${claims.length} structured claims with at most ${maxReferencesPerClaim} sources each; the full machine-readable contract remains in the report data.`,
+          `以下展示全部 ${claims.length} 条结构化断言及其引用；来源表匹配不等于核验通过。`,
+          `All ${claims.length} structured claims and their references are shown. Source-table matching does not establish verification.`,
         ))}
       </div>
       ${claimCards}
-      ${omittedClaims > 0 ? `<div class="claim-source-note">${this.escapeHtml(localize(outputLanguage, `还有 ${omittedClaims} 条断言未展开`, `${omittedClaims} more claims omitted`))}</div>` : ''}
     </div>`;
   }
 
@@ -5718,6 +5797,7 @@ export class HTMLReportGenerator {
     verification: ClaimVerificationResult | undefined,
     identityResolutions: IdentityResolutionV1[] | undefined,
     outputLanguage: OutputLanguage = DEFAULT_OUTPUT_LANGUAGE,
+    declarations: readonly {id?: string; text: string}[] = [],
   ): string {
     if (!verification && (!claimSupport || claimSupport.length === 0) && (!identityResolutions || identityResolutions.length === 0)) {
       return '';
@@ -5734,21 +5814,44 @@ export class HTMLReportGenerator {
       .map(([key, count]) => `${this.escapeHtml(key)}: ${count}`)
       .join(' · ');
     const status = verification?.status || 'not_checked';
-    const issueRows = (verification?.issues || []).slice(0, 12).map(issue => `
+    const supportById = this.uniqueReportClaimEntries(claimSupport ?? [], claim => claim.claimId);
+    const issueRows = (verification?.issues || []).map(issue => `
       <tr>
         <td>${this.escapeHtml(issue.severity)}</td>
-        <td>${this.escapeHtml(issue.claimId)}</td>
+        <td>${this.escapeHtml(issue.claimId)}<div>${this.escapeHtml(supportById.get(issue.claimId)?.text ||
+          localize(outputLanguage, '缺少唯一对应的断言原文', 'Unique claim text unavailable'))}</div></td>
         <td><code>${this.escapeHtml(issue.code)}</code></td>
         <td>${this.escapeHtml(issue.message)}</td>
       </tr>
     `).join('');
-    const identitySummary = (identityResolutions || []).slice(0, 8).map(item => `
+    const claimIds = new Set([
+      ...(claimSupport ?? []).map(claim => claim.claimId),
+      ...(verification?.claimResults ?? []).map(claim => claim.claimId),
+    ].filter(Boolean));
+    const claimDetails = [...claimIds].map(claimId => {
+      const supports = (claimSupport ?? []).filter(claim => claim.claimId === claimId);
+      const verdicts = (verification?.claimResults ?? []).filter(claim => claim.claimId === claimId);
+      const declared = declarations.filter(claim => claim.id === claimId);
+      const texts = new Set([...supports, ...declared].map(claim => claim.text));
+      const conflicting = supports.length > 1 || verdicts.length > 1 || declared.length > 1 || texts.size > 1;
+      const text = texts.size === 1 ? [...texts][0] : localize(outputLanguage, '缺少唯一对应的断言原文', 'Unique claim text unavailable');
+      const status = conflicting ? undefined : verdicts[0]?.status;
+      return `<div class="claim-source-card">
+        <div class="claim-source-header"><code>${this.escapeHtml(claimId)}</code> ${this.escapeHtml(text)}</div>
+        <div class="claim-source-note">${localize(outputLanguage, '核验状态', 'Verification status')}: ${this.escapeHtml(this.formatClaimVerificationStatus(status, outputLanguage))}</div>
+        ${conflicting ? `<div class="claim-source-note">${localize(outputLanguage, '重复或冲突的断言 ID，以下记录不能唯一对应为已验证结论。', 'Duplicate or conflicting claim IDs: the following records cannot identify a verified conclusion uniquely.')}</div>` : ''}
+        ${supports.length ? `<h3>${localize(outputLanguage, '声明支持与捕获证据', 'Claim support and captured evidence')}</h3>${this.renderFormalEvidenceValue(supports, outputLanguage)}` : ''}
+        ${verdicts.length ? `<h3>${localize(outputLanguage, '服务器核验记录', 'Server verification records')}</h3>${this.renderFormalEvidenceValue(verdicts, outputLanguage)}` : ''}
+      </div>`;
+    }).join('');
+    const identitySummary = (identityResolutions || []).map(item => `
       <tr>
         <td><code>${this.escapeHtml(item.identityRefId)}</code></td>
         <td>${this.escapeHtml(item.status)}</td>
         <td>${this.escapeHtml(item.target.processName || item.target.packageName || '-')}</td>
         <td>${this.escapeHtml(item.target.threadName || item.target.role || '-')}</td>
       </tr>
+      <tr><td colspan="4">${this.renderFormalEvidenceValue(item, outputLanguage)}</td></tr>
     `).join('');
 
     return `
@@ -5761,6 +5864,9 @@ export class HTMLReportGenerator {
           `Verifier status: ${status}; checked ${verification?.checkedClaimCount ?? 0} claims; unsupported ${verification?.unsupportedClaimCount ?? 0}${supportSummary ? `; support levels ${supportSummary}` : ''}`,
         ))}
       </div>
+      ${claimDetails ? `<div class="claim-source-note">${localize(outputLanguage,
+        '以下保留服务器提供的证据与核验记录。原生行身份元数据本身不构成命题或因果证明。',
+        'The following are retained server evidence and verification records. Native row identity metadata alone does not prove a proposition or causality.')}</div>${claimDetails}` : ''}
       ${issueRows ? `
       <table class="claim-source-table">
         <thead>
@@ -5789,6 +5895,19 @@ export class HTMLReportGenerator {
     </div>`;
   }
 
+  /** Values enter here only after the shared formal evidence projection. */
+  private renderFormalEvidenceValue(value: unknown, outputLanguage: OutputLanguage): string {
+    if (Array.isArray(value) && value.length) {
+      return `<ol class="formal-evidence-list">${value.map(item => `<li>${this.renderFormalEvidenceValue(item, outputLanguage)}</li>`).join('')}</ol>`;
+    }
+    const record = this.asReportRecord(value);
+    if (record && Object.keys(record).length) {
+      return `<dl class="formal-evidence-fields">${Object.entries(record).map(([key, item]) =>
+        `<dt>${this.escapeHtml(key)}</dt><dd>${this.renderFormalEvidenceValue(item, outputLanguage)}</dd>`).join('')}</dl>`;
+    }
+    return `<code>${this.escapeHtml(this.formatCompleteClaimValue(value, outputLanguage))}</code>`;
+  }
+
   private renderClaimReferenceSummaryItem(
     ref: Record<string, unknown>,
     sourceLookup: {
@@ -5812,19 +5931,15 @@ export class HTMLReportGenerator {
       'tool_call_id',
     ]);
     const sourceRef = this.readReportAliasedString(ref, ['sourceRef', 'source_ref']);
-    const combinedSource = evidenceRefId && sourceToolCallId
+    const artifactIds = ['artifactId', 'sourceArtifactId'].flatMap(key => {
+      const id = this.readReportAliasedString(ref, [key]);
+      return id ? [[key, id] as const] : [];
+    });
+    const matchedSource = evidenceRefId && sourceToolCallId
       ? sourceLookup.byEvidenceAndTool.get(this.claimSourceCombinedKey(evidenceRefId, sourceToolCallId))
-      : undefined;
-    const source = !combinedSource && evidenceRefId
-      ? sourceLookup.byEvidenceRefId.get(evidenceRefId)
-      : undefined;
-    const fallbackSource = !combinedSource && !source && sourceToolCallId
-      ? sourceLookup.byToolCallId.get(sourceToolCallId)
-      : undefined;
-    const labelSource = !combinedSource && !source && !fallbackSource && sourceRef
-      ? sourceLookup.bySourceRef.get(this.normalizeClaimSourceRef(sourceRef))
-      : undefined;
-    const matchedSource = combinedSource || source || fallbackSource || labelSource;
+      : evidenceRefId ? sourceLookup.byEvidenceRefId.get(evidenceRefId)
+      : sourceToolCallId ? sourceLookup.byToolCallId.get(sourceToolCallId)
+      : sourceRef ? sourceLookup.bySourceRef.get(this.normalizeClaimSourceRef(sourceRef)) : undefined;
     const isAmbiguousSource = Boolean(matchedSource && matchedSource.count > 1);
     const statusClass = isAmbiguousSource
       ? 'ambiguous'
@@ -5837,24 +5952,27 @@ export class HTMLReportGenerator {
       ? localize(outputLanguage, '已找到来源表', 'Source found')
       : (evidenceRefId || sourceToolCallId
         ? localize(outputLanguage, '报告中未找到', 'Missing from report')
+        : artifactIds.length ? localize(outputLanguage, '制品定位已记录，来源表未核对', 'Artifact locator recorded; source table not checked')
         : localize(outputLanguage, '缺少机器 ID', 'No machine ID'));
 
     const sourceParts = [
       sourceRef ? `${this.escapeHtml(localize(outputLanguage, '模型标签', 'Model label'))}: <code>${this.escapeHtml(sourceRef)}</code>` : '',
       matchedSource && !isAmbiguousSource ? `${this.escapeHtml(localize(outputLanguage, '报告来源', 'Report source'))}: ${this.escapeHtml(matchedSource.label)}` : '',
       matchedSource && isAmbiguousSource ? `${this.escapeHtml(localize(outputLanguage, '报告来源', 'Report source'))}: ${this.escapeHtml(localize(outputLanguage, `匹配到 ${matchedSource.count} 个来源，需补充更精确的工具调用 ID`, `${matchedSource.count} sources matched; add a more specific tool call ID`))}` : '',
-      !sourceRef && !matchedSource && (evidenceRefId || sourceToolCallId) ? this.escapeHtml(localize(outputLanguage, '机器 ID 已记录，完整 ID 见报告数据', 'Machine IDs recorded in report data')) : '',
+      evidenceRefId ? `evidenceRefId: <code>${this.escapeHtml(evidenceRefId)}</code>` : '',
+      sourceToolCallId ? `sourceToolCallId: <code>${this.escapeHtml(sourceToolCallId)}</code>` : '',
+      ...artifactIds.map(([key, id]) => `${key}: <code>${this.escapeHtml(id)}</code>`),
     ].filter(Boolean);
 
     const column = this.readReportAliasedString(ref, ['column', 'col']);
     const value = this.readReportAliasedValue(ref, ['value']);
-    const valueText = value === undefined
-      ? ''
-      : this.stringifyValueForDisplay(value, 80);
+    const valueText = Object.prototype.hasOwnProperty.call(ref, 'value')
+      ? this.formatCompleteClaimValue(value, outputLanguage) : undefined;
     const locator = this.formatClaimReferenceLocator(ref, outputLanguage);
     const detailParts = [
       locator && locator !== '-' ? this.escapeHtml(locator) : '',
-      column ? `<code>${this.escapeHtml(column)}</code>${valueText ? `=${this.escapeHtml(valueText)}` : ''}` : '',
+      column ? `<code>${this.escapeHtml(column)}</code>${valueText !== undefined ? `=${this.escapeHtml(valueText)}` : ''}`
+        : valueText !== undefined ? `value=${this.escapeHtml(valueText)}` : '',
     ].filter(Boolean);
 
     return `
@@ -5983,24 +6101,61 @@ export class HTMLReportGenerator {
   ): string {
     const parts: string[] = [];
     const rowIndex = this.readReportAliasedValue(ref, ['rowIndex', 'row_index']);
-    if (rowIndex !== undefined && rowIndex !== null && rowIndex !== '') {
-      parts.push(`${localize(outputLanguage, '行号', 'Row')}: ${String(rowIndex)}`);
+    if (['rowIndex', 'row_index'].some(key => Object.prototype.hasOwnProperty.call(ref, key))) {
+      parts.push(`${localize(outputLanguage, '行号', 'Row')}: ${this.formatCompleteClaimValue(rowIndex, outputLanguage)}`);
     }
 
     const rowSelector = this.readReportAliasedValue(ref, ['rowSelector', 'row_selector', 'selector']);
-    if (rowSelector !== undefined && rowSelector !== null && rowSelector !== '') {
-      parts.push(`${localize(outputLanguage, '行选择器', 'Row selector')}: ${this.formatReportSelector(rowSelector)}`);
+    if (['rowSelector', 'row_selector', 'selector'].some(key => Object.prototype.hasOwnProperty.call(ref, key))) {
+      parts.push(`${localize(outputLanguage, '行选择器', 'Row selector')}: ${this.formatReportSelector(rowSelector, outputLanguage)}`);
     }
 
     return parts.length ? parts.join(' / ') : '-';
   }
 
-  private formatReportSelector(selector: unknown): string {
+  private formatReportSelector(selector: unknown, outputLanguage: OutputLanguage): string {
     const record = this.asReportRecord(selector);
-    if (!record) return this.stringifyValueForDisplay(selector, 160);
+    if (!record) return this.formatCompleteClaimValue(selector, outputLanguage);
     return Object.entries(record)
-      .map(([key, value]) => `${key}=${this.stringifyValueForDisplay(value, 80)}`)
+      .map(([key, value]) => `${key}=${this.formatCompleteClaimValue(value, outputLanguage)}`)
       .join(', ');
+  }
+
+  private formatCompleteClaimValue(value: unknown, outputLanguage: OutputLanguage): string {
+    if (value === undefined) return 'undefined';
+    try {
+      const serialized = JSON.stringify(value, (_key, item: unknown) => {
+        if (item === undefined || typeof item === 'function' || typeof item === 'symbol' ||
+            typeof item === 'number' && !Number.isFinite(item)) throw new Error('non_json_reference_value');
+        return item;
+      });
+      if (serialized !== undefined) return serialized;
+    } catch { /* An invalid reference value must not prevent rendering the rest of the report. */ }
+    return localize(outputLanguage, '[无法序列化的引用值]', '[Unserializable reference value]');
+  }
+
+  private uniqueReportClaimEntries<T>(items: readonly T[], getId: (item: T) => string): Map<string, T> {
+    const entries = new Map<string, T>();
+    const duplicates = new Set<string>();
+    for (const item of items) {
+      const id = getId(item);
+      if (!id || duplicates.has(id)) continue;
+      if (entries.has(id)) {
+        entries.delete(id);
+        duplicates.add(id);
+      } else entries.set(id, item);
+    }
+    return entries;
+  }
+
+  private formatClaimVerificationStatus(status: string | undefined, outputLanguage: OutputLanguage): string {
+    switch (status) {
+      case 'verified': return localize(outputLanguage, '已验证 (verified)', 'Verified (verified)');
+      case 'inference': return localize(outputLanguage, '推断 (inference)', 'Inference (inference)');
+      case 'partial': return localize(outputLanguage, '部分核验 (partial)', 'Partially checked (partial)');
+      case 'unsupported': return localize(outputLanguage, '证据不支持 (unsupported)', 'Unsupported (unsupported)');
+      default: return localize(outputLanguage, '未核验 (not_checked)', 'Not checked (not_checked)');
+    }
   }
 
   private asReportRecord(value: unknown): Record<string, unknown> | null {

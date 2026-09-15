@@ -88,6 +88,27 @@ describe('runtime closeout returned-data tape', () => {
     expect(tape.buildPrompt(question)).not.toContain('999');
   });
 
+  it('admits a timeout delivery only after data returned and names the exhausted budget', async () => {
+    const tape = createRuntimeTurnCloseoutTape();
+    await tape.observe({...invocation, phase: 'started'});
+    await tape.observe({...invocation, toolCallId: 'sql-2', phase: 'failed', error: new Error('boom')});
+    expect(tape.hasReturnedData()).toBe(false);
+    await tape.observe({...invocation, phase: 'completed', result: createRuntimeToolResult({rows: [{dur: 9}]})});
+    expect(tape.hasReturnedData()).toBe(true);
+    expect(tape.buildPrompt({...question, budgetExhausted: 'timeout'})).toContain('(timeout: turn_limit is the turn cap');
+    expect(tape.buildPrompt(question)).toContain('(turn_limit: turn_limit is the turn cap');
+    expect(tape.buildPrompt({...question, outputLanguage: 'zh-CN', budgetExhausted: 'timeout'})).toContain('本轮调查已耗尽预算（timeout：');
+  });
+
+  it('does not count a returned result that could not be projected as deliverable data', async () => {
+    const tape = createRuntimeTurnCloseoutTape();
+    const unreadable = {get content(): never { throw new Error('unreadable payload'); }};
+    await tape.observe({...invocation, phase: 'completed', result: unreadable});
+    expect(readPromptData(tape.buildPrompt(question)).entries).toEqual([
+      expect.objectContaining({state: 'returned', omittedValues: 1})]);
+    expect(tape.hasReturnedData()).toBe(false);
+  });
+
   it('records pending and failed outcomes without exposing arguments, credentials or exception text', async () => {
     const tape = createRuntimeTurnCloseoutTape();
     const privateInvocation = {

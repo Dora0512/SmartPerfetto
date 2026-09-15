@@ -189,6 +189,23 @@ describe('HTMLReportGenerator code-aware rendering', () => {
     expect(html).not.toContain('源码上下文');
     expect(html).not.toContain('Source Context');
   });
+
+  it('renders every source mechanism binding including those after the former preview limit', () => {
+    const data = makeReportData({});
+    data.sourceContext = {
+      selected: [{codebaseId: 'codebase-app', displayName: 'Demo App', kind: 'app_source'}],
+      lookupCount: 1, queriedCodebaseIds: ['codebase-app'], usedCodebaseIds: ['codebase-app'],
+      sourceClaimBindings: Array.from({length: 21}, (_, i) => ({
+        claimId: `binding-claim-${i}`, mechanismStatus: 'compatible',
+        sourceReferenceIds: [`source-ref-${i}`], traceEvidenceRefIds: [`trace-ref-${i}`],
+      })),
+    } as any;
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('binding-claim-20');
+    expect(html).toContain('source-ref-20');
+    expect(html).toContain('trace-ref-20');
+    expect(html).not.toContain('条绑定未展开');
+  });
 });
 
 

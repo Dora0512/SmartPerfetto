@@ -10,9 +10,12 @@ import {attachFinalizationContext, takeFinalizationContext, type RuntimeFinaliza
 import type {IntentTransportInput, IntentTransportResult} from '../../agentRuntime/intentTransport';
 import {buildStrategyRegistrySnapshotFromDefinitions, loadPromptTemplate, type StrategyDefinition} from '../../agentv3/strategyLoader';
 import {analysisDeliveryFingerprint, type AnalysisReportRequirement, type AnalysisCaseRetrievalState} from '../../types/analysisDelivery';
-import {assessFinalSemantics, FINAL_SEMANTIC_INPUT_BYTE_LIMIT, type FinalSemanticAssessmentInput} from '../finalSemanticAssessment';
+import {assessFinalSemantics, buildFinalSemanticPrompt, FINAL_SEMANTIC_INPUT_BYTE_LIMIT,
+  type FinalSemanticAssessmentInput} from '../finalSemanticAssessment';
 import type {AnalysisInvestigationRequirement} from '../../types/analysisInvestigation';
 import {resolveAnalysisInvestigationRequirements} from '../../agentRuntime/analysisInvestigationRequirements';
+import {compactSemanticSourceSnapshot} from '../evidence/semanticSourceSnapshot';
+import type {AnalysisRunSelection} from '../../agentRuntime/analysisRunSpec';
 
 jest.mock('../../agentv3/strategyLoader', () => {
   const actual = jest.requireActual<typeof import('../../agentv3/strategyLoader')>('../../agentv3/strategyLoader');
@@ -35,6 +38,7 @@ function fixture(options: {
   deadlineMs?: number;
   dispatch?: (input: IntentTransportInput) => Promise<IntentTransportResult>;
   investigationRequirements?: AnalysisInvestigationRequirement[];
+  selection?: AnalysisRunSelection;
 } = {}) {
   const body = options.body ?? 'Frame A took 9 ms.';
   const contract: ConclusionContract = {
@@ -79,6 +83,7 @@ function fixture(options: {
       taskKind: options.investigationRequirements ? 'investigation' : 'fact', sceneId: 'general', scope: options.scope ?? 'bounded_question', recommendedComplexity: 'full',
       deliverable: options.deliverable ?? (requirements.length ? 'report' : 'answer'), evidenceAccess: 'existing_only'},
     traceIdentity: {currentTraceId: 'trace-current', referenceTraceId: 'trace-reference'},
+    selection: options.selection,
     deliveryContext: {entry: 'new_finalization', acceptedCandidate: candidate},
     evidenceReadView: {resolveReferences: reads}, dispatchText: dispatch,
   });
@@ -88,12 +93,29 @@ function fixture(options: {
   const input: FinalSemanticAssessmentInput = {context, canonicalCandidate: candidate, signal: controller.signal,
     snapshot: {inputCoverage: 'complete', declarationBindingEligibility: 'eligible', query: 'Explain this frame.', body, conclusionContract: contract,
       evidenceSnapshot: {schemaVersion: 'prepared_claim_evidence@1', reads: [{ref: 'ev-1', rows: [[9]], unit: 'ms'}]},
+      ...(options.selection ? {selectionScope: options.selection} : {}),
       ...(requirements.length || options.deliverable === 'report' ? {reportRequirements: {
         sceneId: 'general', registryFingerprint: registry.registryFingerprint, requirements,
       }} : {}), ...(options.caseRetrieval ? {caseRetrieval: options.caseRetrieval} : {})}};
   if (options.investigationRequirements) input.snapshot.investigationRequirements = resolveAnalysisInvestigationRequirements({
     intent: context.turnIntent, strategyRegistry: registry});
   return {input, reply, dispatch, reads, controller, contract, candidate};
+}
+
+function assembledPayload(run: ReturnType<typeof fixture>): any {
+  const assembled = buildFinalSemanticPrompt({snapshot: run.input.snapshot, intent: run.input.context.turnIntent,
+    traceIdentity: run.input.context.traceIdentity,
+    registryFingerprint: run.input.context.strategyRegistry.registryFingerprint});
+  expect(assembled).toBeDefined();
+  return JSON.parse(assembled!.prompt.slice(assembled!.prompt.lastIndexOf('\n\n{') + 2));
+}
+
+function useV4(run: ReturnType<typeof fixture>): any[] {
+  run.reply.schemaVersion = 'final_semantic_response@4';
+  Object.assign(run.reply, {investigation: []});
+  const entries = assembledPayload(run).contentLocationCatalog?.entries;
+  expect(entries).toBeDefined();
+  return entries;
 }
 
 describe('versioned investigation semantic coverage', () => {
@@ -123,7 +145,7 @@ describe('versioned investigation semantic coverage', () => {
     expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'checked', investigation: {status: 'not_checked', requirements: []}});
   });
 
-  it.each(['omitted', 'duplicate', 'unknown_id', 'unknown_record', 'empty_location', 'waiver', 'observed_without_record'])(
+  it.each(['omitted', 'duplicate', 'unknown_id', 'unknown_record', 'empty_location', 'waiver', 'observed_without_record', 'report_claim_ids'])(
     'rejects %s investigation assertions', async kind => {
       const run = investigationFixture();
       if (kind === 'omitted') Object.assign(run.reply, {investigation: []});
@@ -133,6 +155,7 @@ describe('versioned investigation semantic coverage', () => {
       if (kind === 'empty_location') run.row.contentLocations = [];
       if (kind === 'waiver') {run.row.applicability = 'not_applicable'; run.row.coverage = 'unknown';}
       if (kind === 'observed_without_record') {run.row.evidenceStatus = 'observed'; run.row.scopeMatch = 'matched';}
+      if (kind === 'report_claim_ids') Object.assign(run.row, {claimIds: [run.reply.claims[0].claimId]});
       expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'unavailable', reason: 'invalid_response'});
     });
 
@@ -142,11 +165,69 @@ describe('versioned investigation semantic coverage', () => {
     expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'not_checked', reason: 'invalid_snapshot'});
     expect(run.dispatch).not.toHaveBeenCalled();
   });
+
+  it('reports a closed private diagnostic for an unknown investigation record without retaining provider text', async () => {
+    const run = investigationFixture();
+    run.row.evidenceRecordIds = ['SECRET_PROVIDER_RESPONSE_CANARY'];
+    const assessment = await assessFinalSemantics(run.input);
+    expect(assessment).toMatchObject({status: 'unavailable', reason: 'invalid_response',
+      responseDiagnostic: {stage: 'investigation', code: 'invalid_reference', ordinal: 1}});
+    expect(JSON.stringify(assessment)).not.toContain('SECRET_PROVIDER_RESPONSE_CANARY');
+    expect(Object.keys(assessment.responseDiagnostic ?? {}).sort()).toEqual(['code', 'ordinal', 'stage']);
+  });
 });
 
 describe('final semantic assessment snapshot and transport', () => {
+  const selectedEvent: AnalysisRunSelection = {present: true, kind: 'track_event',
+    context: {kind: 'track_event', eventId: 11140, ts: 40919952686988, dur: 42000000},
+    sideResolution: {status: 'unknown'}};
+
+  it('forwards the exact side-unknown selection as lookup context and binds every field', async () => {
+    const run = fixture({selection: selectedEvent});
+    expect((await assessFinalSemantics(run.input)).status).toBe('checked');
+    const payload = JSON.parse(run.dispatch.mock.calls[0][0].prompt.slice(
+      run.dispatch.mock.calls[0][0].prompt.lastIndexOf('\n\n{') + 2));
+    expect(payload.selectionScope).toEqual(selectedEvent);
+    expect(payload.selectionScope.sideResolution).toEqual({status: 'unknown'});
+    expect(payload.selectionScope.sideResolution).not.toHaveProperty('traceSide');
+
+    const changed = fixture({selection: selectedEvent});
+    changed.input.snapshot.selectionScope = structuredClone(selectedEvent);
+    if (changed.input.snapshot.selectionScope?.present && changed.input.snapshot.selectionScope.context.kind === 'track_event') {
+      changed.input.snapshot.selectionScope.context.eventId = 11141;
+    }
+    expect(await assessFinalSemantics(changed.input)).toMatchObject({status: 'not_checked', reason: 'invalid_snapshot'});
+    expect(changed.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps missing and explicit no-selection snapshots distinct', async () => {
+    const missing = fixture();
+    expect((await assessFinalSemantics(missing.input)).status).toBe('checked');
+    const missingPrompt = missing.dispatch.mock.calls[0][0].prompt;
+    expect(JSON.parse(missingPrompt.slice(missingPrompt.lastIndexOf('\n\n{') + 2))).not.toHaveProperty('selectionScope');
+    const none = fixture({selection: {present: false}});
+    expect((await assessFinalSemantics(none.input)).status).toBe('checked');
+    expect(none.dispatch.mock.calls[0][0].prompt).toContain('"selectionScope":{"present":false}');
+  });
+
+  it('distinguishes invalid JSON from a structurally invalid response without storing either response', async () => {
+    for (const [text, diagnostic] of [
+      ['SECRET_INVALID_JSON_CANARY', {stage: 'json', code: 'invalid_json'}],
+      [JSON.stringify({schemaVersion: 'final_semantic_response@3', secret: 'SECRET_SHAPE_CANARY'}),
+        {stage: 'envelope', code: 'invalid_shape'}],
+    ] as const) {
+      const run = fixture({dispatch: async () => ({status: 'ok', text})});
+      const assessment = await assessFinalSemantics(run.input);
+      expect(assessment).toMatchObject({status: 'unavailable', reason: 'invalid_response', responseDiagnostic: diagnostic});
+      expect(JSON.stringify(assessment)).not.toContain('SECRET_');
+    }
+  });
+
   it('sends one complete provider-safe snapshot and returns only semantic coverage', async () => {
     const run = fixture();
+    const expectedPrompt = buildFinalSemanticPrompt({snapshot: run.input.snapshot,
+      intent: run.input.context.turnIntent, traceIdentity: run.input.context.traceIdentity,
+      registryFingerprint: run.input.context.strategyRegistry.registryFingerprint});
     const pending = assessFinalSemantics(run.input);
     expect(assessFinalSemantics(run.input)).toBe(pending);
     const assessment = await pending;
@@ -155,6 +236,7 @@ describe('final semantic assessment snapshot and transport', () => {
     expect(run.reads).not.toHaveBeenCalled();
     expect(run.dispatch.mock.calls[0][0]).toMatchObject({deadlineMs: run.input.context.deadlineMs, systemPrompt: ''});
     const prompt = run.dispatch.mock.calls[0][0].prompt;
+    expect(prompt).toBe(expectedPrompt?.prompt);
     expect(prompt).toContain(JSON.stringify(run.input.snapshot.body));
     expect(prompt).toContain('prepared_claim_evidence@1');
     expect(prompt).toContain('trace-reference');
@@ -165,6 +247,30 @@ describe('final semantic assessment snapshot and transport', () => {
     expect(Object.isFrozen(assessment.claims)).toBe(true);
     expect(Object.keys(assessment)).not.toContain('verified');
     expect(Object.keys(assessment)).not.toContain('evidenceStatus');
+  });
+
+  it('decodes exact source aliases for binding while dispatching the compact snapshot once', async () => {
+    const run = fixture();
+    const sourceUse = {schemaVersion: 'source_use_decision@1' as const, codeAwareMode: 'provider_send' as const,
+      selectedCodebaseIds: ['codebase'], status: 'corroborated' as const, attemptedTools: ['read_codebase_file'],
+      queriedCodebaseIds: ['codebase'], usedCodebaseIds: ['codebase'], coverageComplete: true, references: [{
+        id: 'source-ref-1', referenceId: 'source-1', codebaseId: 'codebase', filePath: 'src/App.kt',
+        lineRange: {start: 1, end: 200}, lookupKind: 'body' as const,
+      }]};
+    Object.assign(run.input.snapshot.conclusionContract!, {sourceUseDecision: sourceUse, sourceReferences: sourceUse.references});
+    run.input.snapshot.sourceUse = sourceUse;
+    run.input.snapshot = compactSemanticSourceSnapshot(run.input.snapshot);
+    const assessment = await assessFinalSemantics(run.input);
+    expect(assessment.status).toBe('checked');
+    expect(run.dispatch).toHaveBeenCalledTimes(1);
+    const prompt = run.dispatch.mock.calls[0][0].prompt;
+    expect(prompt).toContain('final_semantic_source_alias@1');
+    const payload = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{') + 2));
+    expect(payload.contentLocationCatalog).toEqual({schemaVersion: 'final_semantic_location_catalog@1', entries: [
+      expect.objectContaining({text: run.input.snapshot.body}),
+    ]});
+    expect(JSON.stringify(payload.contentLocationCatalog)).not.toContain('src/App.kt');
+    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
   });
 
   it('captures data and transport identity before the first await', async () => {
@@ -336,10 +442,37 @@ describe('final semantic assessment snapshot and transport', () => {
     const run = fixture();
     run.input.snapshot.evidenceSnapshot = {rows: ['x'.repeat(FINAL_SEMANTIC_INPUT_BYTE_LIMIT)]};
     const first = assessFinalSemantics(run.input);
-    expect(await first).toMatchObject({status: 'coverage_incomplete', reason: 'input_limit'});
+    const overflow = await first;
+    expect(overflow).toMatchObject({status: 'coverage_incomplete', reason: 'input_limit',
+      inputDiagnostic: {stage: 'prompt_assembly', code: 'byte_limit_exceeded', limitBytes: FINAL_SEMANTIC_INPUT_BYTE_LIMIT}});
+    expect(overflow.inputDiagnostic?.actualBytes).toBeGreaterThan(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
     expect(assessFinalSemantics(run.input)).toBe(first);
     run.input.snapshot.evidenceSnapshot = {rows: []};
     expect(await assessFinalSemantics(run.input)).toMatchObject({reason: 'snapshot_changed'});
+    expect(run.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('uses the 512 KiB default while allowing callers to request a smaller bound', async () => {
+    expect(FINAL_SEMANTIC_INPUT_BYTE_LIMIT).toBe(512 * 1024);
+    const medium = fixture();
+    medium.input.snapshot.evidenceSnapshot = {rows: ['x'.repeat(140 * 1024)]};
+    expect(await assessFinalSemantics(medium.input)).toMatchObject({status: 'checked'});
+    const promptBytes = Buffer.byteLength(medium.dispatch.mock.calls[0][0].prompt, 'utf8');
+    expect(promptBytes).toBeGreaterThan(128 * 1024);
+    expect(promptBytes).toBeLessThanOrEqual(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
+    expect(medium.dispatch).toHaveBeenCalledTimes(1);
+
+    const smaller = fixture();
+    smaller.input.snapshot.evidenceSnapshot = {rows: ['x'.repeat(140 * 1024)]};
+    smaller.input.limits = {inputBytes: 128 * 1024};
+    expect(await assessFinalSemantics(smaller.input)).toMatchObject({status: 'coverage_incomplete', reason: 'input_limit'});
+    expect(smaller.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit input bound above the shared safety ceiling', async () => {
+    const run = fixture();
+    run.input.limits = {inputBytes: FINAL_SEMANTIC_INPUT_BYTE_LIMIT + 1};
+    expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'not_checked', reason: 'invalid_configuration'});
     expect(run.dispatch).not.toHaveBeenCalled();
   });
 
@@ -361,11 +494,20 @@ describe('final semantic assessment snapshot and transport', () => {
 });
 
 describe('final semantic response protocol', () => {
-  it.each(['plain', 'fenced'] as const)('accepts a complete %s JSON response', async mode => {
-    const run = fixture();
-    run.dispatch.mockImplementation(async () => ({status: 'ok', text: mode === 'plain'
-      ? JSON.stringify(run.reply) : '```json\n' + JSON.stringify(run.reply) + '\n```'}));
-    expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'checked'});
+  it('accepts LF/CRLF plain, paired and unique orphan-closing framing equivalently', async () => {
+    const assessments = [];
+    for (const mode of ['plain_lf', 'plain_crlf', 'paired_lf', 'paired_crlf', 'orphan_lf', 'orphan_crlf'] as const) {
+      const run = fixture();
+      const lf = JSON.stringify(run.reply, null, 2);
+      const payload = mode.endsWith('crlf') ? lf.replace(/\n/g, '\r\n') : lf;
+      const text = mode.startsWith('paired') ? `\`\`\`json${mode.endsWith('crlf') ? '\r\n' : '\n'}${payload}${
+        mode.endsWith('crlf') ? '\r\n' : '\n'}\`\`\`` : mode.startsWith('orphan')
+        ? `${payload}${mode.endsWith('crlf') ? '\r\n' : '\n'}\`\`\`` : payload;
+      run.dispatch.mockImplementation(async () => ({status: 'ok', text}));
+      assessments.push(await assessFinalSemantics(run.input));
+    }
+    expect(assessments[0]).toMatchObject({status: 'checked'});
+    for (const assessment of assessments.slice(1)) expect(assessment).toEqual(assessments[0]);
   });
 
   it.each(['missing_claim', 'extra_claim', 'duplicate_claim', 'extra_root', 'wrong_quote', 'bad_span', 'partial_full_span', 'extra_span_field'] as const)(
@@ -382,11 +524,38 @@ describe('final semantic response protocol', () => {
       expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'unavailable', reason: 'invalid_response', consistency: 'unknown'});
     });
 
-  it.each(['explanation first ', 'tail', 'second_object'] as const)('rejects non-whole JSON framing %s', async framing => {
-    const run = fixture();
-    run.dispatch.mockImplementation(async () => ({status: 'ok', text: framing === 'explanation first '
-      ? framing + JSON.stringify(run.reply) : JSON.stringify(run.reply) + (framing === 'tail' ? '\nExplanation' : '{}')}));
-    expect(await assessFinalSemantics(run.input)).toMatchObject({reason: 'invalid_response'});
+  it.each(['explanation_first', 'tail', 'opening_only', 'double_fence', 'closing_without_newline', 'four_backticks',
+    'closing_then_text', 'multiple_json', 'body_internal_fence'] as const)('rejects non-whole JSON framing %s', async framing => {
+    const run = fixture(framing === 'body_internal_fence' ? {body: '```'} : {});
+    const payload = JSON.stringify(run.reply);
+    const text = framing === 'explanation_first' ? `Explanation\n${payload}`
+      : framing === 'tail' ? `${payload}\nExplanation`
+        : framing === 'opening_only' ? `\`\`\`json\n${payload}`
+          : framing === 'double_fence' ? `${payload}\n\`\`\`\n\`\`\``
+            : framing === 'closing_without_newline' ? `${payload}\`\`\``
+              : framing === 'four_backticks' ? `${payload}\n\`\`\`\``
+                : framing === 'closing_then_text' ? `${payload}\n\`\`\`\nExplanation`
+                  : framing === 'multiple_json' ? `${payload}\n${payload}\n\`\`\``
+                    : `${payload}\n\`\`\``;
+    run.dispatch.mockImplementation(async () => ({status: 'ok', text}));
+    expect(await assessFinalSemantics(run.input)).toMatchObject({reason: 'invalid_response',
+      responseDiagnostic: {stage: 'json', code: 'invalid_json'}});
+  });
+
+  it('keeps schema and claim-set failures strict after removing one orphan closing fence', async () => {
+    const invalidSchema = fixture();
+    invalidSchema.reply.schemaVersion = 'unknown_semantic_response';
+    invalidSchema.dispatch.mockImplementation(async () => ({status: 'ok',
+      text: `${JSON.stringify(invalidSchema.reply)}\n\`\`\``}));
+    expect(await assessFinalSemantics(invalidSchema.input)).toMatchObject({reason: 'invalid_response',
+      responseDiagnostic: {stage: 'envelope', code: 'invalid_shape'}});
+
+    const missingA2Claim = fixture();
+    missingA2Claim.contract.claims!.push({...structuredClone(missingA2Claim.contract.claims![0]), id: 'rec.no_rt'});
+    missingA2Claim.dispatch.mockImplementation(async () => ({status: 'ok',
+      text: `${JSON.stringify(missingA2Claim.reply)}\r\n\`\`\``}));
+    expect(await assessFinalSemantics(missingA2Claim.input)).toMatchObject({reason: 'invalid_response',
+      responseDiagnostic: {stage: 'claim_set', code: 'set_mismatch', expectedCount: 2, actualCount: 1}});
   });
 
   it('preserves an explicitly incomplete review instead of inferring success from full-looking spans', async () => {
@@ -405,6 +574,66 @@ describe('final semantic response protocol', () => {
         claims: [{claimId: 'claim-a', issues: [{code}]}]});
       expect(run.contract).toEqual(original);
     });
+
+  it.each([
+    {body: 'TTID 约 1912.20 ms。', consistency: 'consistent', issues: []},
+    {body: 'TTID is approximately 1912.21 ms.', consistency: 'inconsistent',
+      issues: [{code: 'numeric_mismatch', contentLocations: []}]},
+    {body: 'TTID is approximately 1.91 s.', consistency: 'consistent', issues: []},
+    {body: 'TTID is approximately 1.90 s.', consistency: 'inconsistent',
+      issues: [{code: 'numeric_mismatch', contentLocations: []}]},
+    {body: 'TTID is 1.91 s.', consistency: 'inconsistent',
+      issues: [{code: 'numeric_mismatch', contentLocations: []}]},
+    ...['about 1.91 MiB', 'about 1.91 msec', 'about 1.91 ticks', '1.912e3 ms', '1.9–2.0 s', '1.91 ± 0.01 s']
+      .map(value => ({body: `TTID is ${value}.`, consistency: 'inconsistent' as const,
+        issues: [{code: 'numeric_mismatch' as const, contentLocations: []}]})),
+    {body: 'TTID is 1912.20 ms.', consistency: 'inconsistent',
+      issues: [{code: 'numeric_mismatch', contentLocations: []}]},
+  ] as const)('preserves the reviewer verdict for numeric presentation: $body', async ({body, consistency, issues}) => {
+    const run = fixture({body});
+    const claim = run.contract.claims![0];
+    claim.text = body;
+    claim.references[0] = {...claim.references[0], value: 1912.202655};
+    claim.semantics = {...claim.semantics!, numeric: {operator: 'eq', value: 1912.202655, unit: 'ms'}};
+    const original = structuredClone(run.contract);
+    run.reply.claims[0].consistency = consistency;
+    run.reply.claims[0].contentLocations = [span(body)];
+    run.reply.claims[0].issues = issues.map(issue => ({...issue, contentLocations: [span(body)]}));
+    expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'checked', consistency,
+      claims: [{claimId: 'claim-a', consistency}]});
+    const prompt = run.dispatch.mock.calls[0][0].prompt;
+    expect(prompt).toContain('exact `7.123456 ms`');
+    expect(prompt).toContain('`约 7.12 ms`');
+    expect(prompt).toContain('`约 7.13 ms` is inconsistent');
+    expect(prompt).toContain('A bare `7.12 ms` remains a mismatch');
+    expect(prompt).toContain('closed unit mappings');
+    expect(prompt).toContain('cross-family or unknown-unit conversion');
+    expect(prompt).toContain('presentation equivalence cannot supply unit authority or proof');
+    expect(run.contract).toEqual(original);
+  });
+
+  it.each([
+    {body: 'Startup duration is 301.839437 ms.', consistency: 'consistent'},
+    {body: '启动耗时约 301.8 ms。', consistency: 'consistent'},
+    {body: 'Startup duration is 301.8 ms.', consistency: 'inconsistent'},
+    {body: '启动耗时约 301.9 ms。', consistency: 'inconsistent'},
+  ] as const)('keeps original nanosecond evidence when receiving the reviewer verdict: $body', async ({body, consistency}) => {
+    const run = fixture({body});
+    const claim = run.contract.claims![0];
+    claim.text = body;
+    claim.references[0] = {...claim.references[0], value: 301839437};
+    claim.semantics = {...claim.semantics!, numeric: {operator: 'eq', value: 301839437, unit: 'ns'}};
+    const original = structuredClone(run.contract);
+    run.reply.claims[0].consistency = consistency;
+    run.reply.claims[0].contentLocations = [span(body)];
+    run.reply.claims[0].issues = consistency === 'consistent' ? []
+      : [{code: 'numeric_mismatch', contentLocations: [span(body)]}];
+    expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'checked', consistency});
+    expect(run.contract).toEqual(original);
+    const prompt = run.dispatch.mock.calls[0][0].prompt;
+    expect(prompt).toContain('`301.839437 ms` or `约 301.8 ms`');
+    expect(prompt).toContain('bare `301.8 ms` and `约 301.9 ms` are inconsistent');
+  });
 
   it('retains omitted assertions from a table while allowing no-declaration acknowledgements', async () => {
     const run = fixture({body: '| observation | 9 ms |'});
@@ -471,7 +700,7 @@ describe('final semantic v2 exact quotation locations', () => {
     expect(run.dispatch).toHaveBeenCalledTimes(1);
     expect(run.reads).not.toHaveBeenCalled();
     const prompt = run.dispatch.mock.calls[0][0].prompt;
-    expect(prompt).toContain('"schemaVersion": "final_semantic_response@3"');
+    expect(prompt).toContain('"schemaVersion": "final_semantic_response@4"');
     expect(prompt).toContain('including overlapping matches');
     expect(prompt).toContain('does not establish factual');
     expect(prompt).toContain(`"bodyUtf16Length":${run.input.snapshot.body.length}`);
@@ -585,6 +814,143 @@ describe('final semantic v2 exact quotation locations', () => {
       if (invalid === 'extra_coverage') run.reply.bodyCoverage.reviewedSpans[0].text = run.input.snapshot.body;
       expect(await assessFinalSemantics(run.input)).toMatchObject({reason: 'invalid_response'});
     });
+});
+
+describe('final semantic v4 body span locations', () => {
+  it('binds the exact issued Markdown line without asking the reviewer to copy its markers', async () => {
+    const target = 'Runnable 合计（R+R+）= 1 570 314 ns（3.74%）。**主线程的 S 时间 5 931 641 ns 100% 落在主线程自身 `binder transaction` 跨期内**；R 时间中有 586 916 ns 落在 Binder 跨期内。';
+    const body = `## 系统侧证据\n\n${target}\n\n**CPU 占位与频率**`;
+    const run = fixture({body});
+    const entry = useV4(run).find(item => item.text === target)!;
+    run.reply.claims[0].contentLocations = [{spanId: entry.spanId}] as any;
+    const assessment = await assessFinalSemantics(run.input);
+    expect(assessment).toMatchObject({status: 'checked', claims: [{contentLocations: [{
+      start: body.indexOf(target), end: body.indexOf(target) + target.length,
+    }]}]});
+    expect(JSON.stringify(assessment)).not.toMatch(/spanId|contentLocationCatalog|"text":/);
+  });
+
+  it('preserves CRLF and UTF-16 offsets for emoji and combining characters', async () => {
+    const target = '**😀 e\u0301 延迟。**';
+    const body = `前言\r\n${target}\r\n结尾`;
+    const run = fixture({body});
+    const entries = useV4(run);
+    const entry = entries.find(item => item.text === target)!;
+    expect(entry.spanId).toMatch(/^line-2-[0-9a-f]{64}-[0-9a-f]{64}$/);
+    run.reply.claims[0].contentLocations = [{spanId: entry.spanId}] as any;
+    expect(await assessFinalSemantics(run.input)).toMatchObject({claims: [{contentLocations: [{
+      start: body.indexOf(target), end: body.indexOf(target) + target.length,
+    }]}]});
+  });
+
+  it('issues distinct ordinal-bound IDs for identical lines', async () => {
+    const line = '**same line**';
+    const body = `${line}\n${line}`;
+    const run = fixture({body});
+    const entries = useV4(run).filter(item => item.text === line);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].spanId).not.toBe(entries[1].spanId);
+    run.reply.claims[0].contentLocations = [{spanId: entries[1].spanId}] as any;
+    expect(await assessFinalSemantics(run.input)).toMatchObject({claims: [{contentLocations: [{
+      start: line.length + 1, end: body.length,
+    }]}]});
+  });
+
+  it.each(['unknown', 'stale', 'digest', 'mixed', 'extra', 'duplicate_id_quote', 'split_surrogate'] as const)(
+    'rejects %s catalog locations without repairing them', async invalid => {
+      const body = '**😀 exact line**';
+      const run = fixture({body});
+      const entry = useV4(run)[0];
+      const stale = fixture({body: '**different body**'});
+      const staleId = assembledPayload(stale).contentLocationCatalog.entries[0].spanId;
+      const bad: any[] = invalid === 'unknown' ? [{spanId: 'line-1-unknown-unknown'}]
+        : invalid === 'stale' ? [{spanId: staleId}]
+          : invalid === 'digest' ? [{spanId: `${entry.spanId.slice(0, -1)}${entry.spanId.endsWith('0') ? '1' : '0'}`}]
+            : invalid === 'mixed' ? [{spanId: entry.spanId, text: body}]
+              : invalid === 'extra' ? [{spanId: entry.spanId, verified: true}]
+                : invalid === 'duplicate_id_quote' ? [{spanId: entry.spanId}, {text: body}]
+                  : [{text: '\ud83d'}];
+      run.reply.claims[0].contentLocations = bad;
+      expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'unavailable', reason: 'invalid_response',
+        responseDiagnostic: {stage: 'claim', code: 'invalid_location', ordinal: 1}});
+    });
+
+  it.each(['claim', 'issue', 'omission', 'report', 'investigation'] as const)(
+    'uses the common span resolver for %s locations', async collection => {
+      const body = '**one issued line**';
+      const run = fixture({body, scope: 'scene_wide', requirements: [{id: 'report', label: 'Report', required: true}],
+        investigationRequirements: [{id: 'investigation', domain: 'methodology', description: 'Explain method.', required: true}]});
+      const spanId = useV4(run)[0].spanId;
+      const location = [{spanId}];
+      run.reply.claims[0].contentLocations = collection === 'claim' ? location as any : [{text: body}] as any;
+      if (collection === 'issue') {
+        run.reply.claims[0].consistency = 'inconsistent';
+        run.reply.claims[0].issues = [{code: 'numeric_mismatch', contentLocations: location}] as any;
+      }
+      if (collection === 'omission') run.reply.omissions = [{code: 'undeclared_claim', contentLocations: location}] as any;
+      run.reply.requirements[0].contentLocations = collection === 'report' ? location as any : [{text: body}] as any;
+      Object.assign(run.reply, {investigation: [{requirementId: 'investigation', applicability: 'applicable',
+        coverage: 'covered', contentLocations: collection === 'investigation' ? location : [{text: body}],
+        evidenceRecordIds: [], scopeMatch: 'unknown', evidenceStatus: 'not_applicable'}]});
+      const assessment = await assessFinalSemantics(run.input);
+      expect(assessment.status).toBe('checked');
+      expect(JSON.stringify(assessment)).not.toMatch(/spanId|"text":/);
+    });
+
+  it.each(['final_semantic_response@1', 'final_semantic_response@2', 'final_semantic_response@3'] as const)(
+    'keeps %s location behavior compatible', async schemaVersion => {
+      const body = 'old protocol line';
+      const run = fixture({body});
+      run.reply.schemaVersion = schemaVersion;
+      run.reply.claims[0].contentLocations = schemaVersion === 'final_semantic_response@1'
+        ? [span(body)] as any : [{text: body}] as any;
+      if (schemaVersion === 'final_semantic_response@3') Object.assign(run.reply, {investigation: []});
+      expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'checked',
+        claims: [{contentLocations: [{start: 0, end: body.length}]}]});
+    });
+
+  it.each([
+    {name: 'entry ceiling', body: Array.from({length: 513}, (_, index) => `entry-${index}`).join('\n'), quote: 'entry-0'},
+    {name: 'byte ceiling', body: `prefix-${'x'.repeat(70 * 1024)}`, quote: 'prefix-'},
+  ])('omits the entire optional catalog at the $name and retains exact quotes', async ({body, quote}) => {
+    const run = fixture({body});
+    run.reply.schemaVersion = 'final_semantic_response@4';
+    run.reply.claims[0].contentLocations = [{text: quote}] as any;
+    Object.assign(run.reply, {investigation: []});
+    expect(assembledPayload(run)).not.toHaveProperty('contentLocationCatalog');
+    const assessment = await assessFinalSemantics(run.input);
+    expect(assessment).toMatchObject({status: 'checked', claims: [{contentLocations: [{start: 0, end: quote.length}]}]});
+    expect(run.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a forged snapshot catalog when the complete derived catalog is omitted', async () => {
+    const body = Array.from({length: 513}, (_, index) => `entry-${index}`).join('\n');
+    const run = fixture({body});
+    (run.input.snapshot as any).contentLocationCatalog = {schemaVersion: 'final_semantic_location_catalog@1',
+      entries: [{spanId: 'forged-span', text: 'entry-0'}]};
+    run.reply.schemaVersion = 'final_semantic_response@4';
+    run.reply.claims[0].contentLocations = [{spanId: 'forged-span'}] as any;
+    Object.assign(run.reply, {investigation: []});
+    expect(assembledPayload(run)).not.toHaveProperty('contentLocationCatalog');
+    expect(await assessFinalSemantics(run.input)).toMatchObject({status: 'unavailable', reason: 'invalid_response',
+      responseDiagnostic: {stage: 'claim', code: 'invalid_location', ordinal: 1}});
+  });
+
+  it('counts the catalog in the exact caller byte bound before dispatch', async () => {
+    const exact = fixture({body: '**catalogued line**'});
+    const exactBytes = Buffer.byteLength(buildFinalSemanticPrompt({snapshot: exact.input.snapshot,
+      intent: exact.input.context.turnIntent, traceIdentity: exact.input.context.traceIdentity,
+      registryFingerprint: exact.input.context.strategyRegistry.registryFingerprint})!.prompt, 'utf8');
+    exact.input.limits = {inputBytes: exactBytes};
+    expect((await assessFinalSemantics(exact.input)).status).toBe('checked');
+    expect(exact.dispatch).toHaveBeenCalledTimes(1);
+
+    const short = fixture({body: '**catalogued line**'});
+    short.input.limits = {inputBytes: exactBytes - 1};
+    expect(await assessFinalSemantics(short.input)).toMatchObject({status: 'coverage_incomplete', reason: 'input_limit',
+      inputDiagnostic: {actualBytes: exactBytes, limitBytes: exactBytes - 1}});
+    expect(short.dispatch).not.toHaveBeenCalled();
+  });
 });
 
 describe('semantic report applicability and coverage', () => {

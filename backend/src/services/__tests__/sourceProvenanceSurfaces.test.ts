@@ -15,6 +15,8 @@ import {ArtifactStore} from '../../agentv3/artifactStore';
 import {buildStrategyRegistrySnapshotFromDefinitions, getRegisteredScenes} from '../../agentv3/strategyLoader';
 import type {RunTurnOutput} from '../../cli-user/services/cliAnalyzeService';
 import {commitTurnOutputs} from '../../cli-user/services/turnPersistence';
+import {runShowCommand} from '../../cli-user/commands/show';
+import {runReportExportCommand} from '../../cli-user/commands/report';
 import {computePaths, ensureLayout, ensureSessionLayout, sessionPaths} from '../../cli-user/io/paths';
 import type {Renderer} from '../../cli-user/repl/renderer';
 import {
@@ -121,11 +123,18 @@ async function finalizeCurrentSurfaceFixture(draft: AnalysisResult, envelope: Da
 }
 
 describe('source provenance output surface matrix', () => {
+  const cliSurfaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-source-cli-surfaces-'));
+  const cliSurfaceHome = path.join(cliSurfaceRoot, 'cli-home');
+  const cliSurfaceEnv = path.join(cliSurfaceRoot, 'empty.env');
+  fs.writeFileSync(cliSurfaceEnv, '', 'utf8');
+
+  afterAll(() => fs.rmSync(cliSurfaceRoot, {recursive: true, force: true}));
+
   it.each(['src/main/Foo.kt', 'src/功能目录/My Feature/Foo.kt'])(
     'keeps current-run source %s across SSE, report, CLI, snapshot, and API readback', async filePath => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-source-surfaces-'));
     const dbPath = path.join(tempRoot, 'enterprise.db');
-    const cliHome = path.join(tempRoot, 'cli-home');
+    const cliHome = cliSurfaceHome;
     process.env.SMARTPERFETTO_ENTERPRISE_DB_PATH = dbPath;
     const reference = sanitizeSourceReference({
       referenceId: 'lookup-surface-1',
@@ -347,6 +356,31 @@ describe('source provenance output surface matrix', () => {
       ));
       const cliVerification = JSON.parse(fs.readFileSync(path.join(sp.turnsDir, '001.claim-verification.json'), 'utf8'));
       expect(cliVerification).toEqual(wireResult.claimVerificationResult);
+      const cliEvidence = JSON.parse(fs.readFileSync(path.join(sp.turnsDir, '001.analysis-evidence.json'), 'utf8'));
+      expect(cliEvidence.evidence).not.toBeNull();
+      const canonicalTurnBody = '# Turn 1\n\n## Conclusion\n\n' + body + '\n';
+      expect(fs.readFileSync(path.join(sp.turnsDir, '001.md'), 'utf8')).toBe(canonicalTurnBody);
+      const cliMarkdownExport = path.join(tempRoot, 'cli-export.md');
+      const consoleLog = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+      let cliShow = '';
+      try {
+        expect(await runShowCommand({sessionId: result.sessionId, open: false, envFile: cliSurfaceEnv, sessionDir: cliHome})).toBe(0);
+        cliShow = consoleLog.mock.calls.map(call => String(call[0])).join('\n');
+        expect(await runReportExportCommand({sessionId: result.sessionId, format: 'md', out: cliMarkdownExport,
+          envFile: cliSurfaceEnv, sessionDir: cliHome})).toBe(0);
+      } finally {
+        consoleLog.mockRestore();
+      }
+      const cliMarkdown = fs.readFileSync(cliMarkdownExport, 'utf8');
+      for (const rendered of [cliShow, cliMarkdown]) {
+        expect(rendered).toContain('source_use_decision@1');
+        expect(rendered).toContain(reference.id);
+        expect(rendered).toContain(filePath);
+        expect(rendered).toContain('claim-1');
+        expect(rendered).toContain('compatible');
+        expect(rendered).not.toContain('/Users/chris/private-source');
+        expect(rendered).not.toContain('SECRET_');
+      }
 
       const snapshot = persistCompletedAnalysisResultSnapshot({
         tenantId: DEFAULT_TENANT_ID,
@@ -414,8 +448,6 @@ describe('source provenance output surface matrix', () => {
       }
       expect(reportResponse.text).toContain('source_use_decision@1');
       expect(reportResponse.text).toContain(reference.id);
-      expect(fs.readFileSync(path.join(sp.turnsDir, '001.md'), 'utf8'))
-        .toContain('source_use_decision@1');
       const cliHtml = fs.readFileSync(path.join(sp.turnsDir, '001.html'), 'utf8');
       expect(cliHtml).toContain('source_use_decision@1');
       expect(cliHtml).toContain(reference.id);
@@ -428,6 +460,8 @@ describe('source provenance output surface matrix', () => {
         cliDecision,
         cliBindings,
         cliVerification,
+        cliShow,
+        cliMarkdown,
         snapshotContract,
         apiContract,
         reportHtml: reportResponse.text,

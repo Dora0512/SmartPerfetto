@@ -581,7 +581,7 @@ export async function resolveVerificationSliceSelection(input: {
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout;
   const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
-  const sql = `SELECT s.id AS event_id, s.ts, s.track_id, tt.utid, t.upid
+  const sql = `SELECT s.id AS event_id, s.ts, s.track_id, tt.utid, t.upid, s.dur
     FROM slice s JOIN thread_track tt ON s.track_id = tt.id
     JOIN thread t ON tt.utid = t.utid JOIN process p ON t.upid = p.upid
     WHERE p.name = ${quote(selector.processName)} AND t.name = ${quote(selector.threadName)}
@@ -600,18 +600,26 @@ export async function resolveVerificationSliceSelection(input: {
   if (result.error) throw new VerificationSliceSelectionError('SLICE_SELECTION_QUERY_FAILED');
   if (result.rows.length === 0) throw new VerificationSliceSelectionError('SLICE_SELECTION_NOT_FOUND');
   if (result.rows.length !== 1) throw new VerificationSliceSelectionError('SLICE_SELECTION_AMBIGUOUS');
-  const columns = ['event_id', 'ts', 'track_id', 'utid', 'upid'];
+  const columns = ['event_id', 'ts', 'track_id', 'utid', 'upid', 'dur'];
   if (!isDeepStrictEqual(result.columns, columns) || result.rows[0].length !== columns.length) {
     throw new VerificationSliceSelectionError('SLICE_SELECTION_INVALID_IDENTITY');
   }
-  const values = result.rows[0].map(value => typeof value === 'number' ? value :
+  const values = result.rows[0].slice(0, 5).map(value => typeof value === 'number' ? value :
     typeof value === 'string' && /^-?\d+$/.test(value) ? Number(value) : NaN);
   if (values.some((value, index) => !Number.isSafeInteger(value) || (index !== 1 && value < 0))) {
     throw new VerificationSliceSelectionError('SLICE_SELECTION_INVALID_IDENTITY');
   }
   const [eventId, ts, trackId, utid, upid] = values;
+  const rawDuration = result.rows[0][5];
+  const duration = typeof rawDuration === 'number' ? rawDuration :
+    typeof rawDuration === 'string' && /^-?\d+$/.test(rawDuration) ? Number(rawDuration) : NaN;
+  if (!Number.isSafeInteger(duration) || duration < -1 ||
+      (duration >= 0 && !Number.isSafeInteger(ts + duration))) {
+    throw new VerificationSliceSelectionError('SLICE_SELECTION_INVALID_IDENTITY');
+  }
   return {status: 'resolved', purpose: 'input_scope_not_verified_evidence', selector,
-    selectionContext: {kind: 'track_event', source: 'track_event_selection', eventId, ts},
+    selectionContext: {kind: 'track_event', source: 'track_event_selection', eventId, ts,
+      ...(duration >= 0 ? {dur: duration} : {})},
     identity: {traceId: input.traceId, table: 'slice', eventId, ts, trackId, utid, upid}};
 }
 

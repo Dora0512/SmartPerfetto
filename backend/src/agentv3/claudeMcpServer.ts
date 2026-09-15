@@ -79,7 +79,9 @@ import {getConsumableProcessIdentitySelectors, sqlUsesProcessNameFilter} from '.
 import {hasProcessIdentitySelector, PROCESS_IDENTITY_SELECTORS} from '../services/processIdentity/types';
 import type {EffectiveProcessScope} from '../services/processIdentity/effectiveProcessScope';
 import {getExactProcessScopeSupport} from '../services/skillEngine/processScopeSql';
-import {captureEvidenceTable, captureRawSqlEvidence, evidenceTableFor, type EvidenceTableWitness} from '../services/evidence/evidenceCapture';
+import {captureEvidenceTable, captureRawSqlEvidence, evidenceTableFor,
+  projectEvidenceColumnUnitsForModel, projectEvidenceTableForModel,
+  type EvidenceTableWitness} from '../services/evidence/evidenceCapture';
 import {scopeMetadata, identityForScopeEvidence, mergeScopeProvenance, type EvidenceScopeProvenanceV1} from '../types/identityContract';
 import {assessScrollingJankClaimBoundary} from '../services/scrollingJankClaimBoundary';
 import { injectStdlibIncludes } from './sqlIncludeInjector';
@@ -112,6 +114,7 @@ import {
   localizeSkillDiagnostics,
   localizeSkillDisplayResults,
 } from '../services/skillLocalization';
+
 import { buildSqlQueryReview } from '../services/queryReview/queryReviewBuilder';
 import { buildSkillQueryReview } from '../services/queryReview/skillQueryReviewBuilder';
 import { compactQueryReviewForToolResponse, type QueryReviewV1 } from '../types/queryReviewContract';
@@ -229,6 +232,13 @@ import {
   rethrowIfTraceProcessorQueryCancelled,
   throwIfTraceProcessorQueryCancelled,
 } from '../services/traceProcessorCancellation';
+
+export function requireToolDescription(templateName: string, loaded?: string): string {
+  const content = (loaded ?? loadPromptTemplate(templateName))
+    ?.replace(/<!--[\s\S]*?-->/g, '').trim();
+  if (!content) throw new Error(`Required tool description template is missing or empty: ${templateName}`);
+  return content;
+}
 
 /**
  * Process-wide RagStore singleton, lazily initialized on first MCP tool
@@ -2615,14 +2625,8 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const executeSql = tool(
     'execute_sql',
-    'Run raw SQL against the current Perfetto trace_processor trace. Use summary=true for large results (column stats + sample rows).\n\n' +
-    'Use when: custom SQL is needed to verify a hypothesis or inspect raw trace data.\n' +
-    'Don\'t use when: a skill covers the task (use invoke_skill), schema info is needed (lookup_sql_schema), or rows are already in an artifact (fetch_artifact; do not copy artifact rows into FROM (VALUES ...)).\n\n' +
-    'SQL safety rules: qualify duplicate column names after JOINs; use s.name AS slice_name, s.ts, s.dur, t.name AS thread_name, p.name AS process_name, or prefer thread_slice. FrameTimeline rows expose upid, not utid/process_name; JOIN process USING(upid) for actual_frame_timeline_slice. For thread_slice self time, JOIN slice_self_dur USING(id); read thread_name/process_name directly unless you explicitly JOIN thread/process. The main-thread column is is_main_thread. Do not query __intrinsic_* names or skill step names such as batch_frame_root_cause as SQL tables; use fetch_artifact for skill artifact rows.\n\n' +
-    'Examples:\n' +
-    '1. Count jank frames: sql="SELECT COUNT(*) as jank_count FROM actual_frame_timeline_slice WHERE jank_type != \'None\'", summary=false\n' +
-    '2. CPU frequency overview: sql="SELECT cpu, MIN(value) as min_freq, MAX(value) as max_freq, AVG(value) as avg_freq FROM counter JOIN counter_track ON counter.track_id=counter_track.id WHERE counter_track.name GLOB \'cpu*freq\' GROUP BY cpu", summary=true\n' +
-    '3. Thread state in time range: sql="SELECT state, SUM(dur)/1e6 as total_ms FROM thread_state WHERE utid=123 AND ts BETWEEN 1000 AND 2000 GROUP BY state", summary=false',
+    requireToolDescription('prompt-execute-sql-tool-description') + '\n\n' +
+    requireToolDescription('prompt-sql-evidence-guidance'),
     {
       planPhaseId: z.string().optional().describe('Optional explicit plan phase ID for this invocation.'),
       sql: z.string().describe(
@@ -2657,10 +2661,12 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           signal,
         );
         const processIdentityWarning = rawSqlProcessIdentityWarning(normalizedSql);
-        const truncated = result.rows.length > 200;
-        const rows = truncated ? result.rows.slice(0, 200) : result.rows;
         const success = !result.error;
         const executionWitness = success ? captureRawSqlEvidence(result, {traceId, traceSide: 'current'}) : undefined;
+        const columnUnits = projectEvidenceColumnUnitsForModel(
+          {columns: result.columns, rows: result.rows}, executionWitness);
+        const truncated = result.rows.length > 200;
+        const rows = truncated ? result.rows.slice(0, 200) : result.rows;
         const sqlArtifact = success && result.columns.length > 0 && result.rows.length > SQL_RAW_INLINE_ROW_LIMIT
           ? storeSqlResultArtifact(artifactStore, {
               toolName: 'execute_sql',
@@ -2781,6 +2787,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             columns: summaryResult.columns,
             columnStats: summaryResult.columnStats,
             sampleRows: summaryResult.sampleRows,
+            ...(columnUnits ? {columnUnits} : {}),
             ...(sqlArtifact ? {
               artifactId: sqlArtifact.artifactId,
               artifact: sqlArtifact.artifactSummary,
@@ -2833,6 +2840,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           success,
           columns: result.columns,
           rows,
+          ...(columnUnits ? {columnUnits} : {}),
           totalRows: result.rows.length,
           truncated,
           durationMs: result.durationMs,
@@ -2902,16 +2910,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const invokeSkill = tool(
     'invoke_skill',
-    'Execute a named SmartPerfetto skill pipeline against the current trace. ' +
-    'Skills are pre-built analysis routines that produce layered results (overview → list → diagnosis → deep). ' +
-    'Use list_skills first to find the right skill ID when list_skills is available; quick mode may name the relevant skill in the prompt.\n\n' +
-    'Use when: a pre-built skill covers your analysis need — always prefer this over raw SQL for supported scenarios.\n' +
-    'Don\'t use when: you need a custom query not covered by any skill (use execute_sql), or exploring what skills exist (use list_skills).\n\n' +
-    'Examples:\n' +
-    '1. Full scrolling analysis: skillId="scrolling_analysis", params={process_name: "com.example.app"}\n' +
-    '2. Single jank frame detail: skillId="jank_frame_detail", params={frame_id: 42, start_ts: 123, end_ts: 456, process_name: "com.example.app"}\n' +
-    '3. Startup analysis: skillId="startup_analysis", params={process_name: "com.example.app"}\n' +
-    '4. Selected range CPU scheduling/frequency: skillId="selection_range_cpu_sched_summary", params={start_ts: 123, end_ts: 456}',
+    requireToolDescription('prompt-invoke-skill-tool-description'),
     {
       planPhaseId: z.string().optional().describe('Optional explicit plan phase ID for this invocation.'),
       skillId: z.string().describe('Skill identifier (e.g. "scrolling_analysis", "jank_frame_detail", "cpu_analysis")'),
@@ -3113,8 +3112,11 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         let synthesizeArtifacts: Array<{ artifactId: string; stepId: string; rowCount: number; columns: string[] }> | undefined;
         const artifactIdsByDisplayIndex: Array<string | undefined> = [];
         const queryReviewsByDisplayIndex: Array<QueryReviewV1 | undefined> = [];
+        const modelDisplayProjections = (result.displayResults || []).map(dr =>
+          projectEvidenceTableForModel(dr.data, evidenceTableFor(dr)));
         if (artifactStore && result.displayResults?.length) {
           artifacts = result.displayResults.map((dr, displayIndex) => {
+            const modelProjection = modelDisplayProjections[displayIndex];
             const evidenceRefId = stableSkillEvidenceRefId(
               result.skillId || skillId,
               dr.stepId,
@@ -3129,7 +3131,8 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               stepId: dr.stepId,
               layer: dr.layer,
               title: dr.title,
-              data: dr.data,
+              data: modelProjection.data,
+              modelProjection: modelProjection.modelProjection,
               executionStatus: dr.executionStatus,
               executionMessage: dr.executionMessage,
               executionError: dr.executionError,
@@ -3166,7 +3169,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               : storedSummary;
             const preview = artifactAccessPolicy.forbidRows
               ? undefined
-              : storedSummary?.preview ?? previewFromColumnarData(dr.data);
+              : storedSummary?.preview ?? previewFromColumnarData(modelProjection.data);
             return summary ? {
               ...summary,
               ...(preview ? { preview } : {}),
@@ -3402,11 +3405,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           ...(paramResolution.audit ? {drillDownResolution: paramResolution.audit} : {}),
           ...(result.identityResolution ? { identityResolution: result.identityResolution } : {}),
           ...(vendorOverrideHint ? { vendorOverride: vendorOverrideHint } : {}),
-          displayResults: localizedDisplayResults.map(dr => ({
+          displayResults: localizedDisplayResults.map((dr, index) => ({
             stepId: dr.stepId,
             title: dr.title,
             layer: dr.layer,
-            data: dr.data,
+            data: modelDisplayProjections[index]?.data ?? dr.data,
+            modelProjection: modelDisplayProjections[index]?.modelProjection,
+            ...(modelDisplayProjections[index]?.columnUnits
+              ? {columnUnits: modelDisplayProjections[index].columnUnits} : {}),
             executionStatus: dr.executionStatus,
             executionMessage: dr.executionMessage,
             executionError: dr.executionError,
@@ -4550,9 +4556,30 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
   const onDemandSourceTokens = (result: {
     matches?: Array<{text?: string}>;
     reference?: {text?: string};
-  }): number => {
+  }, presentation?: {numberedText: string}): number => {
     const text = result.matches?.map(match => match.text ?? '').join('\n') ?? result.reference?.text ?? '';
-    return text ? Math.max(1, Math.ceil(text.length / 4)) : 0;
+    const deliveredText = `${text}${presentation?.numberedText ?? ''}`;
+    return deliveredText ? Math.max(1, Math.ceil(deliveredText.length / 4)) : 0;
+  };
+  const sourceReadPresentation = (reference?: {
+    text?: string;
+    lineRange?: {start: number; end: number};
+  }): {
+    schemaVersion: 'source_read_presentation@1';
+    format: 'line_numbered';
+    numberedText: string;
+  } | undefined => {
+    const lineRange = reference?.lineRange;
+    if (codeAwareMode !== 'provider_send' || typeof reference?.text !== 'string' ||
+      !lineRange || !Number.isSafeInteger(lineRange.start) || !Number.isSafeInteger(lineRange.end) ||
+      lineRange.start < 1 || lineRange.end < lineRange.start) return undefined;
+    const lines = reference.text.split('\n');
+    if (lines.length !== lineRange.end - lineRange.start + 1) return undefined;
+    return {
+      schemaVersion: 'source_read_presentation@1',
+      format: 'line_numbered',
+      numberedText: lines.map((line, index) => `${lineRange.start + index}: ${line}`).join('\n'),
+    };
   };
   const recordOnDemandSourceLookup = async (input: {
     toolName: 'search_codebase' | 'read_codebase_file';
@@ -4811,7 +4838,8 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           returnedReferenceCount: 0, outcome: 'rejected', durationMs: Date.now() - sourceLookupStartedAt});
         throw error;
       });
-      const tokensSpent = onDemandSourceTokens(result);
+      const requestedPresentation = sourceReadPresentation(result.reference);
+      const tokensSpent = onDemandSourceTokens(result, requestedPresentation);
       if (codeLookupLedger && tokensSpent > codeLookupLedger.remainingTokens()) {
         observeOnDemandSourceLookup('read_codebase_file', {
           ...result,
@@ -4837,13 +4865,16 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         };
       }
       const delivered = observeOnDemandSourceLookup('read_codebase_file', result);
+      const presentation = delivered.success
+        ? sourceReadPresentation(delivered.reference)
+        : undefined;
       if (delivered.success && codeAwareMode === 'provider_send' && delivered.reference) {
         registerOnDemandSourceLookupForEcho(options.sessionId, [delivered.reference]);
       }
       await recordOnDemandSourceLookup({
         toolName: 'read_codebase_file',
         codebaseId,
-        tokensSpent: onDemandSourceTokens(delivered),
+        tokensSpent: onDemandSourceTokens(delivered, presentation),
         returnedReferenceCount: delivered.success && delivered.reference ? 1 : 0,
         outcome: delivered.success
           ? 'success'
@@ -4852,7 +4883,10 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
       });
       assertPrivateAnalysisContextCurrent();
       return {
-        content: [{type: 'text' as const, text: JSON.stringify(retrievedData({...delivered}))}],
+        content: [{type: 'text' as const, text: JSON.stringify(retrievedData({
+          ...delivered,
+          ...(presentation ? {presentation} : {}),
+        }))}],
       };
     },
     {annotations: {readOnlyHint: true}},
@@ -5194,8 +5228,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const proposePatch = tool(
     'propose_patch',
-    'Use when the user asks for a concrete fix after successful code lookup. Do NOT use before lookup_app_source/lookup_kernel_source/lookup_aosp_source has returned prior contextChunkIds. ' +
-    'Prerequisites: all contextChunkIds must belong to one whitelisted codebase and provider_send consent must be enabled. Budget: patch attempts are capped by the session ledger. Outcomes: verified diff, non-copyable sketch, or unverified rejection.',
+    requireToolDescription('prompt-propose-patch-tool-description'),
     {
       context_chunk_ids: z.array(z.string()).min(1).describe('Chunk ids previously returned by a successful source lookup in this session.'),
       problem: z.string().describe('Performance problem the patch should address.'),
@@ -6160,11 +6193,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const lookupStrategyDetail = tool(
     'lookup_strategy_detail',
-    'Look up an on-demand scene strategy detail by detailRef returned from submit_plan/update_plan_phase. ' +
-    'This is an informational fallback only: it does not collect trace evidence, does not satisfy expectedCalls, ' +
-    'and should not replace invoke_skill/execute_sql/fetch_artifact.',
+    (loadPromptTemplate('prompt-strategy-detail-tool-description') ?? '').replace(/<!--[\s\S]*?-->/g, '').trim(),
     {
-      detailRef: z.string().optional().describe('Detail ref returned by plan tools, e.g. "scrolling:root_cause_drill".'),
+      detailRef: z.string().optional().describe('Detail ref from the scene strategy catalog.'),
       detailId: z.string().optional().describe('Detail id without scene prefix, used with scene or current sceneType.'),
       scene: z.string().optional().describe('Optional scene id when detailRef is not prefixed. Defaults to the current scene.'),
     },
@@ -6606,12 +6637,8 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const executeSqlOn = referenceTraceId ? tool(
     'execute_sql_on',
-    'Run SQL against the current or reference trace in comparison mode.\n\n' +
-    'Use when: drilling into one side of a comparison or verifying compare_skill findings with targeted SQL. Use fetch_artifact rows directly instead of copying compare_skill/fetch_artifact rows into FROM (VALUES ...).\n\n' +
-    'SQL safety rules: qualify duplicate column names after JOINs; use s.name AS slice_name, s.ts, s.dur, t.name AS thread_name, p.name AS process_name, or prefer thread_slice. FrameTimeline rows expose upid, not utid/process_name; JOIN process USING(upid) for actual_frame_timeline_slice. For thread_slice self time, JOIN slice_self_dur USING(id); read thread_name/process_name directly unless you explicitly JOIN thread/process. The main-thread column is is_main_thread.\n\n' +
-    'Examples:\n' +
-    '1. Check reference trace jank: trace="reference", sql="SELECT COUNT(*) FROM actual_frame_timeline_slice WHERE jank_type != \'None\'"\n' +
-    '2. Compare CPU freq: trace="current", sql="SELECT cpu, AVG(value) as avg_freq FROM counter JOIN counter_track ON counter.track_id=counter_track.id WHERE counter_track.name GLOB \'cpu*freq\' GROUP BY cpu"',
+    requireToolDescription('prompt-execute-sql-on-tool-description') + '\n\n' +
+    requireToolDescription('prompt-sql-evidence-guidance'),
     {
       planPhaseId: z.string().optional().describe('Optional explicit plan phase ID for this invocation.'),
       trace: z.enum(['current', 'reference']).describe(
@@ -6650,10 +6677,12 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           signal,
         );
         const processIdentityWarning = rawSqlProcessIdentityWarning(normalizedSql);
-        const truncated = result.rows.length > 200;
-        const rows = truncated ? result.rows.slice(0, 200) : result.rows;
         const success = !result.error;
         const executionWitness = success ? captureRawSqlEvidence(result, {traceId: targetTraceId, traceSide: trace}) : undefined;
+        const columnUnits = projectEvidenceColumnUnitsForModel(
+          {columns: result.columns, rows: result.rows}, executionWitness);
+        const truncated = result.rows.length > 200;
+        const rows = truncated ? result.rows.slice(0, 200) : result.rows;
         const sqlArtifact = success && result.columns.length > 0 && result.rows.length > SQL_RAW_INLINE_ROW_LIMIT
           ? storeSqlResultArtifact(artifactStore, {
               toolName: 'execute_sql_on',
@@ -6702,6 +6731,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             mode: 'summary',
             autoSummarized: !summary && !!sqlArtifact,
             summary: summaryResult,
+            ...(columnUnits ? {columnUnits} : {}),
             totalRows: result.rows.length,
             ...(sqlArtifact ? {
               artifactId: sqlArtifact.artifactId,
@@ -6758,6 +6788,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           traceProvenance,
           columns: result.columns,
           rows,
+          ...(columnUnits ? {columnUnits} : {}),
           totalRows: result.rows.length,
           truncated,
           durationMs,

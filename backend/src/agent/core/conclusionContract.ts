@@ -116,6 +116,46 @@ export interface ConclusionContractParseIssue {
   path: string;
   /** Fixed schema facts only; no raw values, user keys or source paths. */
   details?: ConclusionContractStructureDetail[];
+  /** Closed relation shape only; no raw proposal fields or values. */
+  relationProposalDiagnostic?: ConclusionRelationProposalDiagnostic;
+}
+
+export type ConclusionRelationProposalItemReason =
+  | 'item_not_object'
+  | 'unknown_field'
+  | 'invalid_schema_version'
+  | 'invalid_id'
+  | 'invalid_kind'
+  | 'invalid_direction'
+  | 'invalid_subject'
+  | 'invalid_object'
+  | 'invalid_proof'
+  | 'invalid_value'
+  | 'invalid_unit'
+  | 'invalid_metric_column'
+  | 'invalid_delta_direction'
+  | 'invalid_proof_bindings';
+
+export type ConclusionRelationProposalDiagnostic =
+  | {readonly scope: 'collection'; readonly reason: 'collection_not_array'}
+  | {readonly scope: 'item'; readonly ordinal: number; readonly reason: ConclusionRelationProposalItemReason};
+
+export const MAX_RELATION_PROPOSAL_DIAGNOSTICS = 24;
+
+const RELATION_PROPOSAL_ITEM_REASONS: readonly ConclusionRelationProposalItemReason[] = [
+  'item_not_object', 'unknown_field', 'invalid_schema_version', 'invalid_id', 'invalid_kind',
+  'invalid_direction', 'invalid_subject', 'invalid_object', 'invalid_proof', 'invalid_value',
+  'invalid_unit', 'invalid_metric_column', 'invalid_delta_direction', 'invalid_proof_bindings',
+];
+
+export function isConclusionRelationProposalDiagnostic(value: unknown): value is ConclusionRelationProposalDiagnostic {
+  if (!record(value) || !keysWithin(value, value.scope === 'collection' ? ['scope', 'reason'] : ['scope', 'ordinal', 'reason'])) {
+    return false;
+  }
+  if (value.scope === 'collection') return value.reason === 'collection_not_array';
+  return value.scope === 'item' && Number.isSafeInteger(value.ordinal) && Number(value.ordinal) >= 1 &&
+    Number(value.ordinal) <= MAX_RELATION_PROPOSAL_DIAGNOSTICS &&
+    RELATION_PROPOSAL_ITEM_REASONS.includes(value.reason as ConclusionRelationProposalItemReason);
 }
 
 export type ConclusionBindingEligibility = 'eligible' | 'ineligible' | 'legacy_unchecked';
@@ -420,27 +460,36 @@ export function parseDeclaredConclusionClaims(raw: unknown): {
     (issue.code === 'invalid_reference' && !issue.path.endsWith('.references'))) ? {rawClaims: structuredClone(raw)} : {}), issues};
 }
 
-function relationProposal(value: unknown): value is EvidenceRelationCandidateV1 {
-  if (!record(value) || !keysWithin(value, ['schemaVersion', 'id', 'kind', 'direction', 'subject', 'object',
-    'proof', 'proofBindings', 'metricColumn', 'value', 'unit', 'deltaDirection']) ||
-    value.schemaVersion !== CONCLUSION_PROTOCOL_VALUES.relationSchemaVersion || typeof value.id !== 'string' ||
-    !/^proposal:[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value.id) ||
-    !oneOf(value.kind, CONCLUSION_PROTOCOL_VALUES.relationKind) ||
-    !oneOf(value.direction, CONCLUSION_PROTOCOL_VALUES.direction) ||
-    !claimReference(value.subject) || (value.object !== undefined && !claimReference(value.object)) ||
-    (value.proof !== undefined && !claimReference(value.proof)) ||
-    (value.value !== undefined && !scalar(value.value)) ||
-    ['unit', 'metricColumn'].some(key => value[key] !== undefined && (typeof value[key] !== 'string' || !String(value[key]).trim())) ||
-    (value.deltaDirection !== undefined && !oneOf(value.deltaDirection, CONCLUSION_PROTOCOL_VALUES.deltaDirection))) return false;
+function relationProposalFailure(value: unknown): ConclusionRelationProposalItemReason | undefined {
+  if (!record(value)) return 'item_not_object';
+  if (!keysWithin(value, ['schemaVersion', 'id', 'kind', 'direction', 'subject', 'object',
+    'proof', 'proofBindings', 'metricColumn', 'value', 'unit', 'deltaDirection'])) return 'unknown_field';
+  if (value.schemaVersion !== CONCLUSION_PROTOCOL_VALUES.relationSchemaVersion) return 'invalid_schema_version';
+  if (typeof value.id !== 'string' || !/^proposal:[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value.id)) return 'invalid_id';
+  if (!oneOf(value.kind, CONCLUSION_PROTOCOL_VALUES.relationKind)) return 'invalid_kind';
+  if (!oneOf(value.direction, CONCLUSION_PROTOCOL_VALUES.direction)) return 'invalid_direction';
+  if (!claimReference(value.subject)) return 'invalid_subject';
+  if (value.object !== undefined && !claimReference(value.object)) return 'invalid_object';
+  if (value.proof !== undefined && !claimReference(value.proof)) return 'invalid_proof';
+  if (value.value !== undefined && !scalar(value.value)) return 'invalid_value';
+  if (value.unit !== undefined && (typeof value.unit !== 'string' || !value.unit.trim())) return 'invalid_unit';
+  if (value.metricColumn !== undefined && (typeof value.metricColumn !== 'string' || !value.metricColumn.trim())) {
+    return 'invalid_metric_column';
+  }
+  if (value.deltaDirection !== undefined && !oneOf(value.deltaDirection, CONCLUSION_PROTOCOL_VALUES.deltaDirection)) {
+    return 'invalid_delta_direction';
+  }
   if (value.proofBindings !== undefined) {
-    if (!record(value.proofBindings) || !keysWithin(value.proofBindings, ['subject', 'object'])) return false;
+    if (!record(value.proofBindings) || !keysWithin(value.proofBindings, ['subject', 'object'])) {
+      return 'invalid_proof_bindings';
+    }
     for (const endpoint of [value.proofBindings.subject, value.proofBindings.object]) {
       if (!record(endpoint) || !keysWithin(endpoint, ['endpointColumn', 'proofColumn']) ||
         typeof endpoint.endpointColumn !== 'string' || !endpoint.endpointColumn.trim() ||
-        typeof endpoint.proofColumn !== 'string' || !endpoint.proofColumn.trim()) return false;
+        typeof endpoint.proofColumn !== 'string' || !endpoint.proofColumn.trim()) return 'invalid_proof_bindings';
     }
   }
-  return true;
+  return undefined;
 }
 
 export function parseDeclaredRelationProposals(raw: unknown): {
@@ -449,13 +498,18 @@ export function parseDeclaredRelationProposals(raw: unknown): {
   issues: ConclusionContractParseIssue[];
 } {
   if (!Array.isArray(raw)) return {relationProposals: [], rawRelationProposals: raw,
-    issues: [{code: 'invalid_relation_proposal', path: 'relationProposals'}]};
+    issues: [{code: 'invalid_relation_proposal', path: 'relationProposals',
+      relationProposalDiagnostic: {scope: 'collection', reason: 'collection_not_array'}}]};
   const relationProposals: EvidenceRelationCandidateV1[] = [];
   const issues: ConclusionContractParseIssue[] = [];
   const ids = new Set<string>();
   raw.forEach((item, index) => {
-    if (!relationProposal(item)) {
-      issues.push({code: 'invalid_relation_proposal', path: `relationProposals[${index}]`});
+    const reason = relationProposalFailure(item);
+    if (reason) {
+      issues.push({code: 'invalid_relation_proposal', path: `relationProposals[${index}]`,
+        ...(index < MAX_RELATION_PROPOSAL_DIAGNOSTICS ? {relationProposalDiagnostic: {
+          scope: 'item' as const, ordinal: index + 1, reason,
+        }} : {})});
       return;
     }
     if (ids.has(item.id)) issues.push({code: 'duplicate_proposal_id', path: `relationProposals[${index}].id`});
@@ -545,12 +599,27 @@ export function parseConclusionContractDeclaration(raw: unknown): {contract?: Co
     if (!check('$.evidenceChain[].conclusionId', item.conclusionId, typeof item.conclusionId === 'string', hasOwn(item, 'conclusionId'))) itemsValid = false;
     if (!check('$.evidenceChain[].text', item.text, typeof item.text === 'string', hasOwn(item, 'text'))) itemsValid = false;
   });
-  if (!itemsValid) return invalid();
   const claims = hasOwn(raw, 'claims') ? parseDeclaredConclusionClaims(raw.claims) : undefined;
   const relations = hasOwn(raw, 'relationProposals') ? parseDeclaredRelationProposals(raw.relationProposals) : undefined;
   issues.push(...(claims?.issues ?? []), ...(relations?.issues ?? []));
   const sourceBindingsValid = !hasOwn(raw, 'sourceClaimBindings') || isSourceClaimBindingsDeclaration(raw.sourceClaimBindings);
   if (!sourceBindingsValid) issues.push({code: 'invalid_reference', path: 'sourceClaimBindings'});
+  // Reject impossible declaration links before protocol recovery finishes. This
+  // checks ownership shape only; aliases, values and causality remain verifier work.
+  let sourceBindingLinksValid = true;
+  if (sourceBindingsValid && Array.isArray(raw.sourceClaimBindings)) {
+    raw.sourceClaimBindings.forEach((binding: SourceClaimBindingV1, index: number) => {
+      const owners = (claims?.claims ?? []).filter(claim => claim.id === binding.claimId);
+      const owner = owners.length === 1 ? owners[0] : undefined;
+      const hasTraceReference = owner && [owner.references, owner.artifactRefs, owner.relationRefs,
+        owner.semantics?.scope.subjectRefs, owner.semantics?.scope.objectRefs].some(refs => refs && refs.length > 0);
+      if (!owner || (binding.traceEvidenceRefIds.length > 0 && !hasTraceReference)) {
+        sourceBindingLinksValid = false;
+        issues.push({code: 'invalid_reference', path: `sourceClaimBindings[${index}].${owner ? 'traceEvidenceRefIds' : 'claimId'}`});
+      }
+    });
+  }
+  if (!itemsValid) return invalid();
   const contract: ConclusionContract = {
     schemaVersion: 'conclusion_contract_v1', mode: raw.mode as ConclusionOutputMode,
     conclusions: structuredClone(raw.conclusions) as ConclusionContractConclusionItem[],
@@ -565,7 +634,7 @@ export function parseConclusionContractDeclaration(raw: unknown): {contract?: Co
     ...(Array.isArray(raw.sourceReferences) ? {sourceReferences: structuredClone(raw.sourceReferences) as SourceReferenceV1[]} : {}),
     ...(sourceBindingsValid && hasOwn(raw, 'sourceClaimBindings')
       ? {sourceClaimBindings: structuredClone(raw.sourceClaimBindings) as SourceClaimBindingV1[]} : {}),
-    ...(rejectedRootMetadata || !sourceBindingsValid ? {rawDeclaration: structuredClone(raw)} : {}),
+    ...(rejectedRootMetadata || !sourceBindingsValid || !sourceBindingLinksValid ? {rawDeclaration: structuredClone(raw)} : {}),
     parseIssues: issues,
     bindingEligibility: issues.length ? 'ineligible' : 'eligible',
   };

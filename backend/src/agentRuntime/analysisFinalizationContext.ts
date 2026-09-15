@@ -9,6 +9,7 @@ import type {AnalysisDeliveryContext} from '../types/analysisDelivery';
 import type {DataEnvelope} from '../types/dataContract';
 import type {EvidenceReadRequest, EvidenceReadResolution, EvidenceReadView} from '../services/evidence/evidenceReadView';
 import type {AnalysisTurnIntent} from './analysisTurnIntent';
+import {validateAnalysisRunSelection, type AnalysisRunSelection} from './analysisRunSpec';
 import type {IntentTransportInput, IntentTransportResult} from './intentTransport';
 import {readConclusionProtocolProjection, releaseConclusionProtocolProjection,
   claimConclusionProtocolProjection,
@@ -32,6 +33,8 @@ export interface RuntimeFinalizationContextInput {
   turnIntent: AnalysisTurnIntent;
   strategyRegistry: ReadonlyStrategyRegistrySnapshot;
   traceIdentity: {currentTraceId?: string; referenceTraceId?: string};
+  /** Canonical per-run UI selection; absent only for legacy or pre-preparation fallback paths. */
+  selection?: AnalysisRunSelection;
   deliveryContext: AnalysisDeliveryContext;
   providerQuery?: FinalizationProviderQuery;
   sourceUse?: SourceUseDecisionV1;
@@ -62,6 +65,8 @@ export interface RuntimeFinalizationContext {
   readonly capabilityEvidence?: readonly DataEnvelope[];
   readonly investigationEvidence?: InvestigationEvidenceSnapshot;
   readonly hasSemanticTransport: boolean;
+  /** Input-role selection view; never evidence or a serializable result field. */
+  getSelection(signal: AbortSignal): AnalysisRunSelection | undefined;
   /** Input-role view, never a general exemption from output privacy projection. */
   getProviderQuery(signal: AbortSignal): Readonly<FinalizationProviderQuery> | undefined;
   getNativeDeclaration(result: AnalysisResult, signal: AbortSignal): NativeConclusionDeclaration | undefined;
@@ -139,6 +144,11 @@ export function attachFinalizationContext(result: AnalysisResult, input: Runtime
     input.deliveryContext.acceptedCandidate?.runId !== input.runId) {
     throw new Error('finalization_context_identity_mismatch');
   }
+  const selection = input.selection === undefined ? undefined : validateAnalysisRunSelection(input.selection);
+  if (selection?.present && selection.sideResolution.status === 'resolved' &&
+    selection.sideResolution.traceId !== input.traceIdentity.currentTraceId) {
+    throw new Error('finalization_context_selection_mismatch');
+  }
   if (input.protocolProjection) {
     readConclusionProtocolProjection(input.protocolProjection, {
       result, candidate: input.deliveryContext.acceptedCandidate, runId: input.runId,
@@ -158,6 +168,7 @@ export function attachFinalizationContext(result: AnalysisResult, input: Runtime
   contexts.set(result, {controller: new AbortController(), value: {
     ...input,
     investigationEvidence,
+    selection,
     turnIntent: freezeSnapshot(input.turnIntent),
     traceIdentity: freezeSnapshot(input.traceIdentity),
     deliveryContext: freezeSnapshot(input.deliveryContext),
@@ -195,6 +206,7 @@ export function takeFinalizationContext(result: AnalysisResult): RuntimeFinaliza
     get capabilityEvidence() { return current().capabilityEvidence; },
     get investigationEvidence() { return current().investigationEvidence; },
     get hasSemanticTransport() { return Boolean(current().dispatchText); },
+    getSelection(signal: AbortSignal) { return active(signal).selection; },
     getProviderQuery(signal: AbortSignal) { return active(signal).providerQuery; },
     getNativeDeclaration(result: AnalysisResult, signal: AbortSignal) {
       const value = active(signal);

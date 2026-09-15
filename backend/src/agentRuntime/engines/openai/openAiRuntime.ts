@@ -60,7 +60,8 @@ import {extractSourceLookupCodeReferences} from '../../../services/codebase/sour
 import {finalizeOwnerSourceAwareAnalysisResultWithProjection} from '../../../services/codebase/sourceClaimVerifier';
 import {countCompletedQuickConversationTurns} from '../../quickDirectResult';
 import {buildRuntimeTracePairComparisonContext} from '../../runtimePromptContext';
-import {createResettableRuntimeTimeout, resolveFullRequestTimeoutMs, serializedByteLength, summarizeExternalToolResult} from '../../runtimeLimits';
+import {createDeadlineRuntimeTimeout, createProgressAwareRunDeadline, createResettableRuntimeTimeout, resolveFullRequestTimeoutMs,
+  serializedByteLength, summarizeExternalToolResult} from '../../runtimeLimits';
 
 import {randomUUID} from 'node:crypto';
 import {TransformStream} from 'node:stream/web';
@@ -70,6 +71,13 @@ import {runOpenAiIntentTransport} from './openAiIntentTransport';
 import {attachFinalizationContext} from '../../analysisFinalizationContext';
 import {buildRuntimeTracePairIdentityContext} from '../../runtimePromptContext';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
+import {
+  acceptNativeDeclarationCompletion,
+  buildNativeDeclarationCompletionPrompt,
+  buildRelationProposalRecoveryPromptFragment,
+  requestNativeDeclarationCompletion,
+  type NativeDeclarationCompletionRequest,
+} from '../../runtimeConclusionProtocol';
 import type {RuntimeToolObserver} from '../../runtimeToolObserver';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext, toAnalysisHistoryTurn, type AnalysisHistoryReader} from '../../analysisHistory';
 import type {ReadonlyStrategyRegistrySnapshot} from '../../../services/selfEvolution/effectiveRuntimeRegistryContext';
@@ -190,6 +198,27 @@ function openAiTerminationReason(reason: NonNullable<AnalysisCompletion['reason'
     case 'output_limit': return undefined;
     default: return 'execution_error';
   }
+}
+
+/**
+ * Only provider output can extend an elapsed run deadline: answer text,
+ * reasoning or tool-call arguments. Agent bookkeeping events and chunks with
+ * empty deltas prove nothing about whether the model is still working.
+ */
+function openAiStreamEventCarriesOutput(event: unknown): boolean {
+  if (!event || typeof event !== 'object' || (event as {type?: unknown}).type !== 'raw_model_stream_event') return false;
+  const data = (event as {data?: any}).data;
+  const nonEmpty = (value: unknown) => typeof value === 'string' && value.length > 0;
+  if (data?.type === 'output_text_delta') return nonEmpty(data.delta);
+  if (data?.type !== 'model') return false;
+  const raw = data.event;
+  // Responses protocol: typed streaming events such as response.output_text.delta.
+  if (typeof raw?.type === 'string') return raw.type.endsWith('.delta') && nonEmpty(raw.delta);
+  // Chat Completions protocol: the raw chunk.
+  const delta = Array.isArray(raw?.choices) ? raw.choices.find((choice: any) => choice?.index === 0)?.delta : undefined;
+  return Boolean(delta) && (nonEmpty(delta.content) || nonEmpty(delta.reasoning_content) || nonEmpty(delta.reasoning) ||
+    (Array.isArray(delta.tool_calls) && delta.tool_calls.some((call: any) =>
+      nonEmpty(call?.function?.arguments) || nonEmpty(call?.function?.name))));
 }
 
 /** Bind native authorship before any privacy projection can replace the body. */
@@ -458,8 +487,9 @@ function buildOpenAiOutputLimitRecoveryInput(
   observedToolCalls: number,
   turnIntent: AnalysisTurnIntent,
   language: OutputLanguage,
-  recoveryReason: 'output_limit' | 'empty_body' | 'invalid_protocol' | 'turn_limit',
+  recoveryReason: 'output_limit' | 'empty_body' | 'invalid_protocol' | 'turn_limit' | 'missing_declaration',
   candidateDiagnostic: CandidateProtocolDiagnostic,
+  declarationRequest?: NativeDeclarationCompletionRequest,
 ): AgentInputItem[] | undefined {
   if (!Array.isArray(history) || !history.some(item => 'role' in item && item.role === 'user')) return undefined;
   const pendingCalls = new Set<string>();
@@ -472,15 +502,32 @@ function buildOpenAiOutputLimitRecoveryInput(
     }
   }
   if (pendingCalls.size || completedCalls < observedToolCalls) return undefined;
-  let template: string | undefined;
-  try { template = loadPromptTemplate(`prompt-openai-final-report-continuation-${language === 'en' ? 'en' : 'zh'}`); }
-  catch { return undefined; }
-  if (!template?.trim()) return undefined;
-  const prompt = renderTemplate(template.replace(/<!--[\s\S]*?-->/g, '').trim(), {
-    turn_intent: JSON.stringify(turnIntent),
-    completion_reason: recoveryReason,
-    candidate_protocol_diagnostic: JSON.stringify(sanitizeCandidateProtocolDiagnostic(candidateDiagnostic) ?? null),
-  });
+  let prompt: string;
+  if (recoveryReason === 'missing_declaration') {
+    if (!declarationRequest) return undefined;
+    try {
+      prompt = buildNativeDeclarationCompletionPrompt({request: declarationRequest, intent: turnIntent,
+        outputLanguage: language});
+    } catch {
+      // Optional protocol completion cannot invalidate an already completed
+      // native candidate when its external template is unavailable.
+      return undefined;
+    }
+  } else {
+    let template: string | undefined;
+    try { template = loadPromptTemplate(`prompt-openai-final-report-continuation-${language === 'en' ? 'en' : 'zh'}`); }
+    catch { return undefined; }
+    if (!template?.trim()) return undefined;
+    const basePrompt = renderTemplate(template.replace(/<!--[\s\S]*?-->/g, '').trim(), {
+      turn_intent: JSON.stringify(turnIntent),
+      completion_reason: recoveryReason,
+      candidate_protocol_diagnostic: JSON.stringify(sanitizeCandidateProtocolDiagnostic(candidateDiagnostic) ?? null),
+    });
+    let relationFragment: string;
+    try { relationFragment = buildRelationProposalRecoveryPromptFragment(candidateDiagnostic, language); }
+    catch { return undefined; }
+    prompt = relationFragment ? `${basePrompt}\n\n${relationFragment}` : basePrompt;
+  }
   const input: AgentInputItem[] = [...history, {role: 'user', content: prompt}];
   return serializedByteLength(input) <= maxHistoryBytes ? input : undefined;
 }
@@ -508,6 +555,7 @@ export const __testing = {
   createOpenAiTerminalFetch,
   resolveOpenAiNativeCompletion,
   finalizeOpenAiCandidate,
+  openAiStreamEventCarriesOutput,
 };
 
 export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
@@ -757,7 +805,16 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       }, timestamp: Date.now()});
       const timeoutMs = quickMode ? config.quickPathPerTurnMs * maxTurns
         : resolveFullRequestTimeoutMs(config.fullPathPerTurnMs, maxTurns, config.fullRequestTimeoutMs);
-      const deadlineAt = Date.now() + timeoutMs;
+      // The base budget stays the initial deadline; completed tool rounds move it
+      // forward on slow endpoints, never past the hard ceiling fixed here.
+      const perTurnMs = quickMode ? config.quickPathPerTurnMs : config.fullPathPerTurnMs;
+      const runDeadline = createProgressAwareRunDeadline({baseBudgetMs: timeoutMs, perTurnMs,
+        maxRunMs: config.maxRunTimeoutMs});
+      // Set only for the single no-tool delivery call admitted after a timeout.
+      let deliveryDeadlineAt: number | undefined;
+      // Internal diagnostics: which timeout-delivery branch this run took.
+      let timeoutDelivery: 'not_needed' | 'attempted' | 'no_returned_data' | 'turn_budget_exhausted' |
+        'delivery_window_too_short' | 'template_unavailable' | 'recovery_in_progress' = 'not_needed';
       let conclusion = '';
       let outputOrigin: AnalysisOutputOrigin = 'assistant_stream';
       let finish: Pick<AnalysisCompletion, 'status' | 'reason' | 'sdkFinishReason'> = {status: 'unknown'};
@@ -771,10 +828,14 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       let recoveryCandidate: {
         conclusion: string; attemptId: string; outputOrigin: AnalysisOutputOrigin;
         finish: typeof finish; hadDeclarations: boolean; terminationMessage: string | undefined;
+        finalHistory: AgentInputItem[] | undefined; finalLastResponseId: string | undefined;
+        finalRunState: string | undefined;
+        declarationRequest?: NativeDeclarationCompletionRequest;
       } | undefined;
       const restoreRecoveryCandidate = () => {
         if (!recoveryCandidate) return;
-        ({conclusion, attemptId, outputOrigin, finish, terminationMessage} = recoveryCandidate);
+        ({conclusion, attemptId, outputOrigin, finish, terminationMessage,
+          finalHistory, finalLastResponseId, finalRunState} = recoveryCandidate);
       };
       for (;;) {
         analysisAbortScope.throwIfAborted();
@@ -806,9 +867,13 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         const toolInputsByTaskId = new Map<string, {toolName: string; args: Record<string, unknown>}>();
         const processedToolResultIds = new Set<string>();
         const reasoningThoughts = new ReasoningThoughtBuffer();
-        const remainingMs = Math.max(1, deadlineAt - Date.now());
-        const requestTimeout = createResettableRuntimeTimeout({timeoutMs: remainingMs,
-          message: `OpenAI request timeout after ${timeoutMs}ms`,
+        const attemptDeliveryDeadlineAt = deliveryDeadlineAt;
+        const requestTimeout = createDeadlineRuntimeTimeout({
+          deadlineAt: () => attemptDeliveryDeadlineAt ?? runDeadline.current(),
+          ...(attemptDeliveryDeadlineAt === undefined ? {tryExtend: (now: number) => runDeadline.extendIfStreaming(now)} : {}),
+          message: now => attemptDeliveryDeadlineAt === undefined
+            ? `OpenAI request timeout after ${now - runDeadline.startedAt}ms without further tool progress (base budget ${timeoutMs}ms)`
+            : `OpenAI delivery call timeout after ${now - runDeadline.startedAt}ms (hard limit ${runDeadline.hardDeadlineAt - runDeadline.startedAt}ms)`,
           onTimeout: () => {timedOut = true; controller.abort();}});
         const providerIdleTimeout = createResettableRuntimeTimeout({timeoutMs: config.streamIdleTimeoutMs,
           message: `OpenAI provider stream idle timeout after ${config.streamIdleTimeoutMs}ms`,
@@ -817,7 +882,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         void providerIdleTimeout.promise.catch(() => undefined);
         const providerPhase = runtimePerformance.startPhase('provider');
         try {
-          if (Date.now() >= deadlineAt) {timedOut = true; throw new Error('OpenAI request deadline elapsed');}
+          if (Date.now() >= (attemptDeliveryDeadlineAt ?? runDeadline.current())) {timedOut = true; throw new Error('OpenAI request deadline elapsed');}
           if (recoveringOutputLimit) {
             executionLease.throwIfAborted();
             assertCurrentAnalysisContextAuthorization(options, authorizationScope, authorizationFingerprint);
@@ -834,6 +899,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             for await (const event of stream) {
               if (!active || controller.signal.aborted || analysisAbortScope.signal.aborted || executionLease.signal.aborted) return;
               providerIdleTimeout.reset();
+              if (openAiStreamEventCarriesOutput(event)) runDeadline.recordOutput();
               if (event.type === 'raw_model_stream_event') {
                 const data = event.data as any;
                 if (data?.type === 'response_started') {
@@ -848,6 +914,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
                 suppressAnswerTokens: recoveringOutputLimit,
                 toolInputsByTaskId, processedToolResultIds, reasoningThoughts,
                 tracePairContext: options.tracePairContext, onToolCalled: () => {observedToolCalls++;},
+                onToolOutput: () => runDeadline.recordProgress(),
               });
               runAnswer += answerDelta;
               if (!recoveringOutputLimit) emittedAnswer = `${emittedAnswer}${answerDelta}`.slice(-16_000);
@@ -884,28 +951,45 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             candidateProtocolDiagnostic}, timestamp: Date.now()});
           const protocolInvalid = nativeProtocol.status === 'invalid';
           const bodyEmpty = !nativeProtocol.canonicalBody.trim();
-          if (recoveringOutputLimit && (finish.status !== 'completed' || bodyEmpty ||
-              protocolInvalid && recoveryCandidate?.finish.reason !== 'turn_limit' ||
+          const declarationRequest = requestNativeDeclarationCompletion({
+            intent: turnIntent, completion: finish, candidate: conclusion,
+            remainingDeliveryTurns: rounds < maxTurns ? turnBudget.deliveryTurns : 0,
+          });
+          const declarationRepairRejected = recoveryCandidate?.declarationRequest &&
+            !acceptNativeDeclarationCompletion({request: recoveryCandidate.declarationRequest,
+              completion: finish, candidate: conclusion});
+          const exhaustedBudget = recoveryCandidate?.finish.reason === 'turn_limit' || recoveryCandidate?.finish.reason === 'timeout'
+            ? recoveryCandidate.finish.reason : undefined;
+          if (recoveringOutputLimit && (finish.status !== 'completed' || bodyEmpty || declarationRepairRejected ||
+              protocolInvalid && !exhaustedBudget ||
               recoveryCandidate?.hadDeclarations && nativeProtocol.status === 'absent')) {
             restoreRecoveryCandidate();
-          } else if (recoveringOutputLimit && recoveryCandidate?.finish.reason === 'turn_limit') {
+          } else if (recoveringOutputLimit && exhaustedBudget) {
             // The new SDK candidate is real, but completing its prose does not
             // complete the investigation that exhausted its acquisition budget.
             // Retain invalid declarations for the shared quality gate rather
             // than erase an available partial body to hide its failed checks.
-            finish = {...finish, status: 'incomplete', reason: 'turn_limit'};
-            terminationMessage = localize(config.outputLanguage,
-              '调查轮次预算已耗尽；仅依据已返回的证据生成有限结论，未完成项仍需继续核查。',
-              'The investigation turn budget was exhausted; this limited conclusion uses only returned evidence, and unfinished questions still need investigation.');
+            finish = {...finish, status: 'incomplete', reason: exhaustedBudget};
+            terminationMessage = exhaustedBudget === 'turn_limit'
+              ? localize(config.outputLanguage,
+                '调查轮次预算已耗尽；仅依据已返回的证据生成有限结论，未完成项仍需继续核查。',
+                'The investigation turn budget was exhausted; this limited conclusion uses only returned evidence, and unfinished questions still need investigation.')
+              : localize(config.outputLanguage,
+                '调查时间预算已耗尽；仅依据已返回的证据生成有限结论，未完成项仍需继续核查。',
+                'The investigation time budget was exhausted; this limited conclusion uses only returned evidence, and unfinished questions still need investigation.');
           } else if (!recoveringOutputLimit && (finish.status === 'incomplete' && finish.reason === 'output_limit' ||
-              finish.status === 'completed' && (bodyEmpty || protocolInvalid)) &&
-              streamCompleted && rounds < maxTurns && Date.now() < deadlineAt && !runInput.previousResponseId) {
-            const recoveryReason = finish.reason === 'output_limit' ? 'output_limit' : protocolInvalid ? 'invalid_protocol' : 'empty_body';
-            const recoveryInput = buildOpenAiOutputLimitRecoveryInput(stream.history, config.maxHistoryBytes, observedToolCalls, turnIntent, config.outputLanguage, recoveryReason, candidateProtocolDiagnostic);
+              finish.status === 'completed' && (bodyEmpty || protocolInvalid || declarationRequest)) &&
+              streamCompleted && rounds < maxTurns && Date.now() < runDeadline.current() && !runInput.previousResponseId) {
+            const recoveryReason = finish.reason === 'output_limit' ? 'output_limit' : protocolInvalid ? 'invalid_protocol'
+              : declarationRequest ? 'missing_declaration' : 'empty_body';
+            const recoveryInput = buildOpenAiOutputLimitRecoveryInput(stream.history, config.maxHistoryBytes,
+              observedToolCalls, turnIntent, config.outputLanguage, recoveryReason, candidateProtocolDiagnostic,
+              declarationRequest);
             if (recoveryInput) {
               acceptsToolUpdates = false;
               recoveryCandidate = {conclusion, attemptId, outputOrigin, finish, terminationMessage,
-                hadDeclarations: nativeProtocol.status !== 'absent'};
+                finalHistory, finalLastResponseId, finalRunState,
+                hadDeclarations: nativeProtocol.status !== 'absent', ...(declarationRequest ? {declarationRequest} : {})};
               agent = agent.clone({tools: [], modelSettings: {...agent.modelSettings, toolChoice: 'none'}});
               runInput = {...runInput, input: recoveryInput, previousResponseId: undefined};
               continue;
@@ -925,7 +1009,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             : Math.max(attemptModelTurns, attemptDispatched ? 1 : 0);
           runtimePerformanceOutcome = timedOut ? 'cancelled' : 'error';
           if (!timedOut && error instanceof MaxTurnsExceededError && reserveDeliveryTurn &&
-              rounds < maxTurns && Date.now() < deadlineAt) {
+              rounds < maxTurns && Date.now() < runDeadline.current()) {
             let history: AgentInputItem[] | undefined;
             try { history = error.state?.history; } catch { /* Unreadable history cannot authorize recovery. */ }
             const nativeProtocol = inspectCandidateProtocol(conclusion);
@@ -941,9 +1025,35 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             if (recoveryInput) {
               acceptsToolUpdates = false;
               recoveryCandidate = {conclusion, attemptId, outputOrigin, finish, terminationMessage,
+                finalHistory, finalLastResponseId, finalRunState,
                 hadDeclarations: nativeProtocol.status !== 'absent'};
               agent = agent.clone({tools: [], modelSettings: {...agent.modelSettings, toolChoice: 'none'}});
               runInput = {...runInput, input: recoveryInput, previousResponseId: undefined};
+              continue;
+            }
+          }
+          // A timeout keeps the evidence already returned in this run. One no-tool
+          // delivery call inside the reserve turns it into a limited answer; with
+          // no returned data there is nothing to deliver and the empty result stands.
+          const deliveryWindowMs = runDeadline.deliveryWindowMs();
+          if (timedOut && deliveryDeadlineAt === undefined) {
+            timeoutDelivery = recoveringOutputLimit ? 'recovery_in_progress'
+              : !closeoutTape.hasReturnedData() ? 'no_returned_data'
+                : rounds >= maxTurns ? 'turn_budget_exhausted'
+                  : deliveryWindowMs < perTurnMs ? 'delivery_window_too_short' : 'attempted';
+          }
+          if (timedOut && timeoutDelivery === 'attempted' && deliveryDeadlineAt === undefined) {
+            const boundedPrompt = closeoutTape.buildPrompt({query, priorConclusion: emittedAnswer || conclusion,
+              outputLanguage: config.outputLanguage, budgetExhausted: 'timeout'});
+            if (!boundedPrompt) timeoutDelivery = 'template_unavailable';
+            if (boundedPrompt) {
+              acceptsToolUpdates = false;
+              recoveryCandidate = {conclusion, attemptId, outputOrigin, finish, terminationMessage,
+                finalHistory, finalLastResponseId, finalRunState,
+                hadDeclarations: inspectCandidateProtocol(conclusion).status !== 'absent'};
+              deliveryDeadlineAt = Date.now() + deliveryWindowMs;
+              agent = agent.clone({tools: [], modelSettings: {...agent.modelSettings, toolChoice: 'none'}});
+              runInput = {...runInput, input: [{role: 'user' as const, content: boundedPrompt}], previousResponseId: undefined};
               continue;
             }
           }
@@ -960,6 +1070,20 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       }
       analysisAbortScope.throwIfAborted();
       acceptsToolUpdates = false;
+      // Finalization gets the deadline this run reached plus the reserved time its
+      // evidence reads need; it cannot extend it and never passes the hard deadline.
+      const finalizationDeadlineAt = runDeadline.finalizationDeadlineAt(Date.now(), deliveryDeadlineAt);
+      const budget = runDeadline.snapshot();
+      if (budget.extended || timeoutDelivery !== 'not_needed') {
+        const delivery = timeoutDelivery !== 'attempted' ? timeoutDelivery
+          : recoveryCandidate && attemptId !== recoveryCandidate.attemptId ? 'delivered' : 'restored';
+        console.warn(`[OpenAIRuntime] run budget: base=${budget.baseBudgetMs}ms max=${budget.maxRunMs}ms ` +
+          `reserve=${budget.deliveryReserveMs}ms finalizationReserve=${runDeadline.finalizationReserveMs}ms ` +
+          `effective=${budget.deadlineMs}ms elapsed=${budget.elapsedMs}ms ` +
+          `progress=${budget.progressCount} progressExtensions=${budget.progressExtensions} ` +
+          `outputExtensions=${budget.outputExtensions} recentSlowestRound=${budget.recentSlowestRoundMs}ms ` +
+          `finish=${finish.reason ?? finish.status} timeoutDelivery=${delivery}`);
+      }
       const findings = extractFindingsFromText(conclusion);
       const partial = finish.status !== 'completed';
       const nativeResult: AnalysisResult = {
@@ -1016,9 +1140,10 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         this.emitUpdate({type: 'conclusion', content: {conclusion: result.conclusion, durationMs: Date.now() - startTime, turns: rounds}, timestamp: Date.now()});
         this.emitUpdate({type: 'answer_token', content: {done: true, totalChars: result.conclusion.length}, timestamp: Date.now()});
         attachFinalizationContext(result, {
-          runId, sessionId, deadlineMs: deadlineAt, turnIntent: resolvedTurnIntent,
+          runId, sessionId, deadlineMs: finalizationDeadlineAt, turnIntent: resolvedTurnIntent,
           providerQuery: {text: analysisRunSpec.query.text, analysisContextFingerprint: options.analysisContextFingerprint},
           strategyRegistry: intentResolver.strategyRegistry,
+          selection: analysisRunSpec.selection,
           traceIdentity: {currentTraceId, referenceTraceId}, deliveryContext, protocolProjection,
           sourceUse: sourceUse?.getSourceUseDecision(),
           sourceScope: sourceUse?.getSourceExecutionScope?.(),
@@ -1027,7 +1152,9 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
           }),
           // No SDK/session state survives this closure. The shared context supplies
           // the finalization caller's signal and clamps the original absolute deadline.
-          dispatchText: result.completion?.reason === 'turn_limit' ? undefined : input => runOpenAiIntentTransport({...input, config: finalizationConfig,
+          dispatchText: result.completion?.reason === 'turn_limit' || result.completion?.reason === 'timeout'
+            ? undefined : input => runOpenAiIntentTransport({...input,
+            config: finalizationConfig, purpose: 'final_semantic',
             ...(finalizationConfig.maxOutputTokens !== undefined
               ? {maxOutputTokens: finalizationConfig.maxOutputTokens} : {})}),
         });
@@ -1504,6 +1631,8 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       processedToolResultIds?: Set<string>;
       tracePairContext?: TracePairContext;
       onToolCalled?: () => void;
+      /** A tool result returned to the model: one completed investigation round. */
+      onToolOutput?: () => void;
       onSuppressedAnswerDelta?: (delta: string) => void;
       /** Holds pre-plan model text so it can be shown as reasoning, not dropped. */
       reasoningThoughts?: ReasoningThoughtBuffer;
@@ -1576,6 +1705,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       const realTaskIds = taskIds.filter(id => id !== 'unknown');
       if (realTaskIds.some(id => streamContext.processedToolResultIds?.has(id))) return '';
       realTaskIds.forEach(id => streamContext.processedToolResultIds?.add(id));
+      streamContext.onToolOutput?.();
       const cached = taskIds
         .map(taskId => streamContext.toolInputsByTaskId.get(taskId))
         .find(Boolean);

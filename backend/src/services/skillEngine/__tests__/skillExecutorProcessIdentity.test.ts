@@ -89,6 +89,50 @@ function createExecutor(query: jest.Mock): SkillExecutor {
 }
 
 describe('SkillExecutor process identity gate', () => {
+  it.each([
+    {params: {package: 'com.example', upid: 42}, expectedMode: 'exact_upid', expectedSqlValue: 42},
+    {params: {package: 'com.example'}, expectedMode: 'named', expectedSqlValue: null},
+  ])('propagates a selected startup scope through its nested placement Skill: $expectedMode', async ({params, expectedMode, expectedSqlValue}) => {
+    const placement: SkillDefinition = {name: 'startup_placement_fixture', version: '1', type: 'atomic',
+      meta: {display_name: 'Placement', description: 'Placement'},
+      inputs: [{name: 'package', type: 'string', required: true}],
+      process_scope: {role: 'target', binding: 'native_upid'},
+      sql: 'SELECT ${__process_scope.upid} AS selected_upid',
+    };
+    const detail: SkillDefinition = {name: 'startup_detail_fixture', version: '1', type: 'composite',
+      meta: {display_name: 'Startup detail', description: 'Startup detail'},
+      identity: {policy: 'required', scope: 'process', aliases: ['package'], rewriteTo: 'recommended_process_name_param'},
+      inputs: [{name: 'package', type: 'string', required: true}],
+      steps: [{id: 'placement', type: 'skill', skill: placement.name,
+        params: {package: '${package}'}, display: {level: 'detail', layer: 'deep', title: 'Placement', format: 'table'}}],
+    };
+    const query = jest.fn()
+      .mockResolvedValueOnce({
+        columns: ['rank', 'confidence_score', 'identity_status', 'canonical_package_name',
+          'recommended_process_name_param', 'upid', 'process_name', 'target_match_sources',
+          'supporting_sources', 'identity_warning'],
+        rows: [[1, 100, 'confirmed', 'com.example', 'com.example', 42, 'com.example',
+          'process.name', 'startup_processes.upid', 'ok']], durationMs: 1,
+      })
+      .mockResolvedValueOnce({columns: ['selected_upid'], rows: [[expectedSqlValue]], durationMs: 1});
+    const executor = new SkillExecutor({query});
+    executor.registerSkills([resolverSkill, placement, detail]);
+    const result = await executor.execute(detail.name, 'trace', params);
+    expect(result.success).toBe(true);
+    const nested = result.rawResults?.placement;
+    expect(nested?.appliedProcessScope).toMatchObject({mode: expectedMode,
+      ...(expectedMode === 'exact_upid' ? {upid: 42} : {})});
+    expect(nested?.scopeProvenance?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({role: 'target', scope: expect.objectContaining({mode: expectedMode})}),
+    ]));
+    if (expectedMode === 'exact_upid') {
+      expect(nested?.appliedProcessScope?.identityRefId).toBe(result.identityResolution?.identityRefId);
+    } else {
+      expect(nested?.appliedProcessScope).not.toHaveProperty('upid');
+    }
+    expect(query.mock.calls[1][1]).toContain(`SELECT ${expectedSqlValue === null ? 'NULL' : '42'} AS selected_upid`);
+  });
+
   it('runs resolver and rewrites process_name before executing required process skills', async () => {
     const query = jest.fn()
       .mockResolvedValueOnce({

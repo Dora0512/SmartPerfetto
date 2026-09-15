@@ -57,17 +57,42 @@ type MatrixCondition = 'A0' | 'A1' | 'A2' | 'A3' | 'A4';
 
 export interface ConstructedSourceGroundTruth {
   marker: string;
+  firstFrameMarker: string;
   relativeSourcePath: string;
   symbol: string;
   lineRange: {start: number; end: number};
   callChain: string[];
   actionableSeam: string;
+  compatibility: {
+    buildLink: 'synthetic_constructed_pair_only';
+    causalStatus: 'candidate';
+    baseAndroidStartupLinked: false;
+  };
+  sourceLines: {
+    beginLine: number;
+    policyLine: number;
+    readLine: number;
+    endLine: number;
+    callerLine: number;
+    firstFrameBegin: number;
+    firstFrameCaller: number;
+  };
   traceFacts: {
     marker: string;
     occurrence: true;
     process: string;
     thread: string;
+    atNs: number;
     durationNs: number;
+    selectedThreadStateNs: {Running: number; D: number; total: number};
+    firstFrame: {
+      marker: string;
+      process: string;
+      thread: string;
+      atNs: number;
+      durationNs: number;
+      markerEndsBeforeStart: true;
+    };
   };
   trace: {
     baseCaseId: string;
@@ -243,20 +268,47 @@ export function loadConstructedSourceGroundTruth(repoRoot: string): ConstructedS
     'utf8',
   )) as Record<string, unknown>;
   const raw = expected.source_trace_ground_truth;
-  if (!isRecord(raw) || !isRecord(raw.lineRange) || !isRecord(raw.traceFacts) || !isRecord(raw.trace)) {
+  if (!isRecord(raw) || !isRecord(raw.lineRange) || !isRecord(raw.compatibility) ||
+      !isRecord(raw.sourceLines) || !isRecord(raw.traceFacts) || !isRecord(raw.traceFacts.selectedThreadStateNs) ||
+      !isRecord(raw.traceFacts.firstFrame) || !isRecord(raw.trace)) {
     throw new Error('Missing generated source_trace_ground_truth');
   }
   const lineStart = Number(raw.lineRange.start);
   const lineEnd = Number(raw.lineRange.end);
   const durationNs = Number(raw.traceFacts.durationNs);
+  const markerAtNs = Number(raw.traceFacts.atNs);
+  const selectedThreadStateNs = {
+    Running: Number(raw.traceFacts.selectedThreadStateNs.Running),
+    D: Number(raw.traceFacts.selectedThreadStateNs.D),
+    total: Number(raw.traceFacts.selectedThreadStateNs.total),
+  };
+  const firstFrameAtNs = Number(raw.traceFacts.firstFrame.atNs);
+  const firstFrameDurationNs = Number(raw.traceFacts.firstFrame.durationNs);
   if (!Number.isInteger(lineStart) || lineStart <= 0 || !Number.isInteger(lineEnd) || lineEnd < lineStart) {
     throw new Error('Invalid generated source line range');
   }
-  if (!Number.isSafeInteger(durationNs) || durationNs <= 0 || raw.traceFacts.occurrence !== true) {
+  if (!Number.isSafeInteger(markerAtNs) || markerAtNs < 0 || !Number.isSafeInteger(durationNs) ||
+      durationNs <= 0 || raw.traceFacts.occurrence !== true) {
     throw new Error('Invalid generated trace facts');
+  }
+  if (Object.values(selectedThreadStateNs).some(value => !Number.isSafeInteger(value) || value < 0) ||
+      selectedThreadStateNs.Running + selectedThreadStateNs.D !== selectedThreadStateNs.total ||
+      selectedThreadStateNs.total !== durationNs || !Number.isSafeInteger(firstFrameAtNs) || firstFrameAtNs <= 0 ||
+      !Number.isSafeInteger(firstFrameDurationNs) || firstFrameDurationNs <= 0 ||
+      markerAtNs + durationNs >= firstFrameAtNs ||
+      raw.traceFacts.firstFrame.markerEndsBeforeStart !== true) {
+    throw new Error('Invalid generated source trace interval contract');
+  }
+  const expectedSourceLineKeys = ['beginLine', 'callerLine', 'endLine', 'firstFrameBegin', 'firstFrameCaller',
+    'policyLine', 'readLine'];
+  const sourceLineEntries = Object.entries(raw.sourceLines);
+  if (sourceLineEntries.map(([key]) => key).sort().join('|') !== expectedSourceLineKeys.join('|') ||
+      sourceLineEntries.some(([, value]) => !Number.isInteger(Number(value)) || Number(value) <= 0)) {
+    throw new Error('Invalid generated executable source line contract');
   }
   const groundTruth: ConstructedSourceGroundTruth = {
     marker: requireString(raw.marker, 'marker'),
+    firstFrameMarker: requireString(raw.firstFrameMarker, 'firstFrameMarker'),
     relativeSourcePath: requireString(raw.relativeSourcePath, 'relativeSourcePath'),
     symbol: requireString(raw.symbol, 'symbol'),
     lineRange: {start: lineStart, end: lineEnd},
@@ -264,12 +316,28 @@ export function loadConstructedSourceGroundTruth(repoRoot: string): ConstructedS
       ? raw.callChain.map((entry, index) => requireString(entry, `callChain[${index}]`))
       : [],
     actionableSeam: requireString(raw.actionableSeam, 'actionableSeam'),
+    compatibility: {
+      buildLink: requireString(raw.compatibility.buildLink, 'compatibility.buildLink') as 'synthetic_constructed_pair_only',
+      causalStatus: requireString(raw.compatibility.causalStatus, 'compatibility.causalStatus') as 'candidate',
+      baseAndroidStartupLinked: false,
+    },
+    sourceLines: Object.fromEntries(sourceLineEntries.map(([key, value]) => [key, Number(value)])) as ConstructedSourceGroundTruth['sourceLines'],
     traceFacts: {
       marker: requireString(raw.traceFacts.marker, 'traceFacts.marker'),
       occurrence: true,
       process: requireString(raw.traceFacts.process, 'traceFacts.process'),
       thread: requireString(raw.traceFacts.thread, 'traceFacts.thread'),
+      atNs: markerAtNs,
       durationNs,
+      selectedThreadStateNs,
+      firstFrame: {
+        marker: requireString(raw.traceFacts.firstFrame.marker, 'traceFacts.firstFrame.marker'),
+        process: requireString(raw.traceFacts.firstFrame.process, 'traceFacts.firstFrame.process'),
+        thread: requireString(raw.traceFacts.firstFrame.thread, 'traceFacts.firstFrame.thread'),
+        atNs: firstFrameAtNs,
+        durationNs: firstFrameDurationNs,
+        markerEndsBeforeStart: true,
+      },
     },
     trace: {
       baseCaseId: requireString(raw.trace.baseCaseId, 'trace.baseCaseId'),
@@ -285,6 +353,27 @@ export function loadConstructedSourceGroundTruth(repoRoot: string): ConstructedS
   };
   if (groundTruth.trace.materialization !== 'committed-base-plus-overlay') {
     throw new Error('Constructed source ground truth must use committed-base-plus-overlay');
+  }
+  if (groundTruth.compatibility.buildLink !== 'synthetic_constructed_pair_only' ||
+      groundTruth.compatibility.causalStatus !== 'candidate' || raw.compatibility.baseAndroidStartupLinked !== false ||
+      groundTruth.traceFacts.marker !== groundTruth.marker ||
+      groundTruth.traceFacts.firstFrame.marker !== groundTruth.firstFrameMarker ||
+      groundTruth.traceFacts.firstFrame.process !== groundTruth.traceFacts.process ||
+      groundTruth.traceFacts.firstFrame.thread !== groundTruth.traceFacts.thread) {
+    throw new Error('Constructed source ground truth overstates source/trace compatibility');
+  }
+  if (groundTruth.callChain.join('|') !== [
+    'Application.onCreate', 'StartupHooks.initializeOnMainThread',
+    'StartupHooks.readStartupPolicySynchronously', 'File.readText',
+  ].join('|') || groundTruth.sourceLines.beginLine <= groundTruth.lineRange.start ||
+      groundTruth.sourceLines.policyLine <= groundTruth.sourceLines.beginLine ||
+      groundTruth.sourceLines.endLine <= groundTruth.sourceLines.policyLine ||
+      groundTruth.sourceLines.readLine <= groundTruth.sourceLines.endLine ||
+      groundTruth.sourceLines.readLine > groundTruth.lineRange.end ||
+      groundTruth.sourceLines.callerLine <= groundTruth.lineRange.end ||
+      groundTruth.sourceLines.firstFrameBegin <= groundTruth.lineRange.end ||
+      groundTruth.sourceLines.firstFrameCaller <= groundTruth.sourceLines.firstFrameBegin) {
+    throw new Error('Constructed source ground truth does not bind the executable mechanism');
   }
   const overlayPath = path.join(caseDir, 'trace.overlay.pftrace');
   if (sha256File(overlayPath) !== groundTruth.trace.overlaySha256) {
@@ -506,10 +595,14 @@ async function collectSourceEvidence(input: {
     exactLine: exactReference.lineRange?.start === input.groundTruth.lineRange.start &&
       exactReference.lineRange.end === input.groundTruth.lineRange.end,
     callChainMapped: handlerText.includes('fun onCreate') &&
-      handlerText.includes('StartupHooks.initializeOnMainThread()') &&
-      handlerText.includes('startupPolicy'),
-    traceMarkerMapped: handlerText.includes(input.groundTruth.marker),
-    actionableSeam: handlerText.includes('avoid synchronous disk I/O before first frame'),
+      handlerText.includes('StartupHooks.initializeOnMainThread(policyFile)') &&
+      handlerText.includes('val startupPolicy = readStartupPolicySynchronously(policyFile)') &&
+      handlerText.includes('policyFile.readText()'),
+    traceMarkerMapped: handlerText.includes(input.groundTruth.marker) &&
+      handlerText.includes('Trace.beginSection(TRACE_SOURCE_MARKER)') &&
+      handlerText.includes('Trace.endSection()'),
+    actionableSeam: handlerText.includes('readStartupPolicySynchronously') &&
+      handlerText.includes('FIRST_FRAME_TRACE_MARKER'),
   };
   if (!Object.values(sourceFacts).every(Boolean)) {
     throw new Error(`Actual source handlers did not prove every semantic fact: ${JSON.stringify(sourceFacts)}`);

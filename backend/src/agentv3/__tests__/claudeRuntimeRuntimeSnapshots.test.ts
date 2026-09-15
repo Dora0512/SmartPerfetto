@@ -47,6 +47,7 @@ import {analysisDeliveryFingerprint} from '../../types/analysisDelivery';
 import {takeFinalizationContext} from '../../agentRuntime/analysisFinalizationContext';
 import type {AnalysisOptions} from '../../agent/core/orchestratorTypes';
 import {buildAnalysisContextAuthorizationFingerprint} from '../../services/resolvedAnalysisContext';
+import * as contextAuthorization from '../../services/resolvedAnalysisContext';
 import {resolveKnowledgeScope} from '../../services/scopedKnowledgeStore';
 import {ArtifactStore} from '../artifactStore';
 import * as claudeMcpServer from '../claudeMcpServer';
@@ -59,6 +60,13 @@ import {
   SOURCE_FINALIZATION_RAW_SOURCE,
 } from '../../agentRuntime/__tests__/sourceFinalizationFixture';
 import type {RunManifestAttributionSink} from '../../types/selfEvolution';
+import {renderConclusionContractSidecar} from '../../agent/core/conclusionContract';
+import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
+
+function declaredCandidate(body: string): string {
+  return `${body}\n${renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+    conclusions: [], clusters: [], evidenceChain: [], claims: [], relationProposals: [], uncertainties: [], nextSteps: []})}`;
+}
 
 const mockClaudeVerifierVerifyConclusion = jest.fn();
 jest.mock('../../agentRuntime/engines/claude/claudeVerifier', () => {
@@ -426,7 +434,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
         tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'});
       expect(result.success).toBe(true);
       const calls = claudeSdkMock.__getQueryCalls();
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(2);
       expect(calls[0].options.resume).toBeUndefined();
       expect(runtime.getSdkSessionId('session-a')).toBe('sdk-session-a');
       expect(runtime.getSdkSessionId('session-a', 'trace-b')).toBe('sdk-session-b');
@@ -816,7 +824,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     });
 
     const calls = claudeSdkMock.__getQueryCalls();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     expect(calls[0].options.resume).toBeUndefined();
     expect(calls[0].prompt).toContain('上一轮回答：主要包名是 com.example.app。');
     expect(calls[0].options.persistSession).toBe(true);
@@ -896,7 +904,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     );
 
     expect(traceProcessor.query).not.toHaveBeenCalled();
-    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
   });
 
   it('enables and auto-allows the Agent tool only when sub-agents are defined', () => {
@@ -1008,7 +1016,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       expect(result.completion).toMatchObject({status: 'completed', conclusionFingerprint: analysisDeliveryFingerprint(result.conclusion)});
       expect(result.turnIntent).toMatchObject({scope: 'bounded_question', deliverable: 'answer'});
       expect(rawClaudeSdkMock.__getQueryCalls().filter(isClassifierCall)).toHaveLength(1);
-      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
       expect(focus).not.toHaveBeenCalled(); expect(architecture).not.toHaveBeenCalled();
       expect(knowledge).not.toHaveBeenCalled(); expect(traceProcessor.query).not.toHaveBeenCalled();
       const tools = claudeSdkMock.__getQueryCalls()[0].options.allowedTools;
@@ -1033,7 +1041,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       expect(mcp).toHaveBeenCalledWith(expect.objectContaining({allowNewEvidence: false,
         referenceTraceId: 'reference', comparisonContext: expect.objectContaining({referenceTraceId: 'reference', capabilityProbeStatus: 'not_checked'})}));
       expect(traceProcessor.query).not.toHaveBeenCalled();
-      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
       expect(claudeSdkMock.__getQueryCalls()[0].options.allowedTools).toContain('mcp__smartperfetto__fetch_artifact');
     } finally {mcp.mockRestore();}
   });
@@ -1252,7 +1260,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       const turns = sessionContextManager.getOrCreate(sessionId, 'trace').getAllTurns();
       expect(turns).toHaveLength(1);
       expect(turns[0].result?.message).toBe(result.conclusion);
-      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
       context = takeFinalizationContext(result);
       expect(context?.deliveryContext).toMatchObject({entry: 'runtime_draft', completion: result.completion});
       expect(context?.sourceScope).toMatchObject({codeAwareMode: 'metadata_only', selectedCodebaseIds: [], hasCodebaseAccess: false});
@@ -1283,6 +1291,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     try {
       const options: AnalysisOptions = {
         analysisMode: 'fast' as const, runId: 'actual-run', referenceTraceId: 'reference-trace',
+        selectionContext: {kind: 'track_event', eventId: 7, ts: 42},
         tenantId: 'tenant-test', workspaceId: 'workspace-test', userId: 'user-test',
       };
       const pinnedFingerprint = buildAnalysisContextAuthorizationFingerprint(options, resolveKnowledgeScope(options));
@@ -1294,6 +1303,8 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       const providerQuery = context!.getProviderQuery(new AbortController().signal);
       expect(providerQuery).toEqual({text: 'Question', analysisContextFingerprint: pinnedFingerprint});
       expect(Object.isFrozen(providerQuery)).toBe(true);
+      expect(context!.getSelection(new AbortController().signal)).toEqual({present: true, kind: 'track_event',
+        context: options.selectionContext, sideResolution: {status: 'unknown'}});
       expect(JSON.stringify(result)).not.toContain('"providerQuery"');
       expect(takeFinalizationContext(result)).toBeUndefined();
       expect(takeFinalizationContext({...result})).toBeUndefined();
@@ -1315,12 +1326,12 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       expect(review).toMatchObject({status: 'ok', text: reviewBody});
       expect(context!.deadlineMs).toBe(originalDeadline);
       const sdkCalls = claudeSdkMock.__getQueryCalls();
-      expect(sdkCalls).toHaveLength(2);
-      expect(sdkCalls[1].options).toMatchObject({model: 'pinned-primary-review', maxTurns: 1,
+      expect(sdkCalls).toHaveLength(3);
+      expect(sdkCalls[2].options).toMatchObject({model: 'pinned-primary-review', maxTurns: 1,
         tools: [], allowedTools: [], mcpServers: {}, persistSession: false});
-      expect(sdkCalls[1].options.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe(outputLimit);
-      expect(sdkCalls[1].options.resume).toBeUndefined();
-      expect(sdkCalls[1].options.cwd).not.toBe(sdkCalls[0].options.cwd);
+      expect(sdkCalls[2].options.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe(outputLimit);
+      expect(sdkCalls[2].options.resume).toBeUndefined();
+      expect(sdkCalls[2].options.cwd).not.toBe(sdkCalls[0].options.cwd);
       await expect(fs.stat(reviewDirectory!)).rejects.toMatchObject({code: 'ENOENT'});
       expect(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('2048');
     } finally {
@@ -1784,15 +1795,17 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
 
       expect(result.success).toBe(true);
       expect(focusSpy).toHaveBeenCalledTimes(1);
-      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
       const receipt = runtimePerformanceRecorder.seal();
       const focusPhases = receipt.phases.filter(phase => phase.name === 'focus');
       const providerPhases = receipt.phases.filter(phase => phase.name === 'provider');
       const finalizationPhases = receipt.phases.filter(phase => phase.name === 'finalization');
       expect(focusPhases).toHaveLength(1);
       expect(focusPhases[0]).toEqual(expect.objectContaining({outcome: 'error'}));
-      expect(providerPhases).toHaveLength(1);
-      expect(providerPhases[0]).toEqual(expect.objectContaining({outcome: 'ok'}));
+      expect(providerPhases).toHaveLength(2);
+      expect(providerPhases).toEqual(expect.arrayContaining([
+        expect.objectContaining({outcome: 'ok'}), expect.objectContaining({outcome: 'ok'}),
+      ]));
       expect(finalizationPhases).toHaveLength(1);
       expect(finalizationPhases[0]).toEqual(expect.objectContaining({outcome: 'ok'}));
     } finally {
@@ -3094,6 +3107,137 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     }
   });
 
+  it('uses one no-tools delivery turn to attach declarations without truncating the native body', async () => {
+    const body = `${'启动正文保持完整。'.repeat(850)}\n${'Native body remains unchanged. '.repeat(170)}`.trimEnd();
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(8 * 1024);
+    const runtime = new ClaudeRuntime({
+      query: async () => ({columns: [], rows: []}),
+      getTrace: () => ({traceOs: 'android', traceFormat: 'perfetto'}),
+    } as any, {enableVerification: false, enableSubAgents: false, maxTurns: 4, maxBudgetUsd: 1});
+    (runtime as any).architectureCache.set('trace-missing-declaration', {
+      type: 'STANDARD', confidence: 0.9, evidence: [],
+    });
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({
+      passed: true, heuristicIssues: [], llmIssues: [], durationMs: 1,
+    });
+    let sdkCallCount = 0;
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      sdkCallCount += 1;
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-missing-declaration', num_turns: 1,
+        total_cost_usd: sdkCallCount === 1 ? 0.25 : 0.1,
+        result: sdkCallCount === 1 ? body : declaredCandidate(body)};
+    });
+
+    const result = await runtime.analyze('分析当前证据', 'session-missing-declaration', 'trace-missing-declaration', {
+      analysisMode: 'full', runId: 'claude-missing-declaration', packageName: 'com.example.app',
+    });
+
+    const calls = claudeSdkMock.__getQueryCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1].options).toMatchObject({maxTurns: 1, maxBudgetUsd: 0.75, tools: [], allowedTools: []});
+    expect(calls[1].prompt).toContain('missing_declaration');
+    const candidateLine = calls[1].prompt.split('\n').find((line: string) => line.startsWith('{"schemaVersion":1,"kind":"original_native_candidate"'));
+    expect(JSON.parse(candidateLine ?? '{}')).toEqual({schemaVersion: 1, kind: 'original_native_candidate', body});
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed', attemptId: expect.stringContaining(':correction:1')});
+  });
+
+  it.each([
+    {name: 'exhausted cost budget', body: 'Completed candidate without declaration.', maxBudgetUsd: 1, totalCostUsd: 1},
+    {name: '128 KiB output cap', body: 'x'.repeat(128 * 1024), maxBudgetUsd: undefined, totalCostUsd: undefined},
+  ])('does not dispatch declaration completion past the $name', async ({body, maxBudgetUsd, totalCostUsd}) => {
+    const runtime = new ClaudeRuntime({query: async () => ({columns: [], rows: []}), getTrace: () => undefined} as any,
+      {enableVerification: false, enableSubAgents: false, maxTurns: 4, ...(maxBudgetUsd === undefined ? {} : {maxBudgetUsd})});
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({passed: true, heuristicIssues: [], llmIssues: [], durationMs: 1});
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-declaration-no-dispatch', num_turns: 1,
+        ...(totalCostUsd === undefined ? {} : {total_cost_usd: totalCostUsd}), result: body};
+    });
+    const result = await runtime.analyze('分析当前证据', `session-${maxBudgetUsd ?? 'cap'}`, 'trace-no-declaration-dispatch', {
+      analysisMode: 'full', packageName: 'com.example.app',
+    });
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed'});
+  });
+
+  it('rejects an unchanged Claude repair when the declaration pushes the candidate over the output cap', async () => {
+    const body = 'x'.repeat(128 * 1024 - 100);
+    const repaired = declaredCandidate(body);
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(128 * 1024);
+    expect(Buffer.byteLength(repaired, 'utf8')).toBeGreaterThan(128 * 1024);
+    const runtime = new ClaudeRuntime({query: async () => ({columns: [], rows: []}), getTrace: () => undefined} as any,
+      {enableVerification: false, enableSubAgents: false, maxTurns: 4});
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({passed: true, heuristicIssues: [], llmIssues: [], durationMs: 1});
+    let sdkCallCount = 0;
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      sdkCallCount += 1;
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-declaration-overflow', num_turns: 1,
+        result: sdkCallCount === 1 ? body : repaired};
+    });
+    const result = await runtime.analyze('分析当前证据', 'session-claude-declaration-overflow', 'trace-declaration-overflow', {
+      analysisMode: 'full', packageName: 'com.example.app',
+    });
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion?.attemptId).not.toContain(':correction:1');
+  });
+
+  it('retains the original Claude attempt when a dispatched declaration completion changes the body', async () => {
+    const body = 'Original bounded answer.';
+    const changed = declaredCandidate('Changed bounded answer.');
+    const runtime = new ClaudeRuntime({query: async () => ({columns: [], rows: []}), getTrace: () => undefined} as any,
+      {enableVerification: false, enableSubAgents: false, maxTurns: 4});
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({passed: true, heuristicIssues: [], llmIssues: [], durationMs: 1});
+    let sdkCallCount = 0;
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      sdkCallCount += 1;
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-declaration-changed-body', num_turns: 1,
+        result: sdkCallCount === 1 ? body : changed};
+    });
+    const updates: unknown[] = [];
+    runtime.on('update', update => updates.push(update));
+
+    const result = await runtime.analyze('分析当前证据', 'session-claude-declaration-changed-body',
+      'trace-declaration-changed-body', {analysisMode: 'full', runId: 'claude-declaration-changed-body',
+        packageName: 'com.example.app'});
+
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
+    expect(result.conclusion).toBe(body);
+    expect(result.completion).toMatchObject({status: 'completed', runId: 'claude-declaration-changed-body',
+      conclusionFingerprint: analysisDeliveryFingerprint(body)});
+    expect(result.completion?.attemptId).not.toContain(':correction:1');
+    expect(JSON.stringify(updates)).not.toContain('Changed bounded answer');
+  });
+
+  it('rejects a Claude declaration returned after authorization changes without replacing the first candidate', async () => {
+    const body = 'Authorized candidate body.';
+    const repaired = declaredCandidate(body);
+    const runtime = new ClaudeRuntime({query: async () => ({columns: [], rows: []}), getTrace: () => undefined} as any,
+      {enableVerification: false, enableSubAgents: false, maxTurns: 4});
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({passed: true, heuristicIssues: [], llmIssues: [], durationMs: 1});
+    let sdkCallCount = 0;
+    let revoked = false;
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      sdkCallCount += 1;
+      if (sdkCallCount === 2) revoked = true;
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-declaration-authorization-change', num_turns: 1,
+        result: sdkCallCount === 1 ? body : repaired};
+    });
+    const realAuthorization = contextAuthorization.assertCurrentAnalysisContextAuthorization;
+    const authorization = jest.spyOn(contextAuthorization, 'assertCurrentAnalysisContextAuthorization').mockImplementation((...args) => {
+      if (revoked) throw new contextAuthorization.AnalysisContextAuthorizationChangedError();
+      return realAuthorization(...args);
+    });
+    try {
+      const result = await runtime.analyze('分析当前证据', 'session-claude-declaration-authorization-change',
+        'trace-declaration-authorization-change', {analysisMode: 'full', packageName: 'com.example.app'});
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
+      expect(result.conclusion).toBe(body);
+      expect(result.completion?.attemptId).not.toContain(':correction:1');
+    } finally {authorization.mockRestore();}
+  });
+
   it('uses scoped Claude provider tuning when preparing full SDK options', async () => {
     const original = {
       anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
@@ -3258,7 +3402,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
           subtype: 'success',
           session_id: 'sdk-provider-correction-session',
           num_turns: 1,
-          result: sdkCallCount === 1
+          result: declaredCandidate(sdkCallCount === 1
             ? '## 综合结论\nInitial provider conclusion requires correction.'
             : [
                 '## 综合结论',
@@ -3266,7 +3410,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
                 '',
                 '## 证据',
                 '- Correction retry used the pinned provider SDK options.',
-              ].join('\n'),
+              ].join('\n')),
         };
       });
       mockClaudeVerifierVerifyConclusion
@@ -3435,13 +3579,13 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
           },
         ),
       );
-      expect(result).toMatchObject({success: true, rounds: 1});
+      expect(result).toMatchObject({success: true, rounds: 2});
       if (analysisMode === 'fast') {
-        expect(result.quickRun).toMatchObject({actualTurns: 1, enforcement: 'turn_cap'});
+        expect(result.quickRun).toMatchObject({actualTurns: 2, enforcement: 'turn_cap'});
       }
 
-      expect(providerAttempts).toBe(2);
-      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
+      expect(providerAttempts).toBe(3);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(3);
       expect(focusSpy).toHaveBeenCalledTimes(1);
       expect(architectureSpy).toHaveBeenCalledTimes(1);
       expect(adapterSpy).toHaveBeenCalledTimes(1);
@@ -3466,6 +3610,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       }
       expect(phases.filter(phase => phase.name === 'provider')).toEqual([
         expect.objectContaining({ name: 'provider', outcome: 'error' }),
+        expect.objectContaining({ name: 'provider', outcome: 'ok' }),
         expect.objectContaining({ name: 'provider', outcome: 'ok' }),
       ]);
       expect(phases).toEqual(expect.arrayContaining([

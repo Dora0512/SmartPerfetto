@@ -86,6 +86,13 @@ export interface OnDemandSourceReadResult {
   success: boolean;
   codebaseId: string;
   reference?: OnDemandSourceReference;
+  window?: {
+    totalLines: number;
+    omittedBefore: number;
+    omittedAfter: number;
+    nextStartLine: number | null;
+    symbolCoverage: 'not_assessed';
+  };
   truncated: boolean;
   unsupportedReason?: string;
 }
@@ -502,6 +509,13 @@ export class OnDemandSourceAccessService {
         filePath,
         lineRange: {start: startLine, end: endLine},
         ...projected,
+      },
+      window: {
+        totalLines: lines.length,
+        omittedBefore: startLine - 1,
+        omittedAfter: lines.length - endLine,
+        nextStartLine: endLine < lines.length ? endLine + 1 : null,
+        symbolCoverage: 'not_assessed',
       },
       truncated: endLine < lines.length,
     };

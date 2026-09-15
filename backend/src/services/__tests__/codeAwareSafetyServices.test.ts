@@ -28,6 +28,7 @@ import {
   createCodeAwareStreamingTextProjection,
   isIssuedCodeAwareTextProjectionReceipt,
   projectCodeAwareStructuredText,
+  projectCodeAwareSemanticInputStructure,
   registerCodeAwareCanary,
   registerOnDemandSourceLookupForEcho,
   registerPrivateAnalysisQueryForEcho,
@@ -42,6 +43,7 @@ import {
 } from '../security/codeAwareOutputRegistry';
 import {projectCodeAwareStreamingUpdate, projectOwnerCodeAwareStreamingUpdate} from '../security/codeAwareStreamingUpdateProjection';
 import {issuePrivateToolResultNarrationReceipt} from '../../agentv3/toolNarration';
+import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../finalSemanticLimits';
 import {LLMEchoOutputStream, type CodeRef} from '../security/llmEchoOutputFilter';
 import {ExternalKnowledgeSourceRegistry} from '../externalKnowledgeSourceRegistry';
 import {parseConclusionContractSidecar, renderConclusionContractSidecar} from '../../agent/core/conclusionContract';
@@ -1711,7 +1713,31 @@ describe('LLMEchoOutputStream', () => {
 describe('source echo text units', () => {
   const ref: CodeRef = {chunkId: 'source-one', codebaseId: 'app', filePath: 'StartupHooks.kt', lineRange: {start: 1, end: 24}};
   const label = '[Code: source-one @ StartupHooks.kt:1-24]';
-  const source = fs.readFileSync(path.resolve(__dirname, '../../../tests/e2e/context-fixtures/app/StartupHooks.kt'), 'utf8');
+  // Freeze the original echo regression independently of the evolving mechanism fixture.
+  const source = `// SPDX-License-Identifier: AGPL-3.0-or-later
+package com.smartperfetto.e2e
+
+/** Stable source fixture used to prove request-scoped source retrieval in real-provider E2E. */
+object StartupHooks {
+  const val SOURCE_CONTEXT_MARKER = "E2E_CONTEXT_MARKER_SOURCE"
+  const val TRACE_SOURCE_MARKER = "StartupHooks.initializeOnMainThread#before-first-frame-sync-policy"
+
+  fun initializeOnMainThread() { // SEMANTIC_DELTA_PRIVATE_SOURCE_CANARY_NEVER_EMIT
+    // This synthetic synchronous disk read is intentionally described in source
+    // so the analyzer must distinguish source context from trace evidence.
+    val startupPolicy = "avoid synchronous disk I/O before first frame"
+    check(TRACE_SOURCE_MARKER.isNotEmpty())
+    check(startupPolicy.isNotEmpty())
+  }
+}
+
+/** Synthetic caller retained in the bounded fixture so the call-chain assertion is source-backed. */
+object Application {
+  fun onCreate() {
+    StartupHooks.initializeOnMainThread()
+  }
+}
+`;
   function project(text: string, cuts: number[] = [], register?: (stream: LLMEchoOutputStream) => void, bytes = false) {
     const stream = new LLMEchoOutputStream(64);
     if (register) register(stream); else stream.registerSnippet(source, ref);
@@ -1722,7 +1748,7 @@ describe('source echo text units', () => {
     return {output, stats: stream.stats()};
   }
 
-  it('replaces the actual A2 broken-word source quotes as complete units at every split', () => {
+  it('replaces historical A2 broken-word source quotes on the strict surface at every split', () => {
     const text = '方法 `fun initializeOnMainThread() { ... }`；策略 “avoid synchronous disk I/O before first frame”。';
     const expected = `方法 ${label}；策略 ${label}。`;
     expect(project(text).output).toBe(expected);
@@ -1906,5 +1932,28 @@ describe('owner source output isolation', () => {
     expect(projectOwnerCodeAwareStreamingUpdate(sessionId, update, true, 'en')?.content)
       .toEqual({thought: 'Checking renderFrame against the trace.'});
     expect(projectCodeAwareStreamingUpdate(sessionId, update, true, 'en')).toBeNull();
+  });
+});
+
+
+describe('semantic input structure budget', () => {
+  it('preserves byte-bounded JSON beyond the ordinary output node cap without widening output limits', () => {
+    const input = {records: Array.from({length: 3000}, (_, n) => ({n, unit: 'ms'}))};
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThan(128 * 1024);
+    expect(projectCodeAwareStructuredText(undefined, input).changed).toBe(true);
+    expect(projectCodeAwareSemanticInputStructure(undefined, input)).toEqual({value: input, changed: false, limited: false});
+  });
+  it('keeps depth, oversized strings and semantic structure overflow bounded', () => {
+    let deep: unknown = 'value';
+    for (let i = 0; i < 30; i++) deep = {child: deep};
+    for (const input of [deep, 'x'.repeat(1024 * 1024 + 1),
+      Array.from({length: FINAL_SEMANTIC_INPUT_BYTE_LIMIT + 1}, () => 0)]) {
+      expect(projectCodeAwareSemanticInputStructure(undefined, input)).toMatchObject({changed: true, limited: true});
+    }
+  });
+  it('records owner credential replacement as content change, not capacity loss', () => {
+    const input = {api_key: 'secret-value-for-test'};
+    const projected = withOwnerCodeAwareProjection(() => projectCodeAwareSemanticInputStructure(undefined, input));
+    expect(projected).toEqual({value: {api_key: '[REDACTED_SECRET]'}, changed: true, limited: false});
   });
 });

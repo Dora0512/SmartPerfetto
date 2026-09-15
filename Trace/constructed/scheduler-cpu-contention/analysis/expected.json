@@ -474,6 +474,55 @@
       "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
     },
     {
+      "id": "execute-cpu_system_context_in_range",
+      "type": "skill",
+      "target": "cpu_system_context_in_range",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/cpu_system_context_in_range.skill.yaml",
+      "parameters": {
+        "start_ts": "${fixture_start}",
+        "end_ts": "${fixture_end}"
+      },
+      "required_steps": [
+        "root"
+      ],
+      "required_sql_steps": [
+        "root"
+      ],
+      "forced_sql_steps": [],
+      "isolated_sql_probes": [],
+      "expected_condition_skips": [],
+      "semantic_step": "root",
+      "required_columns": [
+        "window_id",
+        "window_start_ts",
+        "window_end_ts",
+        "window_dur_ns",
+        "ucpu",
+        "cpu",
+        "machine_id",
+        "cluster_id",
+        "capacity",
+        "core_type",
+        "topology_source",
+        "avg_freq_khz",
+        "min_freq_khz",
+        "observed_max_freq_khz",
+        "frequency_covered_ns",
+        "frequency_evidence",
+        "frequency_source",
+        "sched_covered_ns",
+        "busy_ns",
+        "idle_ns",
+        "idle_identity_unknown_ns",
+        "busy_pct",
+        "unfinished_sched_ns",
+        "sched_evidence",
+        "evidence_scope"
+      ],
+      "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+    },
+    {
       "id": "execute-cpu_thread_utilization_period",
       "type": "skill",
       "target": "cpu_thread_utilization_period",
@@ -1086,7 +1135,7 @@
         "q1_perf_running_ms",
         "q2_little_running_ms",
         "q3_runnable_ms",
-        "q4a_io_blocked_ms",
+        "q4a_uninterruptible_ms",
         "q4b_sleeping_ms",
         "perf_core_pct",
         "running_cpus",
@@ -1187,6 +1236,64 @@
         "migration_count",
         "migration_ratio_pct",
         "affinity_violation"
+      ],
+      "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+    },
+    {
+      "id": "execute-thread_cpu_placement_timeline",
+      "type": "skill",
+      "target": "thread_cpu_placement_timeline",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/thread_cpu_placement_timeline.skill.yaml",
+      "parameters": {
+        "start_ts": "${fixture_start}",
+        "end_ts": "${fixture_end}"
+      },
+      "required_steps": [
+        "root"
+      ],
+      "required_sql_steps": [
+        "root"
+      ],
+      "forced_sql_steps": [],
+      "isolated_sql_probes": [],
+      "expected_condition_skips": [],
+      "semantic_step": "root",
+      "required_columns": [
+        "window_id",
+        "window_start_ts",
+        "window_end_ts",
+        "window_dur_ns",
+        "upid",
+        "pid",
+        "process_name",
+        "utid",
+        "tid",
+        "thread_name",
+        "role",
+        "sched_id",
+        "raw_start_ts",
+        "raw_dur",
+        "raw_end_ts",
+        "clipped_start_ts",
+        "clipped_end_ts",
+        "dur_ns",
+        "is_unfinished",
+        "left_censored",
+        "right_censored",
+        "ucpu",
+        "cpu",
+        "machine_id",
+        "cluster_id",
+        "capacity",
+        "core_type",
+        "topology_source",
+        "priority",
+        "end_state",
+        "scheduling_policy_evidence",
+        "placement_mode",
+        "placement_evidence",
+        "evidence_scope"
       ],
       "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
     },

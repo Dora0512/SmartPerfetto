@@ -22,6 +22,12 @@ const MIMO_BASE_URL_PATTERN = /xiaomimimo\.com/i;
 const MIMO_MODEL_PATTERN = /\bmimo-v/i;
 const DEEPSEEK_BASE_URL_PATTERN = /api\.deepseek\.com/i;
 const DEEPSEEK_MODEL_PATTERN = /\bdeepseek-/i;
+const SDK_REASONING_ONLY_ASSISTANT_KEYS = new Set([
+  'role',
+  'content',
+  'reasoning_content',
+  'tool_calls',
+]);
 
 function isRecord(value: unknown): value is JsonRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -40,6 +46,14 @@ function hasContent(message: JsonRecord): boolean {
   return Array.isArray(content)
     ? content.length > 0
     : content !== undefined && content !== null && content !== '';
+}
+
+function isSdkReasoningOnlyAssistantMessage(message: unknown): boolean {
+  if (!isRecord(message) || message.role !== 'assistant' || message.content !== null ||
+      !hasNonEmptyString(message.reasoning_content)) return false;
+  if (message.tool_calls !== undefined &&
+      (!Array.isArray(message.tool_calls) || message.tool_calls.length > 0)) return false;
+  return Object.keys(message).every(key => SDK_REASONING_ONLY_ASSISTANT_KEYS.has(key));
 }
 
 function mergePreviousAssistantMessage(previous: JsonRecord, message: JsonRecord): boolean {
@@ -166,8 +180,10 @@ export function normalizeMimoChatRequestPayload(payload: unknown): boolean {
     normalizedMessages.push(message);
   }
 
-  if (normalizedMessages.length !== payload.messages.length) {
-    payload.messages = normalizedMessages;
+  const wireMessages = normalizedMessages.filter(message =>
+    !isSdkReasoningOnlyAssistantMessage(message));
+  if (wireMessages.length !== payload.messages.length) {
+    payload.messages = wireMessages;
     changed = true;
   }
 

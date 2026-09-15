@@ -17,7 +17,7 @@ const {frameFactExpectation, buildChildEnv, evaluateSemanticConditionReport, sem
   buildChildEnv: (apiKey: string, runtimeKind: string, isolatedRoot: string) => Record<string, string | undefined>;
   evaluateSemanticConditionReport: (input: {report: unknown; query: {kind: string}; condition: string; sourceRoot: string}) => {
     traceFactPassed: boolean; overallTaskChecksPassed: boolean;
-    sourceBindingPassed: boolean; sourceIdentityPassed: boolean; sourceSemanticPassed: boolean; uncoveredFacets: string[];
+    sourceBindingPassed: boolean; sourceIdentityPassed: boolean; sourceSemanticPassed: boolean; privacyCanaryCovered: boolean; uncoveredFacets: string[];
   };
   semanticDeltaQueries: () => Array<{id: string; kind: string; text: string}>;
   semanticConditionArgs: (query: unknown, condition: string, output: string, timeoutMs: number) => string[];
@@ -137,6 +137,11 @@ describe('declarative system-analysis suite', () => {
 });
 
 describe('source binding acceptance', () => {
+  const sourceText = fs.readFileSync(path.join(backendRoot, 'tests/e2e/context-fixtures/app/StartupHooks.kt'), 'utf8');
+  const sourceLineCount = sourceText.trimEnd().split(/\r?\n/).length;
+  const canaryLine = sourceText.split(/\r?\n/).findIndex(line => line.includes('SEMANTIC_DELTA_PRIVATE_SOURCE_CANARY_NEVER_EMIT')) + 1;
+  const requiredSourceRange = JSON.parse(fs.readFileSync(path.resolve(backendRoot,
+    '../Trace/constructed/source-analysis-semantic/analysis/expected.json'), 'utf8')).source_trace_ground_truth.lineRange;
   it('uses the original source oracle query with an explicit native ID column and no copied fingerprint', () => {
     const query = semanticDeltaQueries().find(item => item.kind === 'quantitative-only')!;
     const args = semanticConditionArgs(query, 'A0', 'a0.json', 1000);
@@ -168,7 +173,7 @@ describe('source binding acceptance', () => {
           {claimId: 'location', mechanismStatus: 'unverified', sourceReferenceIds: [sourceId], traceEvidenceRefIds: []},
         ],
         analysisCompletedSourceUseDecision: {references: [{id: sourceId, codebaseId: 'selected-source',
-          filePath: 'StartupHooks.kt', lineRange: {start: 1, end: 20}, lookupKind: 'body'}]},
+          filePath: 'StartupHooks.kt', lineRange: {start: 1, end: sourceLineCount}, lookupKind: 'body'}]},
         terminalAnalysis: {conclusionContract: {claims: [{id: 'duration', kind: 'numeric'}, {id: 'mapping', kind: 'numeric'}]},
           claimVerificationResult: {schemaVersion: 'claim_verifier@2', status: 'passed', passed: true, claimResults: [
             {claimId: 'duration', status: 'verified', deterministicProof: {kind: 'numeric_cell', status: 'proved',
@@ -361,6 +366,37 @@ describe('source binding acceptance', () => {
     target.report.summary.analysisCompletedVerifiedSourceBindings[0].mechanismStatus = status;
     expect(target.evaluate()).toMatchObject({sourceIdentityPassed: false, sourceSemanticPassed: false});
   });
+
+  it.each(['start', 'end'] as const)('rejects a body read missing the required %s boundary', boundary => {
+    const target = nativeFixture();
+    const reference = target.report.summary.analysisCompletedSourceUseDecision.references[0];
+    reference.lineRange[boundary] = requiredSourceRange[boundary] + (boundary === 'start' ? 1 : -1);
+    expect(target.evaluate()).toMatchObject({sourceBindingPassed: true, sourceIdentityPassed: false, sourceSemanticPassed: false});
+  });
+
+  it('counts a read covering the canary independently of complete mechanism coverage', () => {
+    const target = nativeFixture();
+    const reference = target.report.summary.analysisCompletedSourceUseDecision.references[0];
+    expect(canaryLine).toBeGreaterThan(0);
+    expect(canaryLine).toBeLessThan(requiredSourceRange.end);
+    reference.lineRange = {start: 1, end: canaryLine};
+    expect(target.evaluate()).toMatchObject({privacyCanaryCovered: true, sourceIdentityPassed: false, sourceSemanticPassed: false});
+  });
+
+  it.each(['miss_canary', 'metadata', 'graph', 'wrong_codebase', 'wrong_file', 'unissued_id', 'inverted', 'zero_start', 'unsafe_end'])(
+    'rejects %s when checking source canary coverage', failure => {
+      const target = nativeFixture();
+      const reference = target.report.summary.analysisCompletedSourceUseDecision.references[0];
+      if (failure === 'miss_canary') reference.lineRange.end = canaryLine - 1;
+      if (failure === 'metadata' || failure === 'graph') reference.lookupKind = failure;
+      if (failure === 'wrong_codebase') reference.codebaseId = 'unselected-source';
+      if (failure === 'wrong_file') reference.filePath = 'Other.kt';
+      if (failure === 'unissued_id') reference.id = 'unissued-source';
+      if (failure === 'inverted') reference.lineRange = {start: sourceLineCount, end: 1};
+      if (failure === 'zero_start') reference.lineRange.start = 0;
+      if (failure === 'unsafe_end') reference.lineRange.end = Number.MAX_SAFE_INTEGER + 1;
+      expect(target.evaluate()).toMatchObject({privacyCanaryCovered: false, sourceIdentityPassed: false, sourceSemanticPassed: false});
+    });
 
   it.each(['metadata', 'graph'])('does not treat a %s location as source body evidence', lookupKind => {
     const target = fixture();

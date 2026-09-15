@@ -2,6 +2,8 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import { providerConfigurationHelp } from '../../services/providerManager/providerConfigurationHelp';
+import { parseOutputLanguage } from '../../agentv3/outputLanguage';
 import * as fs from 'fs';
 import { spawnSync } from 'child_process';
 import {
@@ -72,6 +74,7 @@ export function assertAnalysisRuntimeReady(options: RuntimeGuardOptions = {}): R
         [
           'OpenAI runtime is selected but no usable OpenAI-compatible credentials were found.',
           'Set OPENAI_API_KEY, configure an active OpenAI/Ollama provider, or use a localhost OpenAI-compatible endpoint.',
+          providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli'),
           'Run `smp doctor --format text` for the resolved runtime and provider details.',
         ].join(' '),
       );
@@ -115,9 +118,11 @@ export function assertAnalysisRuntimeReady(options: RuntimeGuardOptions = {}): R
     );
   }
 
-  // Claude Agent SDK can use API/proxy credentials, Bedrock/Vertex env, or a
-  // local Claude Code login. Do not reject the local-auth fallback here; the SDK
-  // will surface a precise auth error if the local account is unavailable.
+  if (!diagnostics.configured) {
+    throw new Error(
+      `Claude Agent SDK has no configured credentials. ${providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli')}`,
+    );
+  }
   return { selection, diagnostics };
 }
 
@@ -187,7 +192,6 @@ export function collectDoctorReport(cliHome: string): DoctorReport {
     runtimeDiagnostics.sdkInstalled === true;
   const runtimeConfigured = qoderSdkInstalled && (
     runtimeDiagnostics.configured ||
-    selection.kind === 'claude-agent-sdk' ||
     selection.kind === QODER_AGENT_RUNTIME_KIND
   );
   const runtimeStatus: DoctorCheck['status'] = aiPolicy.aiEnabled
@@ -204,7 +208,7 @@ export function collectDoctorReport(cliHome: string): DoctorReport {
       : selection.kind === QODER_AGENT_RUNTIME_KIND && !qoderSdkInstalled
         ? 'Qoder Agent SDK is not installed; review its terms and install the optional SDK explicitly'
         : selection.kind === 'claude-agent-sdk'
-        ? 'Claude SDK has no explicit credentials; local Claude login fallback will be used if available'
+        ? 'Claude SDK has no configured credentials.'
         : selection.kind === QODER_AGENT_RUNTIME_KIND
           ? 'Qoder SDK has no explicit PAT or CLI path; local qodercli login fallback will be used if available'
         : selection.kind === PI_AGENT_CORE_RUNTIME_KIND ||
@@ -239,7 +243,11 @@ export function collectDoctorReport(cliHome: string): DoctorReport {
       name: 'runtime',
       ok: runtimeOk,
       status: runtimeStatus,
-      message: runtimeMessage,
+      message: aiPolicy.aiEnabled &&
+        !runtimeDiagnostics.configured &&
+        selection.kind !== QODER_AGENT_RUNTIME_KIND
+        ? `${runtimeMessage} ${providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli')}`
+        : runtimeMessage,
       details: {
         source: selection.source,
         providerId: selection.providerId,

@@ -7212,7 +7212,8 @@ kbd.pf-keycap.pf-spacing-large {
   flex-shrink: 0;
 }
 
-.ai-disabled-banner {
+.ai-disabled-banner,
+.ai-provider-configuration-banner {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -7225,9 +7226,18 @@ kbd.pf-keycap.pf-spacing-large {
   font-size: 12px;
   line-height: 1.35;
 }
-.ai-disabled-banner .pf-icon {
+.ai-disabled-banner .pf-icon,
+.ai-provider-configuration-banner .pf-icon {
   font-size: 15px !important;
   flex-shrink: 0;
+}
+
+.ai-provider-configuration-banner {
+  flex-wrap: wrap;
+}
+.ai-provider-configuration-banner .ai-provider-configuration-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .ai-application-update-banner {
@@ -7266,6 +7276,7 @@ kbd.pf-keycap.pf-spacing-large {
 }
 
 .ai-application-update-action,
+.ai-provider-configuration-action,
 .ai-application-update-dismiss {
   border: 0;
   border-radius: 5px;
@@ -7274,12 +7285,14 @@ kbd.pf-keycap.pf-spacing-large {
   cursor: pointer;
 }
 .ai-application-update-action:focus-visible,
+.ai-provider-configuration-action:focus-visible,
 .ai-application-update-dismiss:focus-visible {
   outline: 2px solid var(--chat-primary);
   outline-offset: 2px;
 }
 
-.ai-application-update-action {
+.ai-application-update-action,
+.ai-provider-configuration-action {
   padding: 5px 7px;
   background: var(--chat-bg);
   font-size: 11px;

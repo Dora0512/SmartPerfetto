@@ -261,7 +261,7 @@ private advisory。详见
 
 | Runtime | Provider | 关键边界 |
 |---|---|---|
-| `claude-agent-sdk` | Anthropic、Bedrock、Vertex、Claude/Anthropic-compatible provider、本地 Claude Code fallback | 本地 Claude 登录态只适用于源码运行；Docker/portable/npm CLI 需要显式 provider/env |
+| `claude-agent-sdk` | Anthropic、Bedrock、Vertex、Claude/Anthropic-compatible provider | 所有运行方式都需要显式 provider/env 凭据；Claude Code 登录态不代表 SDK 已配置 |
 | `openai-agents-sdk` | OpenAI、Ollama、OpenAI-compatible provider | 按 OpenAI runtime 规则验证凭证和 chat-completions/Responses 协议 |
 | `pi-agent-core` | Custom provider | 需要显式 Pi model JSON 或等价 env；不读取 `.pi` project config、package extension、shell tool 或 file tool |
 | `opencode` | Custom provider | 需要显式 OpenCode/OpenAI-compatible model 配置；使用隔离 OpenCode server 和 request-scoped MCP tools，不读取个人 OpenCode 登录态/project state |

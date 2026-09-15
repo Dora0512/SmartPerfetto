@@ -93,7 +93,7 @@ export function runOpenAiIntentTransport(input: OpenAiIntentTransportInput) {
   return runIntentTransport(input, async scope => {
     const {config} = input;
     if (!config.baseURL || !config.lightModel?.trim()
-      || (input.purpose !== undefined && input.purpose !== 'classification')
+      || (input.purpose !== undefined && input.purpose !== 'classification' && input.purpose !== 'final_semantic')
       || (input.maxOutputTokens !== undefined
         && (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens <= 0))
       || (config.protocol !== 'chat_completions' && config.protocol !== 'responses')) {

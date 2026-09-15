@@ -2,6 +2,8 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {providerConfigurationHelp} from '../services/providerManager/providerConfigurationHelp';
+import {localize, parseOutputLanguage} from '../agentv3/outputLanguage';
 import { getProductionRuntimeDescriptor } from './runtimeDescriptors';
 import type {
   RuntimeDiagnosticsInput,
@@ -64,6 +66,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function asRuntimeDiagnosticsPayload(
   value: unknown,
   kind: string,
+  env: Record<string, string | undefined> = process.env,
 ): RuntimeDiagnosticsPayload {
   if (!isRecord(value)) {
     throw new Error(`Runtime diagnostics for ${kind} must return an object`);
@@ -73,6 +76,33 @@ export function asRuntimeDiagnosticsPayload(
   }
   if (typeof value.configured !== 'boolean') {
     throw new Error(`Runtime diagnostics for ${kind} must include a boolean configured flag`);
+  }
+  if (!value.configured) {
+    if (value.runtime === QODER_AGENT_RUNTIME_KIND) {
+      // Qoder's `configured` flag records an explicit PAT/CLI path, not runtime
+      // readiness: an installed SDK may authenticate through local qodercli.
+      const language = parseOutputLanguage(env.SMARTPERFETTO_OUTPUT_LANGUAGE);
+      const help = value.sdkInstalled === true
+        ? localize(
+          language,
+          'Qoder Agent SDK 已安装；可以使用本机 qodercli 登录态，认证会在分析时验证。也可显式设置 QODER_PERSONAL_ACCESS_TOKEN 或 QODERCLI_PATH。',
+          'Qoder Agent SDK is installed; it may use the local qodercli login, which is verified during analysis. You can alternatively set QODER_PERSONAL_ACCESS_TOKEN or QODERCLI_PATH.',
+        )
+        : localize(
+          language,
+          'Qoder Agent SDK 未安装；请先审阅其条款并显式安装可选 SDK，再使用本机 qodercli 登录态、QODER_PERSONAL_ACCESS_TOKEN 或 QODERCLI_PATH。',
+          'Qoder Agent SDK is not installed. Review its terms and explicitly install the optional SDK, then use the local qodercli login, QODER_PERSONAL_ACCESS_TOKEN, or QODERCLI_PATH.',
+        );
+      const detail = typeof value.configHint === 'string' && value.configHint !== help
+        ? `\n\n${value.configHint}`
+        : '';
+      return {...value, runtime: value.runtime, configured: value.configured, configHint: help + detail};
+    }
+    const help = providerConfigurationHelp(parseOutputLanguage(env.SMARTPERFETTO_OUTPUT_LANGUAGE));
+    const detail = typeof value.configHint === 'string' && value.configHint !== help
+      ? `\n\n${value.configHint}`
+      : '';
+    return {...value, runtime: value.runtime, configured: value.configured, configHint: help + detail};
   }
   return value as RuntimeDiagnosticsPayload;
 }
@@ -95,6 +125,7 @@ export function getRuntimeDiagnostics(
         selectedProviderId,
       }),
       descriptor.kind,
+      env,
     );
   }
 
@@ -109,6 +140,7 @@ export function getRuntimeDiagnostics(
       selectedProviderId,
     }),
     selection.kind,
+    env,
   );
 }
 

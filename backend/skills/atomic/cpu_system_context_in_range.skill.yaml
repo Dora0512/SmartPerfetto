@@ -41,6 +41,13 @@ investigation_evidence:
       status: sched_evidence
       coverage: sched_covered_ns
       denominator: window_dur_ns
+    - domain: cpu_capacity
+      metric_id: system.cpu.busy.percentage
+      value: busy_pct
+      unit: "%"
+      status: sched_evidence
+      coverage: sched_covered_ns
+      denominator: window_dur_ns
 display:
   level: detail
   layer: deep

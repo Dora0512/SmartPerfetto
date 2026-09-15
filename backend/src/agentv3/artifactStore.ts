@@ -21,7 +21,10 @@ import {randomUUID} from 'crypto';
 import type {RuntimeToolInvocationEvent} from '../agentRuntime/runtimeToolObserver';
 import {captureInvestigationToolObservation, type InvestigationToolObservation} from '../services/evidence/investigationEvidenceLedger';
 import {createDataEnvelope} from '../types/dataContract';
-import {capturedEvidenceTable, freezeEvidenceValue, type EvidenceTableWitness} from '../services/evidence/evidenceCapture';
+import {capturedEvidenceTable, freezeEvidenceValue, type EvidenceTableWitness,
+  MODEL_EVIDENCE_TRUNCATED_CELL_LIMIT, type ModelEvidenceProjectionStatus,
+  type ModelEvidenceProjectionUnavailableReason,
+  projectEvidenceColumnUnitsForModel} from '../services/evidence/evidenceCapture';
 import {createEvidenceReadView, MAX_EVIDENCE_READ_REFERENCES, type EvidenceReadView, type EvidenceReadViewOptions,
   type EvidenceReadRecord} from '../services/evidence/evidenceReadView';
 import { scopeMetadata, type IdentityResolutionV1, type EvidenceScopeMetadata, type EvidenceScopeProvenanceV1 } from '../types/identityContract';
@@ -57,6 +60,8 @@ export interface StoredArtifact extends EvidenceScopeMetadata {
   executionStatus?: DataEnvelopeMeta['executionStatus'];
   executionMessage?: string;
   executionError?: string;
+  /** Bounded model-only cell projection status; never confers evidence authority. */
+  modelProjection?: ModelEvidenceProjectionStatus;
 }
 
 export interface ArtifactSummary extends EvidenceScopeMetadata {
@@ -81,6 +86,8 @@ export interface ArtifactSummary extends EvidenceScopeMetadata {
   executionStatus?: DataEnvelopeMeta['executionStatus'];
   executionMessage?: string;
   executionError?: string;
+  modelProjection?: ModelEvidenceProjectionStatus;
+  columnUnits?: Readonly<Record<string, string>>;
 }
 
 export interface ArtifactQueryReviewRef {
@@ -188,6 +195,30 @@ function roundAggregateNumber(value: number): number {
   return Number(value.toPrecision(12));
 }
 
+const MODEL_PROJECTION_UNAVAILABLE_REASONS = new Set<ModelEvidenceProjectionUnavailableReason>([
+  'not_table', 'unissued_witness', 'unavailable_witness', 'row_mismatch',
+  'duplicate_columns', 'column_mismatch', 'unsupported_raw_cell',
+]);
+
+function sanitizeModelProjection(value: ModelEvidenceProjectionStatus | undefined): ModelEvidenceProjectionStatus | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (value.status === 'exact') return {status: 'exact'};
+  if (value.status === 'unavailable') return value.reason && MODEL_PROJECTION_UNAVAILABLE_REASONS.has(value.reason)
+    ? {status: 'unavailable', reason: value.reason} : undefined;
+  if (value.status !== 'truncated' || !Number.isSafeInteger(value.truncatedCellCount) ||
+      (value.truncatedCellCount ?? 0) <= 0 || !Array.isArray(value.truncatedCells)) return undefined;
+  const truncatedCells = value.truncatedCells.filter(cell => cell && Number.isSafeInteger(cell.rowIndex) &&
+    cell.rowIndex >= 0 && typeof cell.column === 'string' && cell.column.length > 0 &&
+    Number.isSafeInteger(cell.originalBytes) && cell.originalBytes > 0)
+    .slice(0, MODEL_EVIDENCE_TRUNCATED_CELL_LIMIT)
+    .map(cell => ({rowIndex: cell.rowIndex, column: cell.column, originalBytes: cell.originalBytes}));
+  if (truncatedCells.length === 0) return undefined;
+  const truncatedCellCount = value.truncatedCellCount!;
+  return {status: 'truncated', truncatedCellCount, truncatedCells,
+    ...(truncatedCellCount > truncatedCells.length
+      ? {truncatedCellsOmitted: truncatedCellCount - truncatedCells.length} : {})};
+}
+
 function queryReviewRefForArtifact(review: QueryReviewV1): ArtifactQueryReviewRef {
   const limitations = review.limitations
     .slice(0, 2)
@@ -243,6 +274,8 @@ export interface CompactArtifactSummary extends EvidenceScopeMetadata {
   executionStatus?: DataEnvelopeMeta['executionStatus'];
   executionMessage?: string;
   executionError?: string;
+  modelProjection?: ModelEvidenceProjectionStatus;
+  columnUnits?: Readonly<Record<string, string>>;
 }
 
 // Origin belongs to the issued execution witness, not the latest artifact registration.
@@ -324,6 +357,7 @@ export class ArtifactStore {
     executionStatus?: DataEnvelopeMeta['executionStatus'];
     executionMessage?: string;
     executionError?: string;
+    modelProjection?: ModelEvidenceProjectionStatus;
   }): string {
     const id = `art-${++this.counter}`;
     const now = Date.now();
@@ -333,6 +367,7 @@ export class ArtifactStore {
       ...entry,
       ...scopeMetadata(entry.scopeProvenance),
       queryReview,
+      modelProjection: sanitizeModelProjection(entry.modelProjection),
       storedAt: now,
       lastAccessedAt: now,
     });
@@ -467,6 +502,7 @@ export class ArtifactStore {
     const data = artifact.data;
     const columns: string[] = data?.columns || [];
     const rows: any[][] = data?.rows || [];
+    const columnUnits = projectEvidenceColumnUnitsForModel(data, this.executionCaptures.get(id)?.witness);
 
     return {
       id: artifact.id,
@@ -491,6 +527,8 @@ export class ArtifactStore {
       ...(artifact.executionStatus ? { executionStatus: artifact.executionStatus } : {}),
       ...(artifact.executionMessage ? { executionMessage: artifact.executionMessage } : {}),
       ...(artifact.executionError ? { executionError: artifact.executionError } : {}),
+      ...(artifact.modelProjection ? {modelProjection: artifact.modelProjection} : {}),
+      ...(columnUnits ? {columnUnits} : {}),
     };
   }
 
@@ -732,6 +770,8 @@ export class ArtifactStore {
       ...(artifact?.executionStatus ? { executionStatus: artifact.executionStatus } : {}),
       ...(artifact?.executionMessage ? { executionMessage: artifact.executionMessage } : {}),
       ...(artifact?.executionError ? { executionError: artifact.executionError } : {}),
+      ...(artifact?.modelProjection ? {modelProjection: artifact.modelProjection} : {}),
+      ...(full.columnUnits ? {columnUnits: full.columnUnits} : {}),
     };
   }
 
@@ -744,11 +784,11 @@ export class ArtifactStore {
     const artifact = this.artifacts.get(id);
     if (!artifact) return undefined;
     artifact.lastAccessedAt = Date.now();
-
     switch (detail) {
       case 'summary':
         return this.generateDetailedSummary(id);
       case 'rows': {
+        const columnUnits = projectEvidenceColumnUnitsForModel(artifact.data, this.executionCaptures.get(id)?.witness);
         const allRows: any[][] = artifact.data?.rows || [];
         const totalRows = allRows.length;
         const effectiveOffset = offset ?? 0;
@@ -778,10 +818,13 @@ export class ArtifactStore {
           executionStatus: artifact.executionStatus,
           executionMessage: artifact.executionMessage,
           executionError: artifact.executionError,
+          modelProjection: artifact.modelProjection,
+          ...(columnUnits ? {columnUnits} : {}),
           ...(artifact.queryReview ? {queryReview: queryReviewRefForArtifact(artifact.queryReview)} : {}),
         };
       }
       case 'full': {
+        const columnUnits = projectEvidenceColumnUnitsForModel(artifact.data, this.executionCaptures.get(id)?.witness);
         // Cap rows at MAX_FULL_ROWS to prevent context window overflow.
         // Larger datasets should use detail="rows" with pagination.
         const fullRows: any[][] = artifact.data?.rows || [];
@@ -812,6 +855,8 @@ export class ArtifactStore {
           executionStatus: artifact.executionStatus,
           executionMessage: artifact.executionMessage,
           executionError: artifact.executionError,
+          modelProjection: artifact.modelProjection,
+          ...(columnUnits ? {columnUnits} : {}),
           ...(truncatedFull ? { truncated: true, totalRows: fullRows.length, hint: 'Use detail="rows" with offset/limit for complete data' } : {}),
         };
       }
@@ -855,7 +900,8 @@ export class ArtifactStore {
     const store = new ArtifactStore();
     for (const art of artifacts) {
       const { appliedProcessScope: _legacyScope, evidenceRole: _legacyRole, ...stored } = art;
-      store.artifacts.set(art.id, { ...stored, ...scopeMetadata(art.scopeProvenance) });
+      store.artifacts.set(art.id, { ...stored, ...scopeMetadata(art.scopeProvenance),
+        modelProjection: sanitizeModelProjection(art.modelProjection) });
       const num = parseInt(art.id.replace('art-', ''), 10) || 0;
       if (num > store.counter) store.counter = num;
     }

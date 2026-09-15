@@ -100,7 +100,7 @@ display:
       unit: ms
     - {name: unknown_running_ms, label: "未知核类型运行(ms)", type: duration, format: duration_ms, unit: ms}
     - {name: other_state_ms, label: "其他观测状态(ms)", type: duration, format: duration_ms, unit: ms}
-    - name: q4a_io_blocked_ms
+    - name: q4a_uninterruptible_ms
       label: "Q4a 不可中断等待"
       type: duration
       format: duration_ms
@@ -229,13 +229,15 @@ sql: |
         THEN dur_ms ELSE 0 END), 2) as q2_little_running_ms,
       ROUND(SUM(CASE WHEN state = 'Running' AND core_type NOT IN ('prime', 'big', 'medium', 'little')
         THEN dur_ms ELSE 0 END), 2) as unknown_running_ms,
+      SUM(CASE WHEN state = 'Running' AND core_type NOT IN ('prime', 'big', 'medium', 'little')
+        THEN dur_ms ELSE 0 END) as unknown_running_unrounded_ms,
       -- Q3: Runnable 等待（含 R 和 R+）
       ROUND(SUM(CASE WHEN state IN ('R', 'R+')
         THEN dur_ms ELSE 0 END), 2) as q3_runnable_ms,
       ROUND(SUM(CASE WHEN state = 'R+' THEN dur_ms ELSE 0 END), 2) as runnable_preempted_ms,
       -- Q4a: 不可中断等待（D/DK）；需结合 io_wait/blocked_function 才能判为 IO
       ROUND(SUM(CASE WHEN state IN ('D', 'DK')
-        THEN dur_ms ELSE 0 END), 2) as q4a_io_blocked_ms,
+        THEN dur_ms ELSE 0 END), 2) as q4a_uninterruptible_ms,
       -- Q4b: 睡眠等待（S/I）
       ROUND(SUM(CASE WHEN state IN ('S', 'I')
         THEN dur_ms ELSE 0 END), 2) as q4b_sleeping_ms,
@@ -308,12 +310,13 @@ sql: |
     tq.other_state_ms,
     tq.q3_runnable_ms,
     tq.runnable_preempted_ms,
-    tq.q4a_io_blocked_ms,
+    tq.q4a_uninterruptible_ms,
     tq.q4b_sleeping_ms,
     tq.total_ms,
     -- 百分比
     ROUND(100.0 * tq.total_cpu_ms / NULLIF(tq.total_ms, 0), 1) as running_pct,
-    ROUND(100.0 * tq.q1_big_running_ms / NULLIF(tq.total_cpu_ms, 0), 1) as big_core_pct,
+    CASE WHEN tq.unknown_running_unrounded_ms > 0 THEN NULL
+      ELSE ROUND(100.0 * tq.q1_big_running_ms / NULLIF(tq.total_cpu_ms, 0), 1) END as big_core_pct,
     -- 摆核
     tm.migrations,
     tm.cross_cluster_migrations,

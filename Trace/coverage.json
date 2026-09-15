@@ -1095,8 +1095,28 @@
           },
           {
             "id": "wakeup_chain",
-            "sha256": "6d17de3b20c96c933a4b702c8bf5fd527178c906d24b30d869f314be5f190926",
+            "sha256": "4c1f02e3c0900f24405c8774193cfa9d955ac521b9ec327fa01cb0f906217d56",
             "required_columns": [
+              "upid",
+              "utid",
+              "thread_state_id",
+              "raw_start_ts",
+              "raw_end_ts",
+              "start_ts",
+              "end_ts",
+              "is_unfinished",
+              "left_censored",
+              "right_censored",
+              "wakeup_state_id",
+              "waker_utid",
+              "waker_upid",
+              "observed_waker_utid",
+              "irq_context",
+              "wakeup_status",
+              "relation_status",
+              "evidence_scope",
+              "wait_span_count",
+              "blocked_state",
               "ts",
               "waker_thread_name",
               "waker_process_name",
@@ -2177,7 +2197,7 @@
           },
           {
             "id": "create_topology_view",
-            "sha256": "c181319f14400a8e1385d3d4fc44ea25a8dd1c8f6731dae88f9e77bed33a950f",
+            "sha256": "3ffb4b0f4eb47a082cc72702dbe4b29bc5a3f94b1a530b56e6d8aa060c64eb69",
             "required_columns": [
               "cpu_id",
               "universe_source",
@@ -3304,7 +3324,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "7fb5be6be0e3ffce1ae80b4eff6ca663d60e332773b28ac8ed9f73cfc4f9747f",
+            "sha256": "6ee5e72bcfc8a9030affbab469eb361f33e3026d3cd08e1519d673f11bc40caa",
             "required_columns": [
               "state",
               "state_desc",
@@ -4309,7 +4329,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "fbbe440b09457cfd415df312ddd70568563b9f9aa81b33fea087d6515d8f8e5e",
+            "sha256": "aedaaf73ed30cd39ca24476de3c787c84872bd841a68ebced8499f3b463e6ca9",
             "required_columns": [
               "window_start_ts",
               "window_end_ts",
@@ -4325,7 +4345,7 @@
               "q3_runnable_ms",
               "unknown_running_ms",
               "other_state_ms",
-              "q4a_io_blocked_ms",
+              "q4a_uninterruptible_ms",
               "q4b_sleeping_ms",
               "total_ms",
               "running_pct",
@@ -4364,9 +4384,10 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "1fa89fc5168376bc11c16853ccf7152544ca77961589f01944c40176fc24d35d",
+            "sha256": "a66c8eb3e0823e438c6ffc7179cf4e8f53b42ed506528d97e84c7826d6e907c7",
             "required_columns": [
               "startup_id",
+              "upid",
               "package",
               "type_display",
               "dur_ms",
@@ -4395,14 +4416,21 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "bf40d1882bf66325334d4c11b9b47df28afda2ffcee93ebf034d282eec3165c2",
+            "sha256": "6d8ad8e0e717d377ed3569b63e76fb53ca49a7aed6f2cf724a6b85169fe15479",
             "required_columns": [
-              "core_type",
+              "ucpu",
+              "cpu",
+              "machine_id",
               "early_avg_freq_mhz",
               "steady_avg_freq_mhz",
               "max_freq_mhz",
+              "early_covered_ns",
+              "early_window_ns",
+              "steady_covered_ns",
+              "steady_window_ns",
               "rampup_pct",
-              "assessment"
+              "assessment",
+              "claim_boundary"
             ]
           }
         ]
@@ -4439,17 +4467,39 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "bcbb7acc191d26671241108377434e7552bb09d3f80ac7c7c2bb58cc7179a777",
+            "sha256": "c10ddc3d1cc66aaaf2ffe15f4bc24bbc05aec949c19a58c7158fc0b3ba989eb8",
             "required_columns": [
+              "sample_rank",
+              "slice_id",
+              "upid",
+              "utid",
+              "pid",
+              "tid",
+              "process_name",
+              "thread_name",
               "slice_name",
               "slice_dur_ms",
               "slice_ts",
+              "slice_end_ts",
+              "raw_slice_ts",
+              "raw_slice_end_ts",
+              "raw_slice_dur_ms",
+              "left_censored",
+              "right_censored",
+              "is_unfinished",
               "state",
               "state_dur_ms",
               "state_pct",
+              "state_coverage_ms",
+              "state_coverage_pct",
+              "uncovered_ms",
               "io_wait",
               "evidence_strength",
-              "blocked_functions"
+              "blocked_functions",
+              "sample_limit",
+              "sampling_scope",
+              "eligible_slice_count",
+              "selected_slice_count"
             ]
           }
         ]
@@ -4565,7 +4615,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "f66bb5df9f5fd0229a34035f463dba9d43c4fd05b3cab4768403061d73c7fa40",
+            "sha256": "fc1fcac4576b6340b72f40503de01376bb1c14daf15b577f0a5720c1391ff7f3",
             "required_columns": [
               "state",
               "state_desc",
@@ -4663,13 +4713,14 @@
           },
           {
             "id": "slow_reason_checks",
-            "sha256": "a8f4852abf3586fae8a338de01d1017e64ceb365af3b8c1da7c645b283aaefc9",
+            "sha256": "ad134f330dc4102932bcc21ecac548d7f807fc243777b0b142918d167d4e0d52",
             "required_columns": [
               "reason_id",
               "reason",
               "severity",
               "evidence",
-              "suggestion"
+              "suggestion",
+              "claim_boundary"
             ]
           }
         ]
@@ -4681,8 +4732,30 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "89cf069b75db68224d069d8dae2d787a7e6472121ba10e9e199d7fb7af3c17be",
+            "sha256": "717c46149fccc513514a61468fbe6996f3716f1f96cc1eac5709ce7ce687fc99",
             "required_columns": [
+              "is_unfinished",
+              "left_censored",
+              "right_censored",
+              "wakeup_state_id",
+              "evidence_scope",
+              "waker_slice_id",
+              "upid",
+              "utid",
+              "thread_state_id",
+              "raw_start_ts",
+              "raw_end_ts",
+              "start_ts",
+              "end_ts",
+              "wakeup_ts",
+              "wakeup_status",
+              "wakeup_count",
+              "waker_utid",
+              "waker_upid",
+              "observed_waker_utid",
+              "irq_context",
+              "relation_status",
+              "waker_slice_status",
               "blocked_thread",
               "blocked_role",
               "blocked_state",
@@ -6748,7 +6821,7 @@
           },
           {
             "id": "main_thread_states",
-            "sha256": "390180c1d2e6e222f32e04a6d115b87ca34ebe6666ae7680f74eb88dc6b8b669",
+            "sha256": "ba8fc61b0a8645169898aa901f15f2f2fa90cc02d597c6461feda48078400af5",
             "required_columns": [
               "upid",
               "window_start_ts",
@@ -6797,7 +6870,7 @@
           },
           {
             "id": "blocked_functions",
-            "sha256": "a3f96327910754167f417d391babb82aa97047707ec1b4d0df7dc6cedce99ac4",
+            "sha256": "8bc876834ab1c39dc6a23f85056d2ff3347d7e68da8bb0967ccb6199ae63c0ac",
             "required_columns": [
               "upid",
               "window_start_ts",
@@ -9815,7 +9888,7 @@
         "steps": [
           {
             "id": "running_thread_quadrants",
-            "sha256": "f533d8df76462b9fff19d2582eab6e62316c2c566bc0eb0b01d7ff43c51cded1",
+            "sha256": "179c3d9837fe617fe8d65a47c5178ac007017cbee052fbded872bcdc08fbdc10",
             "required_columns": [
               "window_id",
               "window_start_ts",
@@ -9835,7 +9908,7 @@
               "q1_perf_running_ms",
               "q2_little_running_ms",
               "q3_runnable_ms",
-              "q4a_io_blocked_ms",
+              "q4a_uninterruptible_ms",
               "q4b_sleeping_ms",
               "perf_core_pct",
               "running_cpus",
@@ -10073,13 +10146,13 @@
           },
           {
             "id": "quadrant_analysis",
-            "sha256": "43f85cb06b4d6388d3a03b5ef9301adc089db1c20240ad7eb36f49d11f710f2b",
+            "sha256": "615718b114bdcee0881757c5cec37101f75f339432765f8389d1a1c3188f7eb3",
             "required_columns": [
               "thread_type",
               "q1_big_running_ms",
               "q2_little_running_ms",
               "q3_runnable_ms",
-              "q4a_io_blocked_ms",
+              "q4a_uninterruptible_ms",
               "q4b_sleeping_ms",
               "total_ms",
               "q1_pct",

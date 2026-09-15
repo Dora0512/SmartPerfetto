@@ -10,6 +10,13 @@ import {attachFinalizationContext} from '../../analysisFinalizationContext';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
 import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
+import {
+  acceptNativeDeclarationCompletion,
+  buildNativeDeclarationCompletionPrompt,
+  buildRelationProposalRecoveryPromptFragment,
+  nativeDeclarationBodyCanFitOutput,
+  requestNativeDeclarationCompletion,
+} from '../../runtimeConclusionProtocol';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext, toAnalysisHistoryTurn,
   type AnalysisHistoryReader} from '../../analysisHistory';
 import type {RuntimeToolObserver} from '../../runtimeToolObserver';
@@ -1258,6 +1265,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     let turnIntent: AnalysisTurnIntent | undefined;
     let strategyRegistry: ReadonlyStrategyRegistrySnapshot | undefined;
     let currentArtifactStore: ArtifactStore | undefined;
+    let analysisRunSelection: AnalysisRunSpec['selection'] | undefined;
     let requestTimeoutMs = timeouts.requestTimeoutMs;
     let deferLeaseSettleToAnalysisCleanup = false;
     let leaseSettled = false;
@@ -1314,9 +1322,10 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
           timeouts.streamIdleTimeoutMs,
           timeouts.abortJoinTimeoutMs,
           markTimeout,
-          (currentSourceUse, artifactStore) => {
-            sourceUse = currentSourceUse;
-            currentArtifactStore = artifactStore;
+          preparation => {
+            sourceUse = preparation.sourceUse;
+            currentArtifactStore = preparation.artifactStore;
+            analysisRunSelection = preparation.selection;
           },
           (intent, policy, registry) => {
             turnIntent = intent;
@@ -1375,6 +1384,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
           attachFinalizationContext(projected.result, {
             runId: executionLease.key.runId!, sessionId, deadlineMs: startedAt + requestTimeoutMs,
             turnIntent, strategyRegistry,
+            selection: analysisRunSelection,
             traceIdentity: {currentTraceId: traceId || undefined, referenceTraceId: options.referenceTraceId},
             deliveryContext: projected.deliveryContext, protocolProjection: projected.protocolProjection,
             sourceUse: sourceUse?.getSourceUseDecision(),
@@ -1622,7 +1632,8 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     streamIdleTimeoutMs: number,
     abortJoinTimeoutMs: number,
     markTimeout: (kind: RuntimeTimeoutKind, timeoutMs: number) => void,
-    onSourceUseReady: (sourceUse: PiAnalysisPreparation['sourceUse'], artifactStore: ArtifactStore) => void,
+    onPreparationReady: (input: {sourceUse: PiAnalysisPreparation['sourceUse']; artifactStore: ArtifactStore;
+      selection: AnalysisRunSpec['selection']}) => void,
     onPolicyReady: (intent: AnalysisTurnIntent, policy: RuntimeTurnPolicy, registry: ReadonlyStrategyRegistrySnapshot) => void,
     getRunDeadlineMs: () => number,
   ): Promise<AnalysisResult> {
@@ -1684,7 +1695,8 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       executionLease, turnIntent, policy, intentResolver.strategyRegistry, analysisHistoryReader, closeoutTape.observe,
       () => toolAdmissionsOpen,
     );
-    onSourceUseReady(prep.sourceUse, prep.artifactStore);
+    onPreparationReady({sourceUse: prep.sourceUse, artifactStore: prep.artifactStore,
+      selection: prep.analysisRunSpec.selection});
     executionLease.throwIfAborted();
     if (privateAnalysisContext) this.sessionOpaqueStates.delete(sessionId);
 
@@ -1744,9 +1756,9 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       },
     });
     void providerIdle.promise.catch(() => undefined);
-    const runProviderPrompt = async (prompt: string) => {
+    const runProviderPrompt = async (prompt: string, turnLimit = turnBudget.acquisitionTurns) => {
       executionLease.throwIfAborted();
-      if (rounds >= turnBudget.acquisitionTurns) { turnLimitReached = true; return undefined; }
+      if (rounds >= turnLimit) { turnLimitReached = true; return undefined; }
       const boundary = agent.state.messages?.length ?? 0;
       const attemptId = `${++attempt}`;
       const beforeRounds = rounds;
@@ -1769,11 +1781,13 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       buildPiAnalysisCompletion({assistant, candidate: candidateIdentity(text, attemptId), runtimeKind: this.selection.kind, turnLimitReached: limited})
     );
     let acceptingProviderEvents = true;
+    let declarationCompletionInProgress = false;
     const unsubscribe = agent.subscribe(event => {
       if (!acceptingProviderEvents || executionLease.signal.aborted) return;
       providerIdle.onEvent(event);
       if (event.type === 'turn_end') rounds++;
       if (event.type === 'done') recordEvaluationTokenDeltaIfPresent(event.message);
+      if (declarationCompletionInProgress && isPiAgentCoreVisibleOutputEvent(event)) return;
       const update = projectPiAgentCoreEventToStreamingUpdate(event, Date.now(), outputLanguage);
       if (correctionInProgress && update?.type === 'error') return;
       if (isPiAgentCoreVisibleOutputEvent(event)) runtimePerformance.recordFirstOutput();
@@ -1871,26 +1885,58 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       const issues = [...verification.heuristicIssues, ...(verification.llmIssues ?? [])];
       const actionable = issues.filter(issue => issue.severity === 'error' && issue.recoveryKind &&
         issue.type !== 'plan_deviation' && issue.type !== 'unresolved_hypothesis');
-      if (actionable.length > 0 && rounds < turnBudget.acquisitionTurns
+      const acceptedCompletion = completionFor(acceptedAssistant, acceptedText, acceptedAttemptId, acceptedTurnLimitReached);
+      const declarationNeed = requestNativeDeclarationCompletion({
+        intent: turnIntent, completion: acceptedCompletion, candidate: acceptedText,
+        remainingDeliveryTurns: rounds < turnBudget.totalTurns ? turnBudget.deliveryTurns : 0,
+      });
+      const declarationRequest = declarationNeed && nativeDeclarationBodyCanFitOutput(acceptedText, 64 * 1024)
+        ? declarationNeed : undefined;
+      const correctionNeeded = declarationRequest !== undefined || declarationNeed === undefined && actionable.length > 0;
+      if (correctionNeeded &&
+        rounds < (declarationRequest ? turnBudget.totalTurns : turnBudget.acquisitionTurns)
         && completionFor(acceptedAssistant, acceptedText, acceptedAttemptId, acceptedTurnLimitReached).status === 'completed') {
         const originalTools = agent.state.tools;
         const originalSystemPrompt = agent.state.systemPrompt;
         const originalError = agent.state.errorMessage;
+        const declarationMessageBoundary = agent.state.messages?.length ?? 0;
+        let acceptedDeclaration: string | undefined;
         correctionInProgress = true;
+        declarationCompletionInProgress = Boolean(declarationRequest);
         try {
           agent.state.tools = [];
-          agent.state.systemPrompt = `${originalSystemPrompt}\n\n${loadPiFinalReportCorrectionSystemPrompt(outputLanguage)}`;
+          agent.state.systemPrompt = declarationRequest
+            ? originalSystemPrompt
+            : `${originalSystemPrompt}\n\n${loadPiFinalReportCorrectionSystemPrompt(outputLanguage)}`;
           assertCurrentAnalysisContextAuthorization(options, authorizationScope, authorizationFingerprint);
           const correctionDiagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(acceptedText), 'native', 1);
-          const candidate = await runProviderPrompt(`${generateCorrectionPrompt(actionable, acceptedText, outputLanguage, turnIntent.sceneId)}\n\n${JSON.stringify({candidateProtocolDiagnostic: correctionDiagnostic})}`);
+          const relationFragment = declarationRequest ? ''
+            : buildRelationProposalRecoveryPromptFragment(correctionDiagnostic, outputLanguage);
+          const correctionBasePrompt = declarationRequest ? ''
+            : `${generateCorrectionPrompt(actionable, acceptedText, outputLanguage,
+              turnIntent.sceneId)}\n\n${JSON.stringify({candidateProtocolDiagnostic: correctionDiagnostic})}`;
+          const correctionPrompt = declarationRequest
+            ? buildNativeDeclarationCompletionPrompt({request: declarationRequest, intent: turnIntent, outputLanguage})
+            : relationFragment ? `${correctionBasePrompt}\n\n${relationFragment}` : correctionBasePrompt;
+          const candidate = await runProviderPrompt(correctionPrompt,
+            declarationRequest ? turnBudget.totalTurns : turnBudget.acquisitionTurns);
+          assertCurrentAnalysisContextAuthorization(options, authorizationScope, authorizationFingerprint);
           if (candidate && completionFor(candidate.assistant, candidate.text, candidate.attemptId, candidate.turnLimitReached).status === 'completed') {
             const checked = await verifyCandidate(candidate.text, candidate.assistant, candidate.attemptId, candidate.turnLimitReached);
             const originalProtocol = inspectCandidateProtocol(acceptedText);
             const correctedProtocol = inspectCandidateProtocol(candidate.text);
-            if (correctedProtocol.canonicalBody.trim() && correctedProtocol.status !== 'invalid' &&
-                !(originalProtocol.status !== 'absent' && correctedProtocol.status === 'absent') &&
-                ![...checked.heuristicIssues, ...(checked.llmIssues ?? [])].some(issue => issue.severity === 'error' &&
-              issue.type !== 'plan_deviation' && issue.type !== 'unresolved_hypothesis')) {
+            acceptedDeclaration = declarationRequest ? acceptNativeDeclarationCompletion({
+              request: declarationRequest,
+              completion: completionFor(candidate.assistant, candidate.text, candidate.attemptId, candidate.turnLimitReached),
+              candidate: candidate.text,
+              outputByteLimit: 64 * 1024,
+            }) : undefined;
+            const ordinaryCorrectionAccepted = !declarationRequest && correctedProtocol.canonicalBody.trim() &&
+              correctedProtocol.status !== 'invalid' &&
+              !(originalProtocol.status !== 'absent' && correctedProtocol.status === 'absent') &&
+              ![...checked.heuristicIssues, ...(checked.llmIssues ?? [])].some(issue => issue.severity === 'error' &&
+                issue.type !== 'plan_deviation' && issue.type !== 'unresolved_hypothesis');
+            if (acceptedDeclaration || ordinaryCorrectionAccepted) {
               acceptedAssistant = candidate.assistant;
               acceptedText = candidate.text;
               acceptedAttemptId = candidate.attemptId;
@@ -1902,9 +1948,13 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
           executionLease.throwIfAborted();
           // A failed correction does not certify or replace the accepted candidate.
         } finally {
+          if (declarationRequest && !acceptedDeclaration) {
+            agent.state.messages = (agent.state.messages ?? []).slice(0, declarationMessageBoundary);
+          }
           agent.state.tools = originalTools;
           agent.state.systemPrompt = originalSystemPrompt;
           agent.state.errorMessage = originalError;
+          declarationCompletionInProgress = false;
           correctionInProgress = false;
         }
       }
@@ -1977,6 +2027,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     if (projected.deliveryContext) {
       attachFinalizationContext(result, {
         runId, sessionId, deadlineMs, turnIntent, strategyRegistry: intentResolver.strategyRegistry,
+        selection: prep.analysisRunSpec.selection,
         traceIdentity: {currentTraceId: traceId || undefined, referenceTraceId: options.referenceTraceId},
         deliveryContext: projected.deliveryContext, protocolProjection: projected.protocolProjection,
         sourceUse: prep.sourceUse.getSourceUseDecision(),

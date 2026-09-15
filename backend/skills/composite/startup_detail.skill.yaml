@@ -571,7 +571,7 @@ steps:
   # ========== CPU 频率爬升分析 ==========
   - id: freq_rampup
     type: skill
-    name: "CPU 频率爬升"
+    name: "CPU 频率阶段对比"
     skill: startup_freq_rampup
     params:
       start_ts: "${start_ts}"
@@ -579,24 +579,21 @@ steps:
     display:
       level: detail
       layer: deep
-      title: "CPU 频率爬升分析"
+      title: "CPU 频率阶段对比"
       columns:
-        - name: core_type
-          label: "核类型"
-          type: string
-        - name: early_avg_freq_mhz
-          label: "初期均频(MHz)"
-          type: number
-        - name: steady_avg_freq_mhz
-          label: "稳态均频(MHz)"
-          type: number
-        - name: rampup_pct
-          label: "爬升幅度"
-          type: percentage
-          format: percentage
-        - name: assessment
-          label: "评估"
-          type: string
+        - {name: ucpu, label: "UCPU", type: number}
+        - {name: cpu, label: "CPU", type: number}
+        - {name: machine_id, label: "Machine ID", type: number}
+        - {name: early_avg_freq_mhz, label: "初期均频(MHz)", type: number}
+        - {name: steady_avg_freq_mhz, label: "后段均频(MHz)", type: number}
+        - {name: max_freq_mhz, label: "观测峰值(MHz)", type: number}
+        - {name: early_covered_ns, label: "初期覆盖时长", type: duration, unit: ns}
+        - {name: early_window_ns, label: "初期窗口时长", type: duration, unit: ns}
+        - {name: steady_covered_ns, label: "后段覆盖时长", type: duration, unit: ns}
+        - {name: steady_window_ns, label: "后段窗口时长", type: duration, unit: ns}
+        - {name: rampup_pct, label: "后段相对变化(%)", type: percentage, format: percentage}
+        - {name: assessment, label: "评估", type: string}
+        - {name: claim_boundary, label: "证据边界", type: string}
     save_as: freq_rampup
     optional: true
 
@@ -628,7 +625,7 @@ steps:
           type: duration
           format: duration_ms
           unit: ms
-        - name: q4a_io_blocked_ms
+        - name: q4a_uninterruptible_ms
           label: "Q4a不可中断等待(ms)"
           type: duration
           format: duration_ms
@@ -715,7 +712,7 @@ steps:
             WHEN state = 'Running' AND core_type IN ('prime', 'big', 'medium') THEN 'Q1_big_running'
             WHEN state = 'Running' AND core_type IN ('little') THEN 'Q2_little_running'
             WHEN state IN ('R', 'R+') THEN 'Q3_runnable'
-            WHEN state IN ('D', 'DK') THEN 'Q4a_io_blocked'
+            WHEN state IN ('D', 'DK') THEN 'Q4a_uninterruptible'
             WHEN state IN ('S', 'I') THEN 'Q4b_sleeping'
             WHEN state = 'Running' THEN 'unknown_running'
             ELSE 'other'
@@ -729,7 +726,7 @@ steps:
         ROUND(SUM(CASE WHEN quadrant = 'Q1_big_running' THEN dur_ms ELSE 0 END), 2) as q1_big_running_ms,
         ROUND(SUM(CASE WHEN quadrant = 'Q2_little_running' THEN dur_ms ELSE 0 END), 2) as q2_little_running_ms,
         ROUND(SUM(CASE WHEN quadrant = 'Q3_runnable' THEN dur_ms ELSE 0 END), 2) as q3_runnable_ms,
-        ROUND(SUM(CASE WHEN quadrant = 'Q4a_io_blocked' THEN dur_ms ELSE 0 END), 2) as q4a_io_blocked_ms,
+        ROUND(SUM(CASE WHEN quadrant = 'Q4a_uninterruptible' THEN dur_ms ELSE 0 END), 2) as q4a_uninterruptible_ms,
         ROUND(SUM(CASE WHEN quadrant = 'Q4b_sleeping' THEN dur_ms ELSE 0 END), 2) as q4b_sleeping_ms,
         ROUND(SUM(dur_ms), 2) as total_ms,
         -- 百分比
@@ -739,7 +736,7 @@ steps:
               NULLIF(SUM(dur_ms), 0), 1) as q2_pct,
         ROUND(100.0 * SUM(CASE WHEN quadrant = 'Q3_runnable' THEN dur_ms ELSE 0 END) /
               NULLIF(SUM(dur_ms), 0), 1) as q3_pct,
-        ROUND(100.0 * SUM(CASE WHEN quadrant = 'Q4a_io_blocked' THEN dur_ms ELSE 0 END) /
+        ROUND(100.0 * SUM(CASE WHEN quadrant = 'Q4a_uninterruptible' THEN dur_ms ELSE 0 END) /
               NULLIF(SUM(dur_ms), 0), 1) as q4a_pct,
         ROUND(100.0 * SUM(CASE WHEN quadrant = 'Q4b_sleeping' THEN dur_ms ELSE 0 END) /
               NULLIF(SUM(dur_ms), 0), 1) as q4b_pct,
@@ -824,14 +821,17 @@ steps:
           label: "总耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: avg_ms
           label: "平均耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: max_ms
           label: "最大耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: percent
           label: "区间占比"
           type: percentage
@@ -979,14 +979,17 @@ steps:
           label: "总耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: avg_ms
           label: "平均耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: max_ms
           label: "最大耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: percent
           label: "区间占比"
           type: percentage
@@ -1022,14 +1025,17 @@ steps:
           label: "总耗时"
           type: duration
           format: duration_ms
+          unit: ms
         - name: max_delay_ms
           label: "最大延迟"
           type: duration
           format: duration_ms
+          unit: ms
         - name: avg_delay_ms
           label: "平均延迟"
           type: duration
           format: duration_ms
+          unit: ms
         - name: slow_calls
           label: "慢调用"
           type: number
@@ -1063,14 +1069,17 @@ steps:
           label: "总阻塞时间"
           type: duration
           format: duration_ms
+          unit: ms
         - name: server_exec_ms
           label: "服务端执行"
           type: duration
           format: duration_ms
+          unit: ms
         - name: max_block_ms
           label: "最大阻塞"
           type: duration
           format: duration_ms
+          unit: ms
         - name: is_main_blocked
           label: "主线程被阻"
           type: boolean
@@ -1127,14 +1136,17 @@ steps:
           label: "总等待"
           type: duration
           format: duration_ms
+          unit: ms
         - name: max_latency_ms
           label: "最大延迟"
           type: duration
           format: duration_ms
+          unit: ms
         - name: avg_latency_ms
           label: "平均延迟"
           type: duration
           format: duration_ms
+          unit: ms
         - name: long_wait_count
           label: ">2ms 次数"
           type: number
@@ -1272,7 +1284,7 @@ steps:
         - {name: tid, label: "TID", type: number, hidden: true}
         - {name: process_name, label: "进程", type: string, hidden: true}
         - {name: priority_evidence, label: "优先级证据", type: string, hidden: true}
-        - {name: q4a_io_blocked_ms, label: "Q4a 不可中断等待(ms)", type: duration, format: duration_ms, unit: ms, hidden: true}
+        - {name: q4a_uninterruptible_ms, label: "Q4a 不可中断等待(ms)", type: duration, format: duration_ms, unit: ms, hidden: true}
         - {name: total_ms, label: "总观测状态时间(ms)", type: duration, format: duration_ms, unit: ms, hidden: true}
     save_as: critical_tasks
     optional: true
@@ -1306,35 +1318,70 @@ steps:
     display:
       level: detail
       layer: deep
-      title: "线程阻塞关系图"
+      title: "线程等待与唤醒证据"
       columns:
+        - {name: is_unfinished, label: "未结束等待", type: number}
+        - {name: left_censored, label: "左边界裁剪", type: number}
+        - {name: right_censored, label: "右边界裁剪", type: number}
+        - {name: wakeup_state_id, label: "后继状态ID", type: number}
+        - {name: evidence_scope, label: "证据范围", type: string}
+        - {name: waker_slice_id, label: "唤醒时操作ID", type: number}
+        - {name: upid, label: "upid", type: number, hidden: true}
+        - {name: utid, label: "utid", type: number, hidden: true}
+        - {name: thread_state_id, label: "thread_state_id", type: number, hidden: true}
+        - {name: raw_start_ts, label: "原始等待开始", type: timestamp, unit: ns}
+        - {name: raw_end_ts, label: "原始等待结束", type: timestamp, unit: ns}
+        - {name: start_ts, label: "窗口内等待开始", type: timestamp, unit: ns}
+        - {name: end_ts, label: "窗口内等待结束", type: timestamp, unit: ns}
+        - {name: wakeup_ts, label: "后继事件时间", type: timestamp, unit: ns}
+        - {name: wakeup_status, label: "唤醒证据状态", type: string}
+        - {name: wakeup_count, label: "有唤醒元数据的事件数", type: number}
+        - {name: waker_utid, label: "唤醒线程身份", type: number}
+        - {name: waker_upid, label: "唤醒进程身份", type: number}
+        - {name: observed_waker_utid, label: "原始唤醒线程字段", type: number}
+        - {name: irq_context, label: "IRQ 上下文", type: number}
+        - {name: relation_status, label: "关系证据边界", type: string}
+        - {name: waker_slice_status, label: "唤醒时操作证据", type: string}
         - name: blocked_thread
-          label: "被阻塞线程"
+          label: "等待线程"
+          type: string
+        - name: blocked_role
+          label: "等待线程角色"
           type: string
         - name: blocked_state
-          label: "阻塞状态"
+          label: "等待状态"
           type: string
         - name: blocked_function
           label: "阻塞函数"
           type: string
           format: code
         - name: waker_thread
-          label: "唤醒者"
+          label: "唤醒者线程"
           type: string
         - name: waker_process
           label: "唤醒者进程"
           type: string
         - name: waker_current_slice
-          label: "唤醒者操作"
+          label: "唤醒者当时操作"
           type: string
+        - name: block_count
+          label: "等待区间数"
+          type: number
         - name: total_block_ms
-          label: "总阻塞"
+          label: "窗口内等待时长"
           type: duration
           format: duration_ms
           unit: ms
-        - name: block_count
-          label: "次数"
-          type: number
+        - name: max_block_ms
+          label: "单区间等待时长"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: avg_block_ms
+          label: "单区间等待时长"
+          type: duration
+          format: duration_ms
+          unit: ms
     save_as: blocking_graph
     optional: true
 
@@ -1380,6 +1427,36 @@ steps:
       layer: deep
       title: "热点 Slice 线程状态分布"
       columns:
+        - name: sample_rank
+          label: "样本排名"
+          type: number
+          format: compact
+        - name: slice_id
+          label: "Slice ID"
+          type: number
+          format: compact
+        - name: upid
+          label: "UPID"
+          type: number
+          format: compact
+        - name: utid
+          label: "UTID"
+          type: number
+          format: compact
+        - name: pid
+          label: "PID"
+          type: number
+          format: compact
+        - name: tid
+          label: "TID"
+          type: number
+          format: compact
+        - name: process_name
+          label: "进程"
+          type: string
+        - name: thread_name
+          label: "线程"
+          type: string
         - name: slice_name
           label: "切片名"
           type: string
@@ -1391,6 +1468,36 @@ steps:
         - name: slice_ts
           label: "开始时间"
           type: timestamp
+          unit: ns
+        - name: slice_end_ts
+          label: "结束时间"
+          type: timestamp
+          unit: ns
+        - name: raw_slice_ts
+          label: "原始开始时间"
+          type: timestamp
+          unit: ns
+        - name: raw_slice_end_ts
+          label: "原始结束时间"
+          type: timestamp
+          unit: ns
+        - name: raw_slice_dur_ms
+          label: "原始耗时"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: left_censored
+          label: "左侧裁剪"
+          type: number
+          format: compact
+        - name: right_censored
+          label: "右侧裁剪"
+          type: number
+          format: compact
+        - name: is_unfinished
+          label: "未结束"
+          type: number
+          format: compact
         - name: state
           label: "线程状态"
           type: string
@@ -1403,10 +1510,46 @@ steps:
           label: "状态占比"
           type: percentage
           format: percentage
+        - name: state_coverage_ms
+          label: "状态覆盖"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: state_coverage_pct
+          label: "状态覆盖率"
+          type: percentage
+          format: percentage
+        - name: uncovered_ms
+          label: "未覆盖时长"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: io_wait
+          label: "io_wait"
+          type: number
+          format: compact
+        - name: evidence_strength
+          label: "证据强度"
+          type: string
         - name: blocked_functions
           label: "阻塞函数"
           type: string
           format: truncate
+        - name: sample_limit
+          label: "样本上限"
+          type: number
+          format: compact
+        - name: sampling_scope
+          label: "采样口径"
+          type: string
+        - name: eligible_slice_count
+          label: "候选 Slice 数"
+          type: number
+          format: compact
+        - name: selected_slice_count
+          label: "入选 Slice 数"
+          type: number
+          format: compact
     save_as: hot_slice_states
     optional: true
 
@@ -1522,11 +1665,11 @@ steps:
       # Q4b 占比高 + 线程状态 S 占比高 + blocked_functions 含锁等待
       - condition: "(quadrant.data[0]?.q4b_pct || 0) > 25 && thread_states?.data?.find(r => r.state === 'S')?.percent > 20 && (thread_states?.data?.find(r => r.state === 'S')?.blocked_functions || '').includes('futex')"
         severity: warning
-        diagnosis: "主线程 S(Sleeping) 状态占比 ${thread_states.data.find(r => r.state === 'S').percent}%，blocked_functions 含 futex 相关函数，存在锁竞争"
-        confidence: high
+        diagnosis: "主线程 S(Sleeping) 状态占比 ${thread_states.data.find(r => r.state === 'S').percent}%，blocked_functions 含 futex 相关函数，存在 futex 路径等待；尚不能区分锁竞争、条件变量或线程 join"
+        confidence: medium
         suggestions:
-          - "检查主线程是否存在锁竞争（synchronized/ReentrantLock）"
-          - "减少启动期间的线程同步操作"
+          - "关联锁对象/持有者、竞争事件或对应调用栈，区分 mutex、条件变量和 join"
+          - "仅对确认影响关键路径的同步依赖提出修改"
 
       # Q4a 占比高 + D 状态，需要 io_wait 或 IO/page-cache blocked_function 才判为 IO 候选
       - condition: "(quadrant.data[0]?.q4a_pct || 0) > 10 && thread_states?.data?.find(r => (r.evidence_strength === 'direct_io_wait' || r.evidence_strength === 'inferred_io_or_page_cache') && ((r.percent || 0) > 5))"
@@ -1542,20 +1685,11 @@ steps:
       # JIT 线程与主线程争抢大核
       - condition: "(critical_tasks?.data?.find(t => t.role === 'jit')?.total_cpu_ms || 0) > 20 && (critical_tasks?.data?.find(t => t.role === 'jit')?.big_core_pct || 0) > 50"
         severity: warning
-        diagnosis: "JIT 线程 CPU 时间 ${critical_tasks.data.find(t => t.role === 'jit').total_cpu_ms}ms（大核占比 ${critical_tasks.data.find(t => t.role === 'jit').big_core_pct}%），可能与主线程争抢大核"
+        diagnosis: "JIT 线程 CPU 时间 ${critical_tasks.data.find(t => t.role === 'jit').total_cpu_ms}ms（已分类大核占比 ${critical_tasks.data.find(t => t.role === 'jit').big_core_pct}%）；这是后台执行量，是否竞争需对齐主线程 Runnable 与同 CPU 区间"
         confidence: medium
         suggestions:
           - "使用 Baseline Profile 减少冷启动 JIT 编译需求"
           - "检查是否缺少 .prof 或 .dm 文件"
-
-      # RenderThread 被调度到小核
-      - condition: "(critical_tasks?.data?.find(t => t.role === 'render')?.total_cpu_ms || 0) > 5 && (critical_tasks?.data?.find(t => t.role === 'render')?.big_core_pct || 0) < 30"
-        severity: info
-        diagnosis: "RenderThread 大核占比仅 ${critical_tasks.data.find(t => t.role === 'render').big_core_pct}%，首帧渲染可能因小核性能不足而变慢"
-        confidence: medium
-        suggestions:
-          - "检查 RenderThread 是否被调度到小核运行"
-          - "大量 GPU 指令在小核上提交会增加 TTID"
 
       # 主线程核迁移频繁
       - condition: "(critical_tasks?.data?.find(t => t.role === 'main')?.cross_cluster_migrations || 0) > 10"
@@ -1578,40 +1712,38 @@ steps:
       # 主线程被 system_server 阻塞（从 blocking_graph 中检测跨进程阻塞）
       - condition: "(blocking_graph?.data?.find(b => b.blocked_role === 'main' && b.waker_process === 'system_server')?.total_block_ms || 0) > 30"
         severity: warning
-        diagnosis: "主线程被 system_server 阻塞 ${blocking_graph.data.find(b => b.blocked_role === 'main' && b.waker_process === 'system_server').total_block_ms}ms（函数：${blocking_graph.data.find(b => b.blocked_role === 'main' && b.waker_process === 'system_server').blocked_function}）"
-        confidence: high
+        diagnosis: "观测到一次主线程等待 ${blocking_graph.data.find(b => b.blocked_role === 'main' && b.waker_process === 'system_server').total_block_ms}ms 后由 system_server 唤醒；唤醒者不等于等待发起方，不能把整段等待归因给 system_server"
+        confidence: medium
         suggestions:
-          - "system_server 处理延迟可能因系统负载高"
+          - "对齐实际 Binder transaction/reply 或同步依赖，确认等待与对端工作是否连接"
           - "检查启动期间是否有密集的跨进程 Binder 调用"
 
       # 主线程被 GC 线程阻塞
       - condition: "(blocking_graph?.data?.find(b => b.blocked_role === 'main' && b.waker_thread === 'HeapTaskDaemon')?.total_block_ms || 0) > 10"
         severity: warning
-        diagnosis: "主线程被 GC 阻塞 ${blocking_graph.data.find(b => b.blocked_role === 'main' && b.waker_thread === 'HeapTaskDaemon').total_block_ms}ms"
-        confidence: high
+        diagnosis: "观测到主线程等待 ${blocking_graph.data.find(b => b.blocked_role === 'main' && b.waker_thread === 'HeapTaskDaemon').total_block_ms}ms 后由 HeapTaskDaemon 唤醒；是否由 GC 引起等待仍需暂停/锁依赖证据"
+        confidence: medium
         suggestions:
-          - "减少启动期间的对象分配"
+          - "若确认 GC 暂停或锁依赖进入启动关键路径，再检查对象分配"
           - "避免在 Application.onCreate() 中创建大量临时对象"
 
       # === Phase C 精细化诊断规则 ===
 
-      # 启动初期大核频率显著偏低（升频延迟）
-      - condition: "freq_rampup?.data?.find(r => r.core_type === 'big' || r.core_type === 'prime')?.rampup_pct > 50"
+      # 仅报告逐核阶段差异；比值不证明调频请求、延迟或性能损失。
+      - condition: "freq_rampup?.data?.some(r => r.rampup_pct > 50)"
         severity: info
-        diagnosis: "启动初期大核频率比稳态低 ${freq_rampup.data.find(r => r.core_type === 'big' || r.core_type === 'prime').rampup_pct}%，存在升频延迟"
-        confidence: medium
+        diagnosis: "UCPU ${freq_rampup.data.find(r => r.rampup_pct > 50).ucpu} 的后段频率比初期高 ${freq_rampup.data.find(r => r.rampup_pct > 50).rampup_pct}%；这是覆盖完整的阶段观测，不能直接判定升频延迟或启动损失"
+        confidence: high
         suggestions:
-          - "冷启动初期 CPU 可能从低频 idle 唤醒，Governor 需要几个调度周期才升频"
-          - "Qualcomm WALT 和 Pixel schedutil 的升频速度不同，可查看厂商特定优化"
+          - "对齐该 CPU 上关键任务、DVFS 请求/限制及频率响应，再评估是否影响关键路径"
 
-      # 启动初期主线程被困小核（摆核时序检测）
-      - condition: "cpu_placement?.data?.length > 2 && (cpu_placement.data[0]?.big_core_pct || 0) < 20 && (cpu_placement.data[2]?.big_core_pct || 0) > 60"
-        severity: warning
-        diagnosis: "启动前 100ms 主线程大核占比仅 ${cpu_placement.data[0].big_core_pct}%，之后升至 ${cpu_placement.data[2].big_core_pct}%。启动初期被困在小核"
+      # 核驻留变化不等于曾被困小核。
+      - condition: "cpu_placement?.data?.length > 2 && cpu_placement.data[0]?.big_core_pct != null && cpu_placement.data[2]?.big_core_pct != null && cpu_placement.data[0].big_core_pct < 20 && cpu_placement.data[2].big_core_pct > 60"
+        severity: info
+        diagnosis: "主线程已分类大核占比从初期 ${cpu_placement.data[0].big_core_pct}% 变为后段 ${cpu_placement.data[2].big_core_pct}%；需保留未知核占比，不能据此认定被困小核或亲和性配置错误"
         confidence: medium
         suggestions:
-          - "可能因 Zygote fork 继承了小核亲和性，或 top-app cgroup 设置有延迟"
-          - "bindApplication 阶段的性能受此影响最大"
+          - "结合实际 CPU 容量、核驻留时间及任务需求说明变化；未知拓扑保持未知"
 
       # Binder 线程池利用率过高
       - condition: "binder_pool?.data?.find(r => r.metric === '线程池利用率')?.value?.includes('⚠️')"

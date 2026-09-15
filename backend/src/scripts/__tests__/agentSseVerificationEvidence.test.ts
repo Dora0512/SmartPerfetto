@@ -274,8 +274,9 @@ describe('transparent verification diagnostics', () => {
 
 describe('current-trace slice selection resolution', () => {
   const selector = {processName: 'com.example.target', threadName: 'main', eventName: 'Target event'};
-  const columns = ['event_id', 'ts', 'track_id', 'utid', 'upid'];
-  const match = () => ({columns, rows: [[7, '40919952686988', 19, 11, 10]], durationMs: 1});
+  const columns = ['event_id', 'ts', 'track_id', 'utid', 'upid', 'dur'];
+  const match = (dur: unknown = 42_000_000, ts: unknown = '40919952686988') =>
+    ({columns, rows: [[7, ts, 19, 11, 10, dur]], durationMs: 1});
 
   it('parses only a bounded identity selector and rejects conflicting input scopes', () => {
     expect(parseSliceSelectionTarget(selector)).toEqual(selector);
@@ -306,7 +307,7 @@ describe('current-trace slice selection resolution', () => {
     } finally { fs.rmSync(directory, {recursive: true, force: true}); }
   });
 
-  it('queries only this loaded trace, escapes literals, and returns an identity-only frontend selection', async () => {
+  it('queries only this loaded trace, escapes literals, and returns an identity-and-range frontend selection', async () => {
     const queryBounded = jest.fn(async () => match());
     const escaped = {processName: "App' OR 1=1 --", threadName: "main's", eventName: "event'); DROP TABLE slice; --"};
     const result = await resolveVerificationSliceSelection({service: {queryBounded}, traceId: 'loaded-current-trace',
@@ -318,22 +319,41 @@ describe('current-trace slice selection resolution', () => {
     expect(sql).toContain("t.name = 'main''s'");
     expect(sql).toContain("s.name = 'event''); DROP TABLE slice; --'");
     expect(sql).toContain('LIMIT 2');
-    expect(sql).not.toContain('s.dur');
+    expect(sql).toContain('s.dur');
     expect(result.selectionContext).toEqual({kind: 'track_event', source: 'track_event_selection',
-      eventId: 7, ts: 40919952686988});
+      eventId: 7, ts: 40919952686988, dur: 42_000_000});
     expect(result.identity).toEqual({traceId: 'loaded-current-trace', table: 'slice',
       eventId: 7, ts: 40919952686988, trackId: 19, utid: 11, upid: 10});
     expect(result.purpose).toBe('input_scope_not_verified_evidence');
   });
 
   it.each([
+    [0, -5, {kind: 'track_event', source: 'track_event_selection', eventId: 7, ts: -5, dur: 0}],
+    [-1, 40919952686988, {kind: 'track_event', source: 'track_event_selection', eventId: 7, ts: 40919952686988}],
+  ])('preserves finite duration %s with unfinished omission and legal negative timestamps',
+    async (dur, ts, expected) => {
+      const result = await resolveVerificationSliceSelection({service: {queryBounded: jest.fn(async () => match(dur, ts))},
+        traceId: 'current', selector, timeoutMs: 1000});
+      expect(result.selectionContext).toEqual(expected);
+    });
+
+  it.each([
     ['SLICE_SELECTION_NOT_FOUND', {columns, rows: [], durationMs: 1}],
     ['SLICE_SELECTION_AMBIGUOUS', {columns, rows: [match().rows[0], match().rows[0]], durationMs: 1}],
     ['SLICE_SELECTION_QUERY_FAILED', {...match(), error: 'private query error'}],
-    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), columns: ['id', 'ts', 'track_id', 'utid', 'upid']}],
-    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, '9007199254740992', 19, 11, 10]]}],
-    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[-1, 1000, 19, 11, 10]]}],
-    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, null, 19, 11, 10]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), columns: ['id', 'ts', 'track_id', 'utid', 'upid', 'dur']}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, '9007199254740992', 19, 11, 10, 1]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[-1, 1000, 19, 11, 10, 1]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, null, 19, 11, 10, 1]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, 1000, 19, 11, 10, -2]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, 1000, 19, 11, 10, null]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, 1000, 19, 11, 10, 1.5]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, 1000, 19, 11, 10, '1.5']]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, 1000, 19, 11, 10, '9007199254740992']]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [[7, 1000, 19, 11, 10, Number.MAX_SAFE_INTEGER + 1]]}],
+    ['SLICE_SELECTION_INVALID_IDENTITY', {...match(), rows: [
+      [7, Number.MAX_SAFE_INTEGER - 5, 19, 11, 10, 10],
+    ]}],
   ])('fails with %s before analysis can start', async (code, response) => {
     const queryBounded = jest.fn(async () => response as ReturnType<typeof match>);
     const startAnalysis = jest.fn();
@@ -430,12 +450,16 @@ describe('owned SSE verifier lifecycle', () => {
   });
 
   it('retains private tool telemetry and safe actual source use when a failed terminal has no conclusion contract', async () => {
+    const sourceRoot = path.resolve(__dirname, '../../../tests/e2e/context-fixtures/app');
+    const canaryLine = fs.readFileSync(path.join(sourceRoot, 'StartupHooks.kt'), 'utf8').split(/\r?\n/)
+      .findIndex(line => line.includes('SEMANTIC_DELTA_PRIVATE_SOURCE_CANARY_NEVER_EMIT')) + 1;
+    expect(canaryLine).toBeGreaterThan(0);
     const sourceUseDecision = {schemaVersion: 'source_use_decision@1', codeAwareMode: 'provider_send',
       selectedCodebaseIds: ['cb-source'], queriedCodebaseIds: ['cb-source'], usedCodebaseIds: ['cb-source'],
       status: 'corroborated', attemptedTools: ['search_codebase', 'read_codebase_file'],
       rootPath: '/private/source', query: 'private query text',
       references: [{codebaseId: 'cb-source', filePath: 'StartupHooks.kt', lookupKind: 'body',
-        referenceId: 'source-read', lineRange: {start: 9, end: 9}, text: 'private source text'}]};
+        referenceId: 'source-read', lineRange: {start: canaryLine, end: canaryLine}, text: 'private source text'}]};
     const terminal = {success: false, conclusion: 'Output limit reached.', partial: true,
       terminationReason: 'output_limit', sourceUseDecision,
       completion: {schemaVersion: 1, status: 'failed'}};
@@ -451,7 +475,7 @@ describe('owned SSE verifier lifecycle', () => {
       {requiredText: [], forbiddenText: []}, {runId: 'run'});
     expect(summary.toolCallCounts).toMatchObject({search_codebase: 1, read_codebase_file: 1, execute_sql: 1});
     expect(summary.analysisCompletedSourceUseDecision).toMatchObject({status: 'corroborated',
-      references: [{id: expect.stringMatching(/^source-ref-v1-/), filePath: 'StartupHooks.kt', lineRange: {start: 9, end: 9}}]});
+      references: [{id: expect.stringMatching(/^source-ref-v1-/), filePath: 'StartupHooks.kt', lineRange: {start: canaryLine, end: canaryLine}}]});
     expect(summary.terminalAnalysis?.conclusionContract).toBeUndefined();
     expect(summary.analysisCompletedPartial).toBe(true);
     for (const privateText of ['/private/source', 'private query text', 'private source text']) {
@@ -463,7 +487,7 @@ describe('owned SSE verifier lifecycle', () => {
     expect(taskAcceptanceStatus(Object.values(assessment.checks).every(Boolean), assessment.uncoveredFacets).completeAcceptance).toBe(false);
     const wrapper = require('../../../scripts/run-deepseek-agent-e2e.cjs');
     const evaluated = wrapper.evaluateSemanticConditionReport({condition: 'A2',
-      query: wrapper.semanticDeltaQueries()[0], sourceRoot: path.resolve(__dirname, '../../../tests/e2e/context-fixtures/app'),
+      query: wrapper.semanticDeltaQueries()[0], sourceRoot,
       report: {passed: false, analysisContext: {codebaseIds: ['cb-source']}, taskVerification: assessment, summary}});
     expect(evaluated).toMatchObject({traceFactPassed: false, sourceSemanticPassed: false, privacyCanaryCovered: true});
   });

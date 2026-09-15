@@ -127,10 +127,10 @@ export const PRODUCTION_RUNTIME_DESCRIPTORS = [
       const { OpenCodeRuntime } = require('./engines/opencode/openCodeRuntime') as typeof import('./engines/opencode/openCodeRuntime');
       return new OpenCodeRuntime(input, { env: input.env });
     },
-    getDiagnostics: ({ env, kind }: RuntimeDiagnosticsInput<typeof OPENCODE_RUNTIME_KIND>) => {
+    getDiagnostics: ({ env, kind, selectedProviderId }: RuntimeDiagnosticsInput<typeof OPENCODE_RUNTIME_KIND>) => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { getOpenCodeRuntimeDiagnostics } = require('./engines/opencode/openCodeRuntime') as typeof import('./engines/opencode/openCodeRuntime');
-      return getOpenCodeRuntimeDiagnostics(env, kind);
+      return getOpenCodeRuntimeDiagnostics(env, kind, selectedProviderId);
     },
   },
   {

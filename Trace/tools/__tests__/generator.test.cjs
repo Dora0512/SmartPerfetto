@@ -18,9 +18,107 @@ const {
 const {resolveCaseTrace} = require('../lib/catalog.cjs');
 const {buildCatalogCases} = require('../lib/builder.cjs');
 const {loadTraceType} = require('../lib/perfetto-proto.cjs');
+const {parseSourceAnalysisGroundTruth, runCli} = require('../bootstrap-constructed-cases.cjs');
 
 const repoRoot = path.resolve(__dirname, '../../..');
 const traceProcessor = resolveTraceProcessor(repoRoot);
+
+test('bootstrap CLI handles help and rejects unsupported arguments before generation', () => {
+  const stdout = [];
+  const stderr = [];
+  const io = {
+    stdout: {write: (value) => stdout.push(value)},
+    stderr: {write: (value) => stderr.push(value)},
+  };
+  let runCount = 0;
+  const run = () => { runCount += 1; };
+
+  assert.equal(runCli([], io, run), 0);
+  assert.equal(runCount, 1);
+
+  for (const help of ['--help', '-h']) {
+    assert.equal(runCli([help], io, run), 0);
+  }
+  assert.deepEqual(stdout, [
+    'Usage: node Trace/tools/bootstrap-constructed-cases.cjs\n',
+    'Usage: node Trace/tools/bootstrap-constructed-cases.cjs\n',
+  ]);
+  assert.equal(runCount, 1);
+
+  for (const args of [['--case', 'startup-lifecycle'], ['--help', '--case'], ['unexpected']]) {
+    assert.equal(runCli(args, io, run), 1);
+  }
+  assert.deepEqual(stderr, Array(3).fill('Error: unsupported arguments. Use --help for usage.\n'));
+  assert.equal(runCount, 1);
+});
+
+test('source-analysis ground truth requires executable marker, file read, and callers', () => {
+  const sourcePath = path.join(repoRoot, 'backend/tests/e2e/context-fixtures/app/StartupHooks.kt');
+  const source = fs.readFileSync(sourcePath, 'utf8');
+  const groundTruth = parseSourceAnalysisGroundTruth(source);
+  assert.deepEqual(groundTruth.callChain, [
+    'Application.onCreate',
+    'StartupHooks.initializeOnMainThread',
+    'StartupHooks.readStartupPolicySynchronously',
+    'File.readText',
+  ]);
+  assert.deepEqual(groundTruth.compatibility, {
+    buildLink: 'synthetic_constructed_pair_only', causalStatus: 'candidate', baseAndroidStartupLinked: false,
+  });
+  assert.ok(groundTruth.sourceLines.beginLine < groundTruth.sourceLines.policyLine);
+  assert.ok(groundTruth.sourceLines.policyLine < groundTruth.sourceLines.endLine);
+  assert.ok(groundTruth.sourceLines.endLine < groundTruth.sourceLines.readLine);
+
+  const commentOnlyRead = source.replace('return policyFile.readText()',
+    '// return policyFile.readText()\n    return "startup-policy"');
+  assert.throws(() => parseSourceAnalysisGroundTruth(commentOnlyRead), /File\.readText call/);
+  const stringOnlyBegin = source.replace('Trace.beginSection(TRACE_SOURCE_MARKER)',
+    'val ignoredMarkerCall = "Trace.beginSection(TRACE_SOURCE_MARKER)"');
+  assert.throws(() => parseSourceAnalysisGroundTruth(stringOnlyBegin), /TRACE_SOURCE_MARKER begin/);
+  const missingCaller = source.replace('StartupHooks.initializeOnMainThread(policyFile)',
+    '// StartupHooks.initializeOnMainThread(policyFile)');
+  assert.throws(() => parseSourceAnalysisGroundTruth(missingCaller), /Application startup caller/);
+  for (const decoy of [
+    source.replace('Trace.beginSection(TRACE_SOURCE_MARKER)',
+      'val decoy = """prefix " Trace.beginSection(TRACE_SOURCE_MARKER) " suffix"""'),
+    source.replace('return policyFile.readText()',
+      'val decoy = """policyFile.readText()"""\n    return "startup-policy"'),
+    source.replace('StartupHooks.initializeOnMainThread(policyFile)',
+      'val decoy = """StartupHooks.initializeOnMainThread(policyFile)"""'),
+  ]) {
+    assert.throws(() => parseSourceAnalysisGroundTruth(decoy), /Kotlin raw strings are not allowed/);
+  }
+  const callerOutsideOnCreate = source
+    .replace('StartupHooks.initializeOnMainThread(policyFile)', '// moved outside onCreate')
+    .replace('StartupHooks.onFirstFrame()',
+      'StartupHooks.initializeOnMainThread(policyFile)\n    StartupHooks.onFirstFrame()');
+  assert.throws(() => parseSourceAnalysisGroundTruth(callerOutsideOnCreate), /Application startup caller/);
+  const firstFrameBeginOutside = source
+    .replace('Trace.beginSection(FIRST_FRAME_TRACE_MARKER)', '// moved outside onFirstFrame')
+    .replace('fun onFirstFrame() {', 'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)\n\n  fun onFirstFrame() {');
+  assert.throws(() => parseSourceAnalysisGroundTruth(firstFrameBeginOutside), /synthetic first-frame begin/);
+  const missingFirstFrameEnd = source.replace(
+    'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)\n    Trace.endSection()',
+    'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)',
+  );
+  assert.throws(() => parseSourceAnalysisGroundTruth(missingFirstFrameEnd), /first-frame Trace\.endSection/);
+  assert.throws(() => parseSourceAnalysisGroundTruth(source.replace('import android.os.Trace', '')), /Trace import/);
+  assert.throws(() => parseSourceAnalysisGroundTruth(source.replace('import java.io.File', '')), /File import/);
+  assert.throws(() => parseSourceAnalysisGroundTruth(source.replace(
+    'val policyFile = File(filesDir, "startup-policy.txt")',
+    'val policyFile = filesDir',
+  )), /policy File construction/);
+  const endBeforeFinally = source.replace(
+    '} finally {\n      Trace.endSection()',
+    'Trace.endSection()\n    } finally {',
+  );
+  assert.throws(() => parseSourceAnalysisGroundTruth(endBeforeFinally), /marker must enclose/);
+  const endAfterFinally = source.replace(
+    '} finally {\n      Trace.endSection()\n    }',
+    '} finally {\n      check(TRACE_SOURCE_MARKER.isNotEmpty())\n    }\n    Trace.endSection()',
+  );
+  assert.throws(() => parseSourceAnalysisGroundTruth(endAfterFinally), /marker must enclose/);
+});
 
 function fixtureScenario() {
   return {

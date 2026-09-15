@@ -4,6 +4,7 @@
 
 import {createHash} from 'crypto';
 import {isPlainJsonObject} from '../../utils/isPlainJsonObject';
+import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../finalSemanticLimits';
 
 import type {SanitizedRagResult} from '../rag/lookupResponseFilter';
 import {LLMEchoOutputStream, type CodeRef} from './llmEchoOutputFilter';
@@ -466,11 +467,12 @@ export function issueCodeAwareStructuredProjectionReceipt(input: string, text: s
 function sanitizeStructuredTextValue(
   sessionId: string | undefined,
   value: unknown,
-  state: {items: number; seen: WeakSet<object>; changed: boolean},
+  state: {items: number; maxItems: number; seen: WeakSet<object>; changed: boolean; limited: boolean},
   depth: number,
 ): unknown | typeof STRUCTURED_TEXT_VALUE_DROPPED {
-  if (depth > MAX_STRUCTURED_TEXT_DEPTH || state.items >= MAX_STRUCTURED_TEXT_ITEMS) {
+  if (depth > MAX_STRUCTURED_TEXT_DEPTH || state.items >= state.maxItems) {
     state.changed = true;
+    state.limited = true;
     return STRUCTURED_TEXT_VALUE_DROPPED;
   }
   state.items += 1;
@@ -480,6 +482,7 @@ function sanitizeStructuredTextValue(
       Buffer.byteLength(value, 'utf8') > MAX_STRUCTURED_TEXT_STRING_BYTES
     ) {
       state.changed = true;
+      state.limited = true;
       return PRIVATE_OUTPUT_SUPPRESSED;
     }
     const projected = sanitizeCodeAwareText(sessionId, value);
@@ -511,8 +514,9 @@ function sanitizeStructuredTextValue(
       ? []
       : Object.create(prototype);
     for (const key of Reflect.ownKeys(value)) {
-      if (state.items >= MAX_STRUCTURED_TEXT_ITEMS) {
+      if (state.items >= state.maxItems) {
         state.changed = true;
+        state.limited = true;
         break;
       }
       if (isArray && key === 'length') continue;
@@ -529,10 +533,12 @@ function sanitizeStructuredTextValue(
         if (descriptor?.enumerable) state.changed = true;
         continue;
       }
+      const credential = isOwnerCodeAwareProjection() && isCredentialField(key) &&
+        typeof descriptor.value === 'string' && descriptor.value.length >= 8;
+      if (credential && descriptor.value !== '[REDACTED_SECRET]') state.changed = true;
       const projected = sanitizeStructuredTextValue(
         sessionId,
-        isOwnerCodeAwareProjection() && isCredentialField(key) && typeof descriptor.value === 'string' && descriptor.value.length >= 8
-          ? '[REDACTED_SECRET]' : descriptor.value,
+        credential ? '[REDACTED_SECRET]' : descriptor.value,
         state,
         depth + 1,
       );
@@ -551,9 +557,9 @@ function sanitizeStructuredTextValue(
         Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value') &&
         typeof lengthDescriptor.value === 'number'
       ) {
-        if (lengthDescriptor.value > MAX_STRUCTURED_TEXT_ITEMS) state.changed = true;
+        if (lengthDescriptor.value > state.maxItems) {state.changed = true; state.limited = true;}
         Object.defineProperty(sanitized, 'length', {
-          value: Math.min(lengthDescriptor.value, MAX_STRUCTURED_TEXT_ITEMS),
+          value: Math.min(lengthDescriptor.value, state.maxItems),
           enumerable: false,
           configurable: false,
           writable: true,
@@ -583,14 +589,27 @@ export function projectCodeAwareStructuredText<T>(
   sessionId: string | undefined,
   value: T,
 ): {value: T; changed: boolean} {
-  const state = {items: 0, seen: new WeakSet<object>(), changed: false};
+  const {value: projected, changed} = projectStructuredText(sessionId, value, MAX_STRUCTURED_TEXT_ITEMS);
+  return {value: projected, changed};
+}
+
+/** Semantic input retains its existing byte budget; ordinary output limits stay unchanged. */
+export function projectCodeAwareSemanticInputStructure<T>(sessionId: string | undefined, value: T):
+  {value: T; changed: boolean; limited: boolean} {
+  return projectStructuredText(sessionId, value, FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
+}
+
+function projectStructuredText<T>(sessionId: string | undefined, value: T, maxItems: number):
+  {value: T; changed: boolean; limited: boolean} {
+  const state = {items: 0, maxItems, seen: new WeakSet<object>(), changed: false, limited: false};
   const sanitized = sanitizeStructuredTextValue(
     sessionId,
     value,
     state,
     0,
   );
-  return {value: (sanitized === STRUCTURED_TEXT_VALUE_DROPPED ? undefined : sanitized) as T, changed: state.changed};
+  return {value: (sanitized === STRUCTURED_TEXT_VALUE_DROPPED ? undefined : sanitized) as T,
+    changed: state.changed, limited: state.limited};
 }
 
 export interface CodeAwareStreamingTextProjection {

@@ -68,6 +68,74 @@ function service(ripgrepPath = 'rg') {
 }
 
 describe('OnDemandSourceAccessService', () => {
+  it.each([
+    {name: 'first', startLine: 1, maxLines: 2, end: 2, before: 0, after: 5, next: 3},
+    {name: 'middle', startLine: 3, maxLines: 3, end: 5, before: 2, after: 2, next: 6},
+    {name: 'tail', startLine: 6, maxLines: 10, end: 7, before: 5, after: 0, next: null},
+    {name: 'full', startLine: 1, maxLines: 10, end: 7, before: 0, after: 0, next: null},
+  ])('exposes unread file lines for a $name window without assessing symbols', async ({
+    startLine, maxLines, end, before, after, next,
+  }) => {
+    const ref = register();
+    const read = await service().read({
+      codebaseId: ref.codebaseId,
+      scope,
+      filePath: 'app/src/MainActivity.kt',
+      startLine,
+      maxLines,
+      mode: 'provider_send',
+    });
+
+    expect(read.success).toBe(true);
+    expect(read.reference?.lineRange).toEqual({start: startLine, end});
+    expect(read.window).toEqual({
+      totalLines: 7,
+      omittedBefore: before,
+      omittedAfter: after,
+      nextStartLine: next,
+      symbolCoverage: 'not_assessed',
+    });
+    expect(read.truncated).toBe(after > 0);
+    expect(read).not.toHaveProperty('coverageComplete');
+  });
+
+  it.each([
+    {content: 'first\r\nsecond', totalLines: 2, tail: 'second'},
+    {content: 'first\r\nsecond\r\n', totalLines: 3, tail: 'second\n'},
+    {content: 'first\nsecond\n', totalLines: 3, tail: 'second\n'},
+  ])('keeps existing newline counting for $totalLines lines', async ({content, totalLines, tail}) => {
+    fs.writeFileSync(path.join(root, 'app', 'src', 'Window.kt'), content);
+    const ref = register();
+    const read = await service().read({
+      codebaseId: ref.codebaseId,
+      scope,
+      filePath: 'app/src/Window.kt',
+      startLine: 2,
+      mode: 'provider_send',
+    });
+
+    expect(read.reference?.lineRange).toEqual({start: 2, end: totalLines});
+    expect(read.reference?.text).toBe(tail);
+    expect(read.window).toEqual({
+      totalLines, omittedBefore: 1, omittedAfter: 0,
+      nextStartLine: null, symbolCoverage: 'not_assessed',
+    });
+  });
+
+  it.each(['off', 'provider_send'] as const)('does not disclose a read window when %s access is denied', async mode => {
+    const ref = register(false);
+    const read = await service().read({
+      codebaseId: ref.codebaseId,
+      scope,
+      filePath: 'app/src/MainActivity.kt',
+      mode,
+    });
+
+    expect(read.success).toBe(false);
+    expect(read).not.toHaveProperty('window');
+    expect(read).not.toHaveProperty('reference');
+  });
+
   it('searches and reads a registered codebase without an active index', async () => {
     const ref = register();
     expect(ref.activeGeneration).toBeUndefined();
@@ -147,6 +215,10 @@ describe('OnDemandSourceAccessService', () => {
       }),
     }));
     expect(read.reference).not.toHaveProperty('text');
+    expect(read.window).toEqual({
+      totalLines: 7, omittedBefore: 0, omittedAfter: 0,
+      nextStartLine: null, symbolCoverage: 'not_assessed',
+    });
     expect(JSON.stringify(read)).not.toContain('class MainActivity');
   });
 

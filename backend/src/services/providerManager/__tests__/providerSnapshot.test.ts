@@ -122,6 +122,31 @@ describe('provider runtime snapshot hash', () => {
     }
   });
 
+  // Profiles isolate ambient OPENAI_* keys, so only the shared AGENT_* ceiling reaches
+  // them; the env provider reads both. Each is pinned where the runtime reads it.
+  it.each([
+    ['AGENT_MAX_RUN_TIMEOUT_MS', 'profile'],
+    ['AGENT_MAX_RUN_TIMEOUT_MS', 'env'],
+    ['OPENAI_MAX_RUN_TIMEOUT_MS', 'env'],
+  ] as const)('pins the %s run ceiling in the %s snapshot hash', (key, source) => {
+    const saved = {[key]: process.env[key], SMARTPERFETTO_AGENT_RUNTIME: process.env.SMARTPERFETTO_AGENT_RUNTIME};
+    const providerId = source === 'profile' ? svc.create(openAIProvider).id : null;
+    if (source === 'env') process.env.SMARTPERFETTO_AGENT_RUNTIME = 'openai-agents-sdk';
+    try {
+      process.env[key] = '3600000';
+      const before = resolveProviderRuntimeSnapshot(svc, providerId);
+      process.env[key] = '1200000';
+      const after = resolveProviderRuntimeSnapshot(svc, providerId);
+      expect(after.snapshotHash).not.toBe(before.snapshotHash);
+      expect(after.snapshot.environment[key]).toBe('1200000');
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   it('ignores OpenAI snapshot fields that the OpenAI runtime does not consume', () => {
     const provider = svc.create(openAIProvider);
     const before = resolveProviderRuntimeSnapshot(svc, provider.id);

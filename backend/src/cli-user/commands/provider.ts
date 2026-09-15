@@ -2,13 +2,19 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import { providerConfigurationHelp } from '../../services/providerManager/providerConfigurationHelp';
+import { parseOutputLanguage } from '../../agentv3/outputLanguage';
 import { bootstrap } from '../bootstrap';
 import type { OutputFormat } from '../repl/renderer';
 import { getProviderService } from '../../services/providerManager';
 import { testProviderConnection } from '../../services/providerManager/connectionTester';
 import { resolveAgentRuntimeSelection } from '../../agentRuntime/runtimeSelection';
 import { getRuntimeDiagnostics } from '../../agentRuntime/runtimeDiagnostics';
-import { QODER_AGENT_RUNTIME_KIND } from '../../agentRuntime/runtimeKinds';
+import {
+  EXPERIMENTAL_OPENCODE_RUNTIME_KIND,
+  OPENCODE_RUNTIME_KIND,
+  QODER_AGENT_RUNTIME_KIND,
+} from '../../agentRuntime/runtimeKinds';
 import { getClaudeRuntimeDiagnostics } from '../../agentv3/claudeConfig';
 import { getOpenAIRuntimeDiagnostics, hasOpenAICredentials } from '../../agentOpenAI/openAiConfig';
 import { withConsoleLogToStderr } from '../io/stdio';
@@ -88,6 +94,7 @@ export async function runProviderTestCommand(args: ProviderTestCommandArgs): Pro
       target,
       provider: { id: provider.id, name: provider.name, type: provider.type },
       result,
+      note: result.success ? 'Provider connection test passed.' : result.error,
     });
   }
 
@@ -128,7 +135,7 @@ export async function runProviderTestCommand(args: ProviderTestCommandArgs): Pro
       diagnostics,
       note: hasOpenAICredentials(providerId)
         ? 'OpenAI-compatible runtime is configured.'
-        : 'OpenAI-compatible runtime needs OPENAI_API_KEY or a localhost provider endpoint.',
+        : `OpenAI-compatible runtime needs OPENAI_API_KEY or a localhost provider endpoint. ${providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli')}`,
     });
   }
 
@@ -151,10 +158,42 @@ export async function runProviderTestCommand(args: ProviderTestCommandArgs): Pro
     });
   }
 
+  if (
+    selection.kind === OPENCODE_RUNTIME_KIND ||
+    selection.kind === EXPERIMENTAL_OPENCODE_RUNTIME_KIND
+  ) {
+    const diagnostics = await withConsoleLogToStderr(format !== 'text', async () => getRuntimeDiagnostics(selection));
+    // Keep CLI preflight on the runtime's parser so accepted configuration
+    // cannot drift from what OpenCode will actually consume.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { validateOpenCodeModelConfiguration } = require(
+      '../../agentRuntime/engines/opencode/openCodeRuntime'
+    ) as typeof import('../../agentRuntime/engines/opencode/openCodeRuntime');
+    const modelConfiguration = validateOpenCodeModelConfiguration(process.env, selection);
+    return writeResult(format, {
+      ok: modelConfiguration.configured,
+      target: 'system', runtime: selection, diagnostics,
+      note: modelConfiguration.configured
+        ? 'OpenCode model configuration detected.'
+        : `${modelConfiguration.error} ${providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli')}`,
+    });
+  }
+
+  if (selection.kind !== 'claude-agent-sdk') {
+    const diagnostics = await withConsoleLogToStderr(format !== 'text', async () => getRuntimeDiagnostics(selection));
+    return writeResult(format, {
+      ok: diagnostics.configured,
+      target: 'system', runtime: selection, diagnostics,
+      note: diagnostics.configured
+        ? `${selection.kind} configuration detected.`
+        : providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli'),
+    });
+  }
+
   const diagnostics = await withConsoleLogToStderr(format !== 'text', async () => getClaudeRuntimeDiagnostics(providerId));
   const binaryOk = isClaudeSdkBinaryUsable(diagnostics.sdkBinary);
   return writeResult(format, {
-    ok: binaryOk,
+    ok: binaryOk && diagnostics.configured,
     target: 'system',
     runtime: selection,
     diagnostics,
@@ -162,7 +201,7 @@ export async function runProviderTestCommand(args: ProviderTestCommandArgs): Pro
       ? 'Claude Agent SDK native binary is missing or not executable.'
       : diagnostics.configured
         ? 'Claude runtime has explicit credentials.'
-        : 'Claude runtime has no explicit credentials; local Claude login fallback will be used if available.',
+        : `Claude runtime has no configured credentials. ${providerConfigurationHelp(parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE), 'cli')}`,
   });
 }
 

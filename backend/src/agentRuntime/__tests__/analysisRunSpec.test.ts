@@ -13,7 +13,7 @@ import {
   knowledgeScopeFromAnalysisOptions,
   providerScopeFromAnalysisOptions,
 } from '../runtimeCommon';
-import { createAnalysisRunSpec } from '../analysisRunSpec';
+import { createAnalysisRunSpec, validateAnalysisRunSelection } from '../analysisRunSpec';
 import {listProductionRuntimeKinds} from '../runtimeKinds';
 
 const claudeSelection: RuntimeSelection = {
@@ -86,6 +86,7 @@ describe('AnalysisRunSpec shadow mode', () => {
     expect(spec.selection).toMatchObject({
       present: true,
       kind: 'area',
+      sideResolution: {status: 'unknown'},
     });
     expect(spec.tools).toEqual({
       requestScope: {
@@ -100,6 +101,70 @@ describe('AnalysisRunSpec shadow mode', () => {
       model: 'claude-sonnet-4-6',
       maxTurns: 60,
     });
+  });
+
+  it('freezes an exact single-trace selection and resolves only its current trace', () => {
+    const selectionContext = {kind: 'track_event' as const, source: 'track_event_selection' as const,
+      eventId: 7, ts: 42, dur: 9, trackUri: ' track://main '};
+    const spec = createAnalysisRunSpec({query: 'selected event', sessionId: 'session', traceId: 'trace-current',
+      options: {selectionContext}, runtimeSelection: openAiSelection, sceneType: 'general', outputLanguage: 'en'});
+    expect(spec.selection).toEqual({present: true, kind: 'track_event', context: {
+      kind: 'track_event', source: 'track_event_selection', eventId: 7, ts: 42, dur: 9, trackUri: 'track://main'},
+    sideResolution: {status: 'resolved', traceSide: 'current', traceId: 'trace-current'}});
+    selectionContext.eventId = 99;
+    expect(spec.selection.present && spec.selection.context.kind === 'track_event' && spec.selection.context.eventId).toBe(7);
+    expect(Object.isFrozen(spec.selection)).toBe(true);
+    expect(Object.isFrozen(spec.selection.present && spec.selection.context)).toBe(true);
+  });
+
+  it('keeps every paired or contradictory selection side unknown', () => {
+    const pair = {schemaVersion: 1 as const, layout: 'horizontal' as const, primarySide: 'left' as const,
+      referenceSide: 'right' as const, activeSide: 'right' as const, panes: [
+        {side: 'left' as const, traceSide: 'current' as const, traceId: 'trace-current'},
+        {side: 'right' as const, traceSide: 'reference' as const, traceId: 'trace-reference', active: true},
+      ]};
+    const selectionContext = {kind: 'track_event' as const, eventId: 7, ts: 42};
+    const create = (referenceTraceId?: string, tracePairContext?: typeof pair) => createAnalysisRunSpec({
+      query: 'selected event', sessionId: 'session', traceId: 'trace-current',
+      options: {selectionContext, referenceTraceId, tracePairContext}, runtimeSelection: openAiSelection,
+      sceneType: 'general', outputLanguage: 'en'}).selection;
+    expect(create('trace-reference', pair)).toMatchObject({present: true, sideResolution: {status: 'unknown'}});
+    expect(create(undefined, pair)).toMatchObject({present: true, sideResolution: {status: 'unknown'}});
+    expect(create('trace-reference')).toMatchObject({present: true, sideResolution: {status: 'unknown'}});
+  });
+
+  it('rejects invalid bypass inputs and noncanonical attached selections instead of erasing them', () => {
+    const create = (selectionContext: unknown) => createAnalysisRunSpec({query: 'selected event', sessionId: 'session', traceId: 'trace',
+      options: {selectionContext} as AnalysisOptions, runtimeSelection: openAiSelection, sceneType: 'general', outputLanguage: 'en'});
+    for (const selectionContext of [null, false,
+      {kind: 'track_event', eventId: 1, ts: 2, dur: Number.MAX_SAFE_INTEGER + 1},
+      {kind: 'track_event', eventId: 1, ts: Number.MAX_SAFE_INTEGER, dur: 1},
+      {kind: 'track_event', eventId: 1, ts: 2, extra: true},
+      {kind: 'area', startNs: 2, endNs: 2},
+      {kind: 'area', startNs: 1, endNs: 4, durationNs: 5},
+      {kind: 'area', startNs: 1, endNs: 4, tracks: Array.from({length: 257}, () => ({uri: 'track'}))},
+      {kind: 'area', startNs: 1, endNs: 4, tracks: [{uri: 'x'.repeat(513)}]},
+    ]) expect(() => create(selectionContext)).toThrow('analysis_run_selection_invalid');
+    const sparseTracks = Array(1);
+    expect(() => create({kind: 'area', startNs: 1, endNs: 4, tracks: sparseTracks})).toThrow('analysis_run_selection_invalid');
+    const getter = jest.fn(() => 2);
+    const accessor = Object.defineProperty({kind: 'track_event', eventId: 1}, 'ts', {enumerable: true, get: getter});
+    expect(() => create(accessor)).toThrow('analysis_run_selection_invalid');
+    expect(getter).not.toHaveBeenCalled();
+    expect(() => validateAnalysisRunSelection({present: true, kind: 'track_event',
+      context: {kind: 'track_event', eventId: 1, ts: 2, trackUri: ' track '},
+      sideResolution: {status: 'unknown'}})).toThrow('analysis_run_selection_invalid');
+    expect(() => validateAnalysisRunSelection({present: true, kind: 'track_event',
+      context: {kind: 'track_event', eventId: 1, ts: 2, trackUri: undefined} as any,
+      sideResolution: {status: 'unknown'}})).toThrow('analysis_run_selection_invalid');
+    expect(() => validateAnalysisRunSelection({present: true, kind: 'track_event',
+      context: {kind: 'track_event', eventId: 1, ts: 2},
+      sideResolution: {status: 'unknown', traceId: 'trace'} as any})).toThrow('analysis_run_selection_invalid');
+    expect(validateAnalysisRunSelection({sideResolution: {status: 'unknown'}, context: {ts: 2, eventId: 1,
+      kind: 'track_event'}, kind: 'track_event', present: true})).toMatchObject({present: true,
+      context: {kind: 'track_event', eventId: 1, ts: 2}});
+    const signed = create({kind: 'track_event', eventId: 1, ts: -2, dur: 1}).selection;
+    expect(signed.present && signed.context).toMatchObject({kind: 'track_event', ts: -2, dur: 1});
   });
 
   it('reuses existing classifier input construction without storing runtime policy descriptors', () => {

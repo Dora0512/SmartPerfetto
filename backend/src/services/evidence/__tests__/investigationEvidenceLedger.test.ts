@@ -10,9 +10,11 @@ import {SkillExecutor} from '../../skillEngine/skillExecutor';
 import {buildTraceProcessorQueryProvenance} from '../../traceProcessorConnectionModel';
 import {captureEvidenceTable, evidenceTableFor} from '../evidenceCapture';
 import {isIssuedInvestigationEvidenceSnapshot, investigationEvidenceFingerprint, compactInvestigationEvidence,
+  compactInvestigationEvidenceForSemantic,
   investigationCaptureFields, validateInvestigationEvidenceDeclarations,
   type InvestigationEvidenceDeclaration, type InvestigationEvidenceSnapshot} from '../investigationEvidenceLedger';
 import type {RuntimeToolInvocationEvent} from '../../../agentRuntime/runtimeToolObserver';
+import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../../finalSemanticLimits';
 
 const declaration: InvestigationEvidenceDeclaration = {window: {start: 'start', end: 'end'},
   identity: {upid: 'upid', utid: 'utid'}, metrics: [{domain: 'cpu_frequency', metric_id: 'system.cpu.frequency.time_weighted',
@@ -235,6 +237,18 @@ describe('bounded investigation provider view', () => {
     expect(compact.issues).toContain('investigation_provider_view_omitted_records');
     expect(compactInvestigationEvidence(snapshot, 0)).toBeUndefined();
     expect(compactInvestigationEvidence(snapshot, 65537)).toBeUndefined();
+  });
+
+  it('keeps the general 64 KiB ceiling while semantic review can carry all cohorts within its total cap', async () => {
+    const snapshot = await largeSnapshot();
+    expect(compactInvestigationEvidence(snapshot, 64 * 1024 + 1)).toBeUndefined();
+    const semantic = compactInvestigationEvidenceForSemantic(snapshot, FINAL_SEMANTIC_INPUT_BYTE_LIMIT)!;
+    expect(semantic.byteBudget).toBe(FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
+    expect(Buffer.byteLength(JSON.stringify(semantic), 'utf8')).toBeLessThanOrEqual(semantic.byteBudget);
+    expect(semantic.records).toHaveLength(snapshot.records.length);
+    expect(semantic.omittedRecordCount).toBe(0);
+    expect(semantic.complete).toBe(snapshot.complete);
+    expect(compactInvestigationEvidenceForSemantic(snapshot, FINAL_SEMANTIC_INPUT_BYTE_LIMIT + 1)).toBeUndefined();
   });
 
   it('retains complete small evidence and incomplete capture provenance', async () => {

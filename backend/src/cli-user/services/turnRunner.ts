@@ -27,6 +27,8 @@ import type { Renderer } from '../repl/renderer';
 import type { CliSessionConfig, CliSessionLineage, CliTranscriptTurn } from '../types';
 import type { CliAnalyzeService, RunTurnOutput } from './cliAnalyzeService';
 import {commitSourceSupplementOutput, commitTurnOutputs} from './turnPersistence';
+import type {AnalysisResult} from '../../agent/core/orchestratorTypes';
+import {analysisConfidenceIsGrounded} from '../../agentv3/analysisTermination';
 import { loadSession } from '../io/sessionStore';
 import { readIndex } from '../io/indexJson';
 import { appendStreamEvent } from '../io/transcriptWriter';
@@ -177,7 +179,7 @@ export async function startSession(
     turnCount: 1,
   };
 
-  commitTurnOutputs({
+  const analysisEvidence = commitTurnOutputs({
     paths: ctx.paths,
     sp,
     renderer: ctx.renderer,
@@ -201,7 +203,7 @@ export async function startSession(
       status: result.result.success ? 'completed' : 'failed',
     },
   });
-  await completeSourceSupplement(ctx, sp, result, 1);
+  await completeSourceSupplement(ctx, sp, resolvedSessionId, result, 1, analysisEvidence);
 
   return {
     sessionId: resolvedSessionId,
@@ -354,7 +356,7 @@ export async function continueSession(
   const idx = readIndex(ctx.paths);
   const prev = idx.sessions[userSessionId];
 
-  commitTurnOutputs({
+  const analysisEvidence = commitTurnOutputs({
     paths: ctx.paths,
     sp,
     renderer: ctx.renderer,
@@ -382,7 +384,7 @@ export async function continueSession(
       status: result.result.success ? 'completed' : 'failed',
     },
   });
-  await completeSourceSupplement(ctx, sp, result, nextTurn);
+  await completeSourceSupplement(ctx, sp, userSessionId, result, nextTurn, analysisEvidence);
 
   if (degraded) {
     const notice = buildLineageNotice(updatedConfig.lineage);
@@ -401,8 +403,10 @@ export async function continueSession(
 async function completeSourceSupplement(
   ctx: TurnRunnerContext,
   sp: SessionPaths,
+  sessionId: string,
   result: RunTurnOutput,
   turn: number,
+  analysisEvidence: ReturnType<typeof commitTurnOutputs>,
 ): Promise<void> {
   if (!result.sourceSupplementTask) return;
   const supplement = await result.sourceSupplementTask;
@@ -426,9 +430,10 @@ async function completeSourceSupplement(
   commitSourceSupplementOutput({
     sp,
     renderer: ctx.renderer,
-    sessionId: result.sessionId,
+    sessionId,
     turn,
     supplement,
+    analysisEvidence,
   });
 }
 
@@ -533,16 +538,21 @@ function formatTurnMarkdown(
   turn: number,
   query: string,
   conclusion: string,
-  result: { confidence: number; rounds: number; totalDurationMs: number },
+  result: Pick<AnalysisResult, 'confidence' | 'rounds' | 'totalDurationMs' | 'findings' | 'claimVerificationResult'>,
   degraded: boolean,
   lineageNotice?: string,
 ): string {
+  const claims = result.claimVerificationResult?.claimResults;
+  // The no-findings confidence is a fixed baseline; show what was verified instead.
+  const assurance = analysisConfidenceIsGrounded(result) || !claims
+    ? `**Confidence**: ${(result.confidence * 100).toFixed(0)}%`
+    : `**Verified claims**: ${claims.filter(claim => claim.status === 'verified').length}/${claims.length}`;
   const lines: string[] = [
     `# Turn ${turn}`,
     ``,
     `**Question**: ${query}`,
     ``,
-    `**Confidence**: ${(result.confidence * 100).toFixed(0)}%  ·  **Rounds**: ${result.rounds}  ·  **Duration**: ${(result.totalDurationMs / 1000).toFixed(1)}s`,
+    `${assurance}  ·  **Rounds**: ${result.rounds}  ·  **Duration**: ${(result.totalDurationMs / 1000).toFixed(1)}s`,
     ``,
   ];
   if (lineageNotice) {

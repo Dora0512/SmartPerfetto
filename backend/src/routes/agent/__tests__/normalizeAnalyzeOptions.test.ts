@@ -118,6 +118,17 @@ describe('normalizeAnalyzeOptions', () => {
     });
   });
 
+  it('preserves signed safe Perfetto timestamps while bounding the selected interval', () => {
+    expect(normalizeAnalyzeOptions({selectionContext: {kind: 'track_event', eventId: 42, ts: -100, dur: 25}},
+      {endpoint: '/analyze', hasReferenceTraceId: false}).selectionContext).toEqual({
+      kind: 'track_event', eventId: 42, ts: -100, dur: 25,
+    });
+    expect(() => normalizeAnalyzeOptions({selectionContext: {
+      kind: 'track_event', eventId: 42, ts: Number.MAX_SAFE_INTEGER, dur: 1,
+    }}, {endpoint: '/analyze', hasReferenceTraceId: false}))
+      .toThrow(expect.objectContaining({code: 'INVALID_SELECTION_CONTEXT'}));
+  });
+
   it('accepts only canonical request output languages', () => {
     expect(normalizeAnalyzeOptions(
       {outputLanguage: 'en'},

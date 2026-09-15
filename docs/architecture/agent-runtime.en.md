@@ -11,7 +11,7 @@ or environment.
 
 | Runtime | SDK | Provider family | Notes |
 |---|---|---|---|
-| `claude-agent-sdk` | Claude Agent SDK | Anthropic, Bedrock, Vertex, DeepSeek, Anthropic-compatible gateways | Default runtime; supports local Claude Code auth, MCP server and configurable sub-agents under shared completion and verification contracts |
+| `claude-agent-sdk` | Claude Agent SDK | Anthropic, Bedrock, Vertex, DeepSeek, Anthropic-compatible gateways | Default runtime; requires explicit provider/env credentials and supports MCP server and configurable sub-agents under shared completion and verification contracts |
 | `openai-agents-sdk` | OpenAI Agents SDK | OpenAI, Ollama, OpenAI-compatible gateways | Native OpenAI runtime; adapts the same SmartPerfetto tools as function tools |
 | `pi-agent-core` | Pi Agent Core | custom only | Optional public runtime; real model configurations reuse the shared SmartPerfetto prompt/tool/report pipeline, while fake-stream remains smoke-only; does not enable `.pi` discovery, package extensions, shell tools, or file tools |
 | `opencode` | OpenCode server / SDK | custom only | Optional public runtime; uses explicit OpenAI-compatible or OpenCode model configuration, request-scoped SmartPerfetto MCP tools, and a hardened isolated OpenCode server; does not read local OpenCode login/project state or enable built-in file/shell/web/edit tools |
@@ -297,14 +297,20 @@ they neither trigger automatic continuation nor determine answer completeness al
 
 Full mode defaults to 100 turns and quick mode to 50; the five-turn quick target
 is advisory. A budget above one reserves one no-tool delivery call. Early normal
-completion adds no call. At investigation exhaustion, closeout uses the selected
+completion adds no call when it carries the required valid declaration, or when
+typed intent is an acknowledgement. A completed non-acknowledgement candidate
+without a declaration may use that reserved call so the same author can attach
+the declaration to the complete native body. Acceptance requires an unchanged
+visible body and a valid declaration; edited, truncated, failed or invalid replies
+retain the original candidate. Tools and duplicate visible-body streaming stay
+disabled during this completion. At investigation exhaustion, closeout uses the selected
 model, pinned provider, current authorization and original deadline to explain
 the supported findings, missing evidence and useful follow-up questions.
 It cannot query again or certify completion: `partial`, `turn_limit` completion
 and `max_turns` termination remain. No model semantic review follows this closeout;
 deterministic evidence checks can still run.
 
-A failed closeout retains the original candidate. Cancellation, timeout, revoked
+A failed closeout or declaration completion retains the original candidate. Cancellation, timeout, revoked
 authorization or an exhausted explicit cost budget cannot start another call.
 A one-turn configuration has no extra delivery allowance. OpenCode stops acquisition
 after observing native messages and can overshoot between observations. It records
@@ -358,6 +364,16 @@ propositions to numeric ones. Unknown review alone does not fail a focused answe
 full reports still require their report-assessment contract. The body, native completion and original claims
 are independent inputs; valid JSON and model agreement alone are not proof.
 
+The same context binds the frozen input selection to semantic review. Review
+checks the answer against the question, intent and selected event or range;
+an explicit request for another target or the whole trace takes precedence over
+a persistent UI selection. Selection metadata is lookup context, not execution
+evidence or proof of process identity. Missing legacy or pre-preparation context
+remains distinct from explicit no selection; malformed selection is rejected. In paired traces,
+workspace focus does not establish which trace supplied the selection, so its
+origin remains unknown. A privacy projection that cannot preserve the admitted
+selection exactly leaves review incomplete rather than silently changing scope.
+
 Semantic review adds no application output-token cap. OpenAI sends only an
 explicit `maxOutputTokens` captured for this run; Claude preserves the captured
 SDK environment; Pi uses the pinned model's native SDK capability when no
@@ -381,6 +397,15 @@ captured evidence with semantic review of the current proposition. Reports, CLI
 artifacts and snapshots keep provenance. Chat projects the body, machine
 sidecars and structured runtime appendix separately without mechanically editing
 natural-language conclusions.
+
+Conclusion presentation retains the complete body rather than removing semantic
+sections by headings such as “Evidence Index” or “Claim Verification”. Web stores
+server verification details separately with the candidate identity; replacing a
+body clears stale details, and metadata backfill updates only the current run's
+message with the same candidate. CLI display files bind to the session, turn and
+body. HTML reports list every claim, reference family and verification issue.
+Source-table matching is labelled separately from proposition verification.
+Display data cannot issue witnesses, raise verification status or restore authority.
 
 ## Sessions And Resume
 

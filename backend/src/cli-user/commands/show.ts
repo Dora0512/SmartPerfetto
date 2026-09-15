@@ -8,9 +8,12 @@
  */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { bootstrap } from '../bootstrap';
 import { loadSession } from '../io/sessionStore';
 import { openPath } from '../io/openFile';
+import {parseOutputLanguage} from '../../agentv3/outputLanguage';
+import {loadCliAnalysisEvidence, renderCliAnalysisEvidence} from '../services/analysisResultPresentation';
 
 export interface ShowCommandArgs {
   sessionId: string;
@@ -38,7 +41,25 @@ export async function runShowCommand(args: ShowCommandArgs): Promise<number> {
   // Body: latest conclusion. Session folder always has conclusion.md after
   // the first turn — if it's missing the session is corrupt or mid-analysis.
   if (fs.existsSync(sp.conclusion)) {
-    console.log(fs.readFileSync(sp.conclusion, 'utf-8'));
+    const conclusion = fs.readFileSync(sp.conclusion, 'utf-8');
+    console.log(conclusion);
+    const turnMarkdown = readIfExists(path.join(
+      sp.turnsDir,
+      `${String(config.turnCount).padStart(3, '0')}.md`,
+    ));
+    const evidence = loadCliAnalysisEvidence({
+      sp,
+      sessionId: config.sessionId,
+      turn: config.turnCount,
+      conclusion,
+      turnMarkdown,
+      latest: true,
+    });
+    const evidenceText = renderCliAnalysisEvidence(
+      evidence,
+      parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE),
+    );
+    if (evidenceText) console.log(`\n${evidenceText}`);
   } else {
     console.log('(no conclusion yet — session is pending or incomplete)');
   }
@@ -56,4 +77,12 @@ export async function runShowCommand(args: ShowCommandArgs): Promise<number> {
   }
 
   return 0;
+}
+
+function readIfExists(file: string): string {
+  try {
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  } catch {
+    return '';
+  }
 }

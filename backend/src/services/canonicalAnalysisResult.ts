@@ -9,7 +9,9 @@ import {parseConclusionContractSidecar, parseTypedConclusionContractJson, parseD
   parseDeclaredRelationProposals, declaredFields, declaredContractForResult, type ConclusionContract, type ConclusionBindingEligibility,
   type ConclusionContractDeclarationParseResult, type ConclusionContractSidecarParseResult,
   MAX_CONCLUSION_STRUCTURE_DETAILS, isConclusionContractStructureDetail,
-  type ConclusionContractStructureDetail, type ConclusionContractParseIssue} from '../agent/core/conclusionContract';
+  MAX_RELATION_PROPOSAL_DIAGNOSTICS, isConclusionRelationProposalDiagnostic,
+  type ConclusionContractStructureDetail, type ConclusionContractParseIssue,
+  type ConclusionRelationProposalDiagnostic} from '../agent/core/conclusionContract';
 import {parseConversationResponseWithProjection, type ConversationEvidenceRef,
   type ConversationResponseProjection, type ConversationRuntimeOutcome} from '../assistant/contracts/conversationContract';
 import {analysisDeliveryFingerprint, sameAnalysisCandidate,
@@ -76,6 +78,8 @@ export interface CandidateProtocolDiagnostic {
   issueCodes: ConclusionContractParseIssue['code'][];
   /** Schema-owned fields/types only, never arbitrary parser paths or model values. */
   details?: ConclusionContractStructureDetail[];
+  /** Closed relation shape only; never arbitrary keys, values, IDs or paths. */
+  relationProposalDiagnostics?: ConclusionRelationProposalDiagnostic[];
   issueCount: number;
   rawChars: number;
   /** UTF-16 characters after trimming canonical narrative whitespace. */
@@ -95,7 +99,7 @@ const CANDIDATE_PROTOCOL_ISSUE_CODES: readonly ConclusionContractParseIssue['cod
 const CANDIDATE_PROTOCOL_DIAGNOSTIC_KEYS = [
   'schemaVersion', 'stage', 'candidateIndex', 'status', 'sidecarStatus', 'typedJsonStatus',
   'issueCodes', 'issueCount', 'rawChars', 'canonicalChars', 'projectionKind',
-  'claimCount', 'semanticClaimCount', 'sourceBindingCount', 'details',
+  'claimCount', 'semanticClaimCount', 'sourceBindingCount', 'details', 'relationProposalDiagnostics',
 ] as const;
 
 /** Diagnostics carry only fixed schema locations, never source paths, model text or admission authority. */
@@ -120,8 +124,20 @@ export function sanitizeCandidateProtocolDiagnostic(value: unknown): CandidatePr
     data.details.length > MAX_CONCLUSION_STRUCTURE_DETAILS || data.status !== 'invalid' ||
     !data.issueCodes.includes('invalid_contract') || !data.details.every(isConclusionContractStructureDetail) ||
     new Set(data.details.map(detail => `${detail.field}:${detail.actual}`)).size !== data.details.length)) return undefined;
+  if (data.relationProposalDiagnostics !== undefined &&
+    (!Array.isArray(data.relationProposalDiagnostics) || data.relationProposalDiagnostics.length === 0 ||
+      data.relationProposalDiagnostics.length > MAX_RELATION_PROPOSAL_DIAGNOSTICS || data.status !== 'invalid' ||
+      !data.issueCodes.includes('invalid_relation_proposal') || data.issueCount < data.relationProposalDiagnostics.length ||
+      !data.relationProposalDiagnostics.every(isConclusionRelationProposalDiagnostic) ||
+      data.relationProposalDiagnostics.some(detail => detail.scope === 'collection') &&
+        (data.relationProposalDiagnostics.length !== 1 || data.relationProposalDiagnostics[0].scope !== 'collection') ||
+      new Set(data.relationProposalDiagnostics.map(detail => detail.scope === 'collection'
+        ? `${detail.scope}:${detail.reason}` : `${detail.scope}:${detail.ordinal}:${detail.reason}`)).size !==
+        data.relationProposalDiagnostics.length)) return undefined;
   return {...data, issueCodes: [...data.issueCodes],
-    ...(data.details ? {details: data.details.map(detail => ({...detail}))} : {})};
+    ...(data.details ? {details: data.details.map(detail => ({...detail}))} : {}),
+    ...(data.relationProposalDiagnostics ? {relationProposalDiagnostics:
+      data.relationProposalDiagnostics.map(detail => ({...detail}))} : {})};
 }
 
 export function buildCandidateProtocolDiagnostic(
@@ -138,14 +154,27 @@ export function buildCandidateProtocolDiagnostic(
     : parsed?.contract?.sourceClaimBindings ?? [];
   const details: ConclusionContractStructureDetail[] = [];
   const seenDetails = new Set<string>();
+  const relationProposalDiagnostics: ConclusionRelationProposalDiagnostic[] = [];
+  const seenRelationProposalDiagnostics = new Set<string>();
   for (const issue of issues) {
-    if (issue.code !== 'invalid_contract') continue;
-    for (const detail of issue.details ?? []) {
-      if (!isConclusionContractStructureDetail(detail)) continue;
-      const key = `${detail.field}:${detail.actual}`;
-      if (seenDetails.has(key) || details.length >= MAX_CONCLUSION_STRUCTURE_DETAILS) continue;
-      seenDetails.add(key);
-      details.push({...detail});
+    if (issue.code === 'invalid_contract') {
+      for (const detail of issue.details ?? []) {
+        if (!isConclusionContractStructureDetail(detail)) continue;
+        const key = `${detail.field}:${detail.actual}`;
+        if (seenDetails.has(key) || details.length >= MAX_CONCLUSION_STRUCTURE_DETAILS) continue;
+        seenDetails.add(key);
+        details.push({...detail});
+      }
+    }
+    const relationDetail = issue.relationProposalDiagnostic;
+    if (issue.code === 'invalid_relation_proposal' && isConclusionRelationProposalDiagnostic(relationDetail)) {
+      const key = relationDetail.scope === 'collection' ? `${relationDetail.scope}:${relationDetail.reason}`
+        : `${relationDetail.scope}:${relationDetail.ordinal}:${relationDetail.reason}`;
+      if (!seenRelationProposalDiagnostics.has(key) &&
+          relationProposalDiagnostics.length < MAX_RELATION_PROPOSAL_DIAGNOSTICS) {
+        seenRelationProposalDiagnostics.add(key);
+        relationProposalDiagnostics.push({...relationDetail});
+      }
     }
   }
   return {
@@ -153,6 +182,7 @@ export function buildCandidateProtocolDiagnostic(
     sidecarStatus: inspected.sidecar.status, typedJsonStatus: inspected.typedJson?.status ?? 'not_checked',
     issueCodes: [...new Set(issues.map(issue => issue.code))], issueCount: issues.length,
     ...(details.length ? {details} : {}),
+    ...(relationProposalDiagnostics.length ? {relationProposalDiagnostics} : {}),
     rawChars: inspected.rawChars, canonicalChars: inspected.canonicalBody.trim().length,
     ...(parsed?.contract || payload && typeof payload === 'object' && !Array.isArray(payload) ? {claimCount: claims.length,
       semanticClaimCount: claims.filter(claim => claim && typeof claim === 'object' &&

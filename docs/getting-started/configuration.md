@@ -2,19 +2,18 @@
 
 [English](configuration.en.md) | [中文](configuration.md)
 
-SmartPerfetto 本地源码运行时可以直接使用 Claude Code 的本地认证/配置；如果这个终端里的 `claude` 已经能正常写代码，可以不创建 `.env`。这既包括 Claude Code 官方订阅，也包括 Claude Code 已经配置好的第三方 base URL + API key。需要显式配置 API key、代理或 Docker 运行时，再使用 env 文件。
+Claude Agent SDK 在所有运行方式下都需要通过当前运行实例所连接的 Provider Manager 或 env 显式配置凭据。已有 Claude Code 登录态或仅填写 Base URL 都不代表 SDK 已配置。
 
 Windows 免安装包用户先按 [Windows 配置与运行指南](windows.md) 完成下载、解压和启动，
 再使用本页的 Provider 字段。不要为普通 Windows 使用流程照抄 Unix 源码命令。
 
 ## 先回答：应该配置哪个 Runtime？
 
-Claude Code、OpenAI Agents SDK、Pi Agent Core、OpenCode 和 Qoder Agent SDK 是互斥可选的运行路径，不是都要完成的配置清单。第一次配置只选一个来源：
+Claude Agent SDK、OpenAI Agents SDK、Pi Agent Core、OpenCode 和 Qoder Agent SDK 是互斥可选的运行路径，不是都要完成的配置清单。第一次配置只选一个来源：
 
 | 你现在有什么 | 推荐选择 | 需要配置 |
 |---|---|---|
 | 不想碰 env、正在用 Docker 或免安装包 | UI Provider Manager | 在 `Providers` 页填写 provider key，测试后激活 |
-| 本地源码运行，且同一终端里的 `claude` 已经可用 | Claude Code 本地配置 | 不需要 `.env`，也不需要 `OPENAI_*` |
 | Anthropic API key 或 Claude/Anthropic-compatible provider | Claude Agent SDK | `ANTHROPIC_*` + `CLAUDE_*` |
 | OpenAI API key、Ollama 或 OpenAI-compatible provider | OpenAI Agents SDK | `SMARTPERFETTO_AGENT_RUNTIME=openai-agents-sdk` + `OPENAI_*` |
 | Pi Agent Core model 配置 | Pi Agent Core | custom Provider Manager profile，或 `SMARTPERFETTO_AGENT_RUNTIME=pi-agent-core` + `SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON` |
@@ -28,7 +27,7 @@ Perfetto UI 的 AI Assistant 设置面板包含 `Connection`、`Providers`、`Co
 Codebases 管理 code-aware 数据源；自进化页只操作当前已保存后端的受控
 Self-Evolution 工作流。`Connection` 页里的高级 backend auth token 是可选项，只在后端
 启动时设置了 `SMARTPERFETTO_API_KEY` 才需要填写；它不是第三方大模型 provider key。
-模型 provider 凭证可以来自 Claude Code 本地配置、下面的后端/Docker env 文件，也可以
+模型 provider 凭证可以来自下面的后端/Docker env 文件，也可以
 通过前端 `Providers` 页写入后端 Provider Manager。
 
 初学者优先走 UI，最不容易混淆：
@@ -38,7 +37,9 @@ Self-Evolution 工作流。`Connection` 页里的高级 backend auth token 是�
 3. 选择 provider，填写 **API Key**。名称、官方连接地址和模型已预填，通常可以直接保存；需要换模型时，可从建议中选择或直接输入模型 ID。
 4. 点击 **Create Provider**。这一步只是保存 profile。
 5. 回到 provider 列表，先点插头图标测试连接，再点击 provider 行或在输入框旁的 provider switcher 里选择它来激活。
-6. 用带鉴权的 `/api/runtime-health` 验证。`aiEngine.credentialSource=provider-manager` 表示 UI provider 已经生效；`env-or-default` 表示仍在使用 env 或本机 Claude Code fallback。公开 `/health` 只用于存活检查。
+6. 用带鉴权的 `/api/runtime-health` 验证。`aiEngine.credentialSource=provider-manager` 表示 UI provider 已经生效；`env-or-default` 表示仍在使用 env/默认配置；是否已配置凭据需检查 `aiEngine.configured`。公开 `/health` 只用于存活检查。
+
+Key 缺失、过期或认证被拒绝时，优先回到当前后端网页的 **AI Assistant Settings → Providers**，更新对应供应商的凭据、地址和模型，保存、测试连接并激活；Bedrock/Vertex 使用各自的云认证字段。其次才使用下述运行方式对应的配置文件。修改文件后重启对应后端、容器或 CLI，切换配置后新建分析会话。
 
 active Provider Manager profile 会覆盖 `.env`。如果希望 `.env` 修改重新生效，在 provider switcher 里选择 `System Default`，或在设置里停用 active provider。
 
@@ -130,13 +131,17 @@ SMARTPERFETTO_EXTERNAL_ISSUE_URL=https://github.example.com/org/repo/issues/new
 固定的 provider/runtime；provider pin 缺失或变化时明确降级。完整边界见
 [Agent 辅助 GitHub 反馈](agent-assisted-feedback.md)。
 
-npm CLI 不使用 Web UI 的 `Connection` 配置。第一次用 CLI 时，推荐运行：
+npm CLI 不使用 Web UI 的 `Connection` 配置。CLI Provider store 默认是
+`~/.smartperfetto/runtime/data/providers.json`，源码 Web 后端默认是
+`backend/data/providers.json`。只有两个进程显式使用同一个
+`SMARTPERFETTO_BACKEND_DATA_DIR` 时，网页 Provider profile 才会作用于 CLI。
+第一次用 CLI 时，推荐运行：
 
 ```bash
 smp config init
 ```
 
-它会创建 `~/.smartperfetto/env`。没有显式传 `--env-file` 时，CLI 先读取包内/源码目录的 `backend/.env`，再读取 `~/.smartperfetto/env`，后者覆盖前者；如果传了 `--env-file /path/to/env`，CLI 只读取这个文件。CLI 配置方式仍然遵守同一条规则：选择一个 runtime block，不要把所有 block 都打开。
+它会创建 `~/.smartperfetto/env`。没有显式传 `--env-file` 时，CLI 先读取包内/源码目录的 `backend/.env`，再读取 `~/.smartperfetto/env`，后者覆盖前者；如果传了 `--env-file /path/to/env`，CLI 只读取这个文件。CLI 配置方式仍然遵守同一条规则：选择一个 runtime block，不要把所有 block 都打开。`smp provider list` 和 `smp provider test <providerId>` 只能检查当前 CLI store 中已有的 profile；CLI 当前不提供 Provider profile 的 add、edit 或 activate 命令。
 
 ## Codebase 选择与 Provider 授权
 
@@ -157,13 +162,13 @@ reindex 是可选加速。
 
 SmartPerfetto 后端支持这些 runtime path：
 
-- `claude-agent-sdk`：默认 runtime。适合 Anthropic、Claude Code 本地认证、Bedrock、Vertex，以及 Anthropic/Claude Code-compatible provider。
+- `claude-agent-sdk`：默认 runtime。适合 Anthropic、Bedrock、Vertex，以及 Anthropic/Claude Code-compatible provider。
 - `openai-agents-sdk`：OpenAI runtime。适合 OpenAI Responses API、Ollama 和支持流式 function/tool calling 的 OpenAI-compatible gateway。
 - `pi-agent-core`：可选 public runtime。真实模型配置下复用 SmartPerfetto 共享 prompt、SQL/Skill、plan/hypothesis 和 report/claim-verification 管线；后端只在选择这个 runtime 时动态加载 `@earendil-works/pi-agent-core`，不会启用 `.pi` project discovery、package extension、shell tool 或 file tool。
 - `opencode`：可选 public runtime。它会启动加固隔离的 OpenCode server，使用显式 OpenAI-compatible 或 OpenCode model 配置，只暴露 request-scoped SmartPerfetto MCP 工具；不会读取用户自己的 OpenCode CLI 登录态、project config、extension，也不会启用内建 file/shell/web/edit tools。
 - `qoder-agent-sdk`：可选 public runtime。它只暴露 request-scoped SmartPerfetto MCP 工具，支持本机 `qodercli` 登录态或 PAT，并禁止私有知识分析复用 provider session 或持久化 opaque state。SDK/CLI 有独立条款，因此 SDK 是显式启用的 optional peer，默认不会安装。
 
-这些 runtime 是互斥选择的后端编排路径。配置 OpenAI runtime 时不需要先安装或登录 Claude Code；使用本机 Claude Code 时也不需要配置 OpenAI key。Pi Agent Core、OpenCode 和 Qoder 与两者独立。真实模型路径应通过启动/滑动 E2E 验证分析质量；fake-stream 只用于 smoke/test，不能代表等价分析效果。
+这些 runtime 是互斥选择的后端编排路径。配置 OpenAI runtime 时不需要先安装或登录 Claude Code；配置 Claude API 时也不需要 OpenAI key，但本机 Claude Code 登录态不能替代 Claude Agent SDK 的显式凭据。Pi Agent Core、OpenCode 和 Qoder 与两者独立。真实模型路径应通过启动/滑动 E2E 验证分析质量；fake-stream 只用于 smoke/test，不能代表等价分析效果。
 
 运行时选择不会根据“哪个 key 存在”自动猜。优先级是：请求/会话里的 `providerId`、Provider Manager 当前 active provider、`SMARTPERFETTO_AGENT_RUNTIME`、最后默认 `claude-agent-sdk`。首次配置不要同时启用 `ANTHROPIC_*` 和 `OPENAI_*`；如果高级部署确实同时写了两类 env，但没有设置 `SMARTPERFETTO_AGENT_RUNTIME=openai-agents-sdk`，实际仍会走 Claude Agent SDK。active Provider Manager profile 会覆盖 `.env` fallback；当前来源可通过带鉴权的 `/api/runtime-health` 中的 `aiEngine.credentialSource` 和 `aiEngine.providerOverridesEnv` 确认。
 
@@ -178,7 +183,7 @@ DeepSeek、Qwen、Kimi、MiMo、TokenHub、MiniMax、StepFun、SiliconFlow 和 c
 
 已创建的分析 session 会固定当时使用的 credential source。也就是说，一个用 Provider A 创建的 session 恢复后仍尝试使用 Provider A；一个用 `.env` fallback 创建的 session 恢复后不会因为后来设置了 active provider 就改用该 provider。
 
-本机 Claude Code 已经可用时，可以依赖 Claude Code 的本地认证/配置；如果要显式直连 Anthropic API，则配置：
+直连 Anthropic API 时，显式配置 API key：
 
 ```bash
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
@@ -348,7 +353,7 @@ OpenCode 登录态或 project extension。删除 custom provider，或把
 
 ### 运行时与 Provider 诊断
 
-Claude Code 自己的本地认证/配置是 Claude Agent SDK 的原生认证路径，不管它背后是 Anthropic 订阅还是 Claude Code 里配置好的第三方 endpoint。SmartPerfetto 不会自动读取 Codex CLI、Gemini CLI 或个人 OpenCode 登录态；那些工具管理的是各自 CLI 的配置文件。`opencode` runtime 只通过 Provider Manager 或 env 显式配置。Qoder 是显式 runtime 集成：安装可选 SDK 后，`qoder-agent-sdk` 可使用本机 `qodercli` 登录态或显式 PAT。
+Claude Code 的本地登录态不能作为 SmartPerfetto SDK 已配置的依据。第三方 endpoint 的地址、API key/token 和模型也需要显式配置。SmartPerfetto 不会自动读取 Codex CLI、Gemini CLI 或个人 OpenCode 登录态；那些工具管理的是各自 CLI 的配置文件。`opencode` runtime 只通过 Provider Manager 或 env 显式配置。Qoder 是显式 runtime 集成：安装可选 SDK 后，`qoder-agent-sdk` 可使用本机 `qodercli` 登录态或显式 PAT。
 
 Qoder Agent SDK：
 
@@ -403,7 +408,7 @@ curl -H "Authorization: Bearer <backend-token>" http://localhost:3000/api/runtim
 
 | 字段 | 如何判断 |
 |---|---|
-| `aiEngine.credentialSource` | `provider-manager` 表示 UI provider 正在生效；`env-or-default` 表示使用 `.env` 或 Claude Code fallback |
+| `aiEngine.credentialSource` | `provider-manager` 表示 UI provider 正在生效；`env-or-default` 表示使用 env/默认配置，不代表凭据已配置 |
 | `aiEngine.providerOverridesEnv` | `true` 表示 `.env` 修改不会影响当前分析，除非停用 active provider |
 | `aiEngine.runtime` | 只能是 `claude-agent-sdk`、`openai-agents-sdk`、`pi-agent-core`、`opencode` 或 `qoder-agent-sdk`，不是 provider 名称 |
 | `aiEngine.providerMode` | 显示实际连接族，例如 `anthropic_compatible_proxy` 或 `openai_chat_completions_compatible` |
@@ -422,7 +427,7 @@ curl -H "Authorization: Bearer <backend-token>" http://localhost:3000/api/runtim
 | `pi-agent-core` | 使用 Pi Agent Core custom model JSON 和共享 SmartPerfetto 分析管线 |
 | `opencode` | 使用 OpenCode custom model JSON 或 OpenAI-compatible 字段，并复用共享 SmartPerfetto 分析管线 |
 | `qoder` | 通过本机 `qodercli` 登录态、PAT 或显式 CLI path 使用 opt-in Qoder Agent SDK |
-| `unconfigured` | 没有显式 env 凭证；如果本机 `claude` 已经能正常请求，SDK 仍可在分析时走 Claude Code 本地 auth/config 路径 |
+| `unconfigured` | 没有显式 provider 凭证；分析前需配置 API key/token 或支持的云平台认证 |
 
 ### 临时禁用模型分析
 
@@ -443,6 +448,7 @@ SMARTPERFETTO_AI_ENABLED=false
 ```bash
 AGENT_FULL_REQUEST_TIMEOUT_MS=1200000
 AGENT_STREAM_IDLE_TIMEOUT_MS=300000
+AGENT_MAX_RUN_TIMEOUT_MS=3600000
 AGENT_MAX_HISTORY_BYTES=4194304
 
 CLAUDE_FULL_PER_TURN_MS=60000
@@ -455,6 +461,7 @@ CLAUDE_CLASSIFIER_TIMEOUT_MS=30000
 OPENAI_FULL_PER_TURN_MS=60000
 OPENAI_FULL_REQUEST_TIMEOUT_MS=1200000
 OPENAI_STREAM_IDLE_TIMEOUT_MS=300000
+OPENAI_MAX_RUN_TIMEOUT_MS=3600000
 OPENAI_MAX_HISTORY_BYTES=4194304
 OPENAI_QUICK_PER_TURN_MS=40000
 OPENAI_CLASSIFIER_TIMEOUT_MS=30000
@@ -464,7 +471,13 @@ OPENAI_CLASSIFIER_TIMEOUT_MS=30000
 直接 env provider 路径中覆盖。`*_FULL_REQUEST_TIMEOUT_MS` 是 full 分析的绝对墙钟上限，默认 20 分钟；即使
 `maxTurns × per-turn timeout` 更大也不会超过它。`*_STREAM_IDLE_TIMEOUT_MS`
 限制 provider 连续无流事件的时间，默认 5 分钟；触发时后端会取消 SDK 与当前
-工具调用，并把已收集证据作为 `partial` 结果正常走完终态事件。OpenAI 的
+工具调用，并把已收集证据作为 `partial` 结果正常走完终态事件。
+OpenAI runtime 的 `maxTurns × per-turn timeout`（full 模式再受上面的绝对上限约束）只是初始截止时间：
+每返回一次工具结果，截止时间按最近几轮中最慢的一轮向后顺延；到点时若 provider 仍在输出正文、推理或工具参数，
+则按一个 per-turn 步长有界延期。`AGENT_MAX_RUN_TIMEOUT_MS` / `OPENAI_MAX_RUN_TIMEOUT_MS`（默认 60 分钟）限制延期后的
+总时长，并在其中固定预留一次无工具交付调用；小于初始预算时按初始预算处理，即它只限制延期，不缩短原预算。
+调查仍超时且本轮已有返回数据时，后端用这次预留调用基于已返回数据给出有限结论，结果标记 `partial` / `timeout`；
+没有返回数据或交付调用也超时，则保留“未生成可交付结论”。OpenAI 的
 `AGENT_MAX_HISTORY_BYTES` / `OPENAI_MAX_HISTORY_BYTES` 默认 4 MiB，只限制跨 continuation/session 持有的
 provider history；Artifact、DataEnvelope、报告和证据来源不会因此被截断。
 

@@ -90,6 +90,12 @@ import {resolveKnowledgeScope} from '../../../services/scopedKnowledgeStore';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext, toAnalysisHistoryTurn,
   type AnalysisHistoryReader} from '../../analysisHistory';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
+import {
+  acceptNativeDeclarationCompletion,
+  buildNativeDeclarationCompletionPrompt,
+  nativeDeclarationBodyCanFitOutput,
+  requestNativeDeclarationCompletion,
+} from '../../runtimeConclusionProtocol';
 import type {RuntimeToolObserver} from '../../runtimeToolObserver';
 import { verifyConclusion } from '../claude/claudeVerifier';
 import { getExtendedKnowledgeBase } from '../../../services/sqlKnowledgeBase';
@@ -448,20 +454,25 @@ export function getOpenCodeEngineCapabilities(
 export function getOpenCodeRuntimeDiagnostics(
   env: EnvLike = process.env,
   kind: OpenCodeRuntimeKind = OPENCODE_RUNTIME_KIND,
+  selectedProviderId?: string | null,
 ) {
   const modulePath = env[OPENCODE_SDK_MODULE_PATH_ENV]?.trim();
   const projectDir = env[OPENCODE_PROJECT_DIR_ENV]?.trim();
   const modelJson = env[OPENCODE_MODEL_JSON_ENV]?.trim();
   const standaloneMcpEnabled = truthyEnv(env[OPENCODE_ENABLE_STANDALONE_MCP_ENV]);
+  const selection: RuntimeSelection<string> = selectedProviderId
+    ? {kind, source: 'provider', providerId: selectedProviderId}
+    : {kind, source: 'env'};
+  const modelConfiguration = validateOpenCodeModelConfiguration(env, selection);
   return {
-    configured: Boolean(modulePath) || Boolean(env.PATH),
+    configured: modelConfiguration.configured,
     runtime: kind,
     experimental: kind === EXPERIMENTAL_OPENCODE_RUNTIME_KIND,
     package: '@opencode-ai/sdk',
     cliPackage: 'opencode-ai',
     modulePath: modulePath || undefined,
     projectDir: projectDir || undefined,
-    modelConfigured: Boolean(modelJson || env.OPENAI_MODEL),
+    modelConfigured: modelConfiguration.configured,
     serverPort: numericEnv(env[OPENCODE_SERVER_PORT_ENV]),
     serverTimeoutMs: numericEnv(env[OPENCODE_SERVER_TIMEOUT_MS_ENV]) ?? DEFAULT_SERVER_TIMEOUT_MS,
     standaloneMcpEnabled,
@@ -1597,39 +1608,40 @@ function resolveOpenCodeModelConfig(
   const providerModelJson = provider?.connection.openCodeModelJson?.trim();
   const rawModel = providerModelJson || env[OPENCODE_MODEL_JSON_ENV]?.trim();
   if (rawModel) {
+    let parsed: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(rawModel) as Record<string, unknown>;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('model JSON must be an object');
-      }
-      const providerID = normalizeOptionalString(parsed.providerID)
-        || normalizeOptionalString(parsed.providerId)
-        || normalizeOptionalString(parsed.provider)
-        || 'smartperfetto';
-      const modelID = normalizeOptionalString(parsed.modelID)
-        || normalizeOptionalString(parsed.modelId)
-        || normalizeOptionalString(parsed.model)
-        || normalizeOptionalString(parsed.id);
-      if (!modelID) throw new Error('modelID/model/id is required');
-      const baseURL = normalizeOptionalString(parsed.baseURL)
-        || normalizeOptionalString(parsed.baseUrl);
-      const apiKey = normalizeOptionalString(parsed.apiKey)
-        || (normalizeOptionalString(parsed.apiKeyEnv)
-          ? env[normalizeOptionalString(parsed.apiKeyEnv)!]?.trim()
-          : undefined);
-      return {
-        model: { providerID, modelID },
-        providerConfig: createOpenCodeProviderConfig(providerID, modelID, {
-          baseURL,
-          apiKey,
-          name: normalizeOptionalString(parsed.name),
-        }),
-        smallModel: normalizeOptionalString(parsed.smallModel)
-          || normalizeOptionalString(parsed.smallModelID),
-      };
-    } catch (err) {
-      throw new Error(`${OPENCODE_MODEL_JSON_ENV} must be valid JSON: ${(err as Error).message}`);
+      parsed = JSON.parse(rawModel) as Record<string, unknown>;
+    } catch {
+      throw new Error(`${OPENCODE_MODEL_JSON_ENV} must be valid JSON`);
     }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${OPENCODE_MODEL_JSON_ENV} must be a JSON object`);
+    }
+    const providerID = normalizeOptionalString(parsed.providerID)
+      || normalizeOptionalString(parsed.providerId)
+      || normalizeOptionalString(parsed.provider)
+      || 'smartperfetto';
+    const modelID = normalizeOptionalString(parsed.modelID)
+      || normalizeOptionalString(parsed.modelId)
+      || normalizeOptionalString(parsed.model)
+      || normalizeOptionalString(parsed.id);
+    if (!modelID) throw new Error(`${OPENCODE_MODEL_JSON_ENV} must include modelID/model/id`);
+    const baseURL = normalizeOptionalString(parsed.baseURL)
+      || normalizeOptionalString(parsed.baseUrl);
+    const apiKey = normalizeOptionalString(parsed.apiKey)
+      || (normalizeOptionalString(parsed.apiKeyEnv)
+        ? env[normalizeOptionalString(parsed.apiKeyEnv)!]?.trim()
+        : undefined);
+    return {
+      model: { providerID, modelID },
+      providerConfig: createOpenCodeProviderConfig(providerID, modelID, {
+        baseURL,
+        apiKey,
+        name: normalizeOptionalString(parsed.name),
+      }),
+      smallModel: normalizeOptionalString(parsed.smallModel)
+        || normalizeOptionalString(parsed.smallModelID),
+    };
   }
 
   const providerConnection = provider?.connection;
@@ -1661,6 +1673,29 @@ function resolveOpenCodeModelConfig(
         ? `smartperfetto/${env.OPENAI_LIGHT_MODEL}`
         : undefined,
   };
+}
+
+export type OpenCodeModelConfigurationValidation =
+  | {configured: true}
+  | {configured: false; reason: 'invalid_json' | 'incomplete'; error: string};
+
+export function validateOpenCodeModelConfiguration(
+  env: EnvLike,
+  selection: RuntimeSelection<string>,
+  providerScope?: ProviderScope,
+): OpenCodeModelConfigurationValidation {
+  try {
+    resolveOpenCodeModelConfig(env, selection, providerScope);
+    return {configured: true};
+  } catch (error) {
+    return {
+      configured: false,
+      reason: error instanceof Error && error.message === `${OPENCODE_MODEL_JSON_ENV} must be valid JSON`
+        ? 'invalid_json'
+        : 'incomplete',
+      error: 'OpenCode model configuration is invalid or incomplete; set valid SMARTPERFETTO_OPENCODE_MODEL_JSON or an OpenAI-compatible model and base URL.',
+    };
+  }
 }
 
 /** Register an explicitly configured same-provider light model with its complete connection. */
@@ -2921,6 +2956,48 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       }
     }
 
+    const initialInfo = acceptedMessage && (isRecord(acceptedMessage.info) ? acceptedMessage.info : acceptedMessage);
+    const initialFinish = typeof initialInfo?.finish === 'string' ? initialInfo.finish : undefined;
+    const initialCompleted = initialInfo?.error == null &&
+      (initialFinish === 'stop' || initialFinish === 'end_turn' || initialFinish === 'stop_sequence');
+    const declarationRequest = requestNativeDeclarationCompletion({
+      intent: turnIntent,
+      completion: {status: initialCompleted ? 'completed' : 'unknown'},
+      candidate: conclusion,
+      remainingDeliveryTurns: !turnLimitReached && actualTurns < turnBudget.totalTurns
+        ? turnBudget.deliveryTurns : 0,
+    });
+    const declarationOutputLimit = 64 * 1024;
+    if (declarationRequest && nativeDeclarationBodyCanFitOutput(conclusion, declarationOutputLimit) &&
+        Date.now() < deadlineMs) {
+      try {
+        assertActive();
+        actualTurns++;
+        const repaired = await runOpenCodeIntentTransport({
+          prompt: buildNativeDeclarationCompletionPrompt({request: declarationRequest, intent: turnIntent, outputLanguage}),
+          systemPrompt: prep.systemPrompt,
+          signal: executionLease.signal,
+          deadlineMs,
+          outputByteLimit: declarationOutputLimit,
+          model: modelConfig.model,
+          createClassifierHost: createNoToolsHost,
+        });
+        assertActive();
+        if (repaired.status === 'ok' && acceptNativeDeclarationCompletion({
+          request: declarationRequest, completion: {status: 'completed'}, candidate: repaired.text,
+          outputByteLimit: declarationOutputLimit,
+        })) {
+          conclusion = repaired.text;
+          attemptId = crypto.randomUUID();
+          acceptedMessage = {info: {role: 'assistant', finish: repaired.finishReason ?? 'stop'},
+            parts: [{type: 'text', text: repaired.text}]};
+        }
+      } catch {
+        executionLease.throwIfAborted();
+        // A failed declaration completion cannot replace the original candidate.
+      }
+    }
+
     const info = acceptedMessage && (isRecord(acceptedMessage.info) ? acceptedMessage.info : acceptedMessage);
     const finish = typeof info?.finish === 'string' ? info.finish : undefined;
     const sdkError = info?.error != null;
@@ -3054,6 +3131,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       ? Object.fromEntries(Object.entries(scope).filter(([, value]) => value !== undefined)) : null;
     attachFinalizationContext(result, {
       runId, sessionId, deadlineMs, turnIntent, strategyRegistry: resolver.strategyRegistry,
+      selection: prep.analysisRunSpec.selection,
       traceIdentity: {currentTraceId: traceId, referenceTraceId: options.referenceTraceId},
       deliveryContext, protocolProjection,
       sourceUse: prep.sourceUse?.getSourceUseDecision(),

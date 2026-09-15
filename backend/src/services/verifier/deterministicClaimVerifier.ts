@@ -16,6 +16,7 @@ import type {
 } from '../../types/claimVerification';
 import {
   getCapturedAnchorFacts,
+  unreadableEvidenceAnchorReason,
   type CapturedFieldSemantics,
   type EvidenceScalar,
 } from '../evidence/evidenceCapture';
@@ -164,9 +165,11 @@ function verifyAnchor(anchor: EvidenceAnchorV1, ineligible: boolean): ClaimRefer
     artifactId: anchor.context.artifactId,
     sourceToolCallId: anchor.context.sourceToolCallId,
   };
-  const failure = anchorFailure(anchor);
-  if (failure) return [{...base, status: 'missing', message: failure}];
+  // An ineligible binding is never read, so how its anchor failed is moot.
   if (ineligible) return [{...base, status: 'ineligible', message: 'claim binding is ineligible'}];
+  const failure = anchorFailure(anchor);
+  // Only an issued read outcome can show the product failed to read; the reason string alone cannot.
+  if (failure) return [{...base, status: unreadableEvidenceAnchorReason(anchor) ? 'not_checked' : 'missing', message: failure}];
   const facts = getCapturedAnchorFacts(anchor);
   if (!facts) return [{...base, status: 'not_checked', message: anchor.missingReason || 'immutable execution capture is unavailable'}];
   if (!anchor.cells?.length) return [{...base, status: 'not_checked', message: 'no expected cell value was supplied'}];
@@ -418,7 +421,8 @@ function comparisonProof(claim: ClaimSupportV1, semantics: ClaimSemanticsV1): De
 function deterministicProof(claim: ClaimSupportV1, references: ClaimReferenceVerificationResult[]): DeterministicClaimProof {
   const semantics = claim.semantics;
   const kind = semantics && hasOwn(proofKinds, semantics.predicate) ? proofKinds[semantics.predicate] : 'none';
-  if (claim.bindingEligibility === 'ineligible') return proof(kind, 'rejected', 'binding_ineligible');
+  // Nothing was evaluated: an invalid declaration is unverified, not a rejected proposition.
+  if (claim.bindingEligibility === 'ineligible') return proof(kind, 'not_checked', 'binding_ineligible');
   if (!semantics) return proof(kind, 'not_checked', 'semantics_not_declared');
   if (claim.bindingEligibility !== 'eligible') return proof(kind, 'candidate', 'binding_eligibility_unchecked');
   if (kind === 'none') return proof(kind, 'candidate', 'unsupported_predicate');
@@ -466,7 +470,8 @@ function coverageFor(proved: DeterministicClaimProof, references: ClaimReference
 }
 
 function issueForReference(claimId: string, reference: ClaimReferenceVerificationResult): ClaimVerificationIssue | undefined {
-  if (reference.status === 'matched' || reference.status === 'not_checked') return undefined;
+  // Unverified references are reported once per claim and reason by verifyClaim.
+  if (reference.status === 'matched' || reference.status === 'not_checked' || reference.status === 'ineligible') return undefined;
   return {
     claimId,
     severity: 'error',
@@ -482,6 +487,16 @@ function verifyClaim(claim: ClaimSupportV1): {result: ClaimVerificationClaimResu
   const propositionCoverage = coverageFor(evaluated, referenceCells);
   const issues = referenceCells.map(reference => issueForReference(claim.claimId, reference))
     .filter((issue): issue is ClaimVerificationIssue => Boolean(issue));
+  const ineligible = claim.bindingEligibility === 'ineligible';
+  if (ineligible) issues.push({claimId: claim.claimId, severity: 'warning', code: 'binding_ineligible',
+    message: 'the conclusion declaration was not admitted for verification'});
+  const unreadable = ineligible ? new Set<string>() : new Set(claim.anchors.flatMap(anchor => {
+    const reason = unreadableEvidenceAnchorReason(anchor);
+    return reason ? [reason] : [];
+  }));
+  for (const reason of unreadable) {
+    issues.push({claimId: claim.claimId, severity: 'warning', code: 'claim_reference_unverified', message: reason});
+  }
   if (evaluated.status === 'rejected' || evaluated.status === 'candidate') issues.push({
     claimId: claim.claimId,
     severity: evaluated.status === 'rejected' ? 'error' : 'warning',
@@ -497,7 +512,7 @@ function verifyClaim(claim: ClaimSupportV1): {result: ClaimVerificationClaimResu
   const hasError = issues.some(issue => issue.severity === 'error');
   // This stage checks the typed declaration, not whether it represents the prose.
   // Only the final shared semantic assessment may join a draft into verified.
-  const status = hasError ? 'unsupported'
+  const status = ineligible ? 'not_checked' : hasError ? 'unsupported'
     : evaluated.status === 'proved' && propositionCoverage.status === 'complete' ? 'partial'
       : claim.kind === 'inference' || claim.kind === 'causal' ? 'inference'
         : evaluated.status === 'candidate' || referenceCells.some(reference => reference.status === 'matched') ? 'partial'

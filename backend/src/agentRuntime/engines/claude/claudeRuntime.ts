@@ -8,6 +8,12 @@ import {tmpdir} from 'node:os';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
 import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
+import {
+  acceptNativeDeclarationCompletion,
+  buildNativeDeclarationCompletionPrompt,
+  nativeDeclarationBodyCanFitOutput,
+  requestNativeDeclarationCompletion,
+} from '../../runtimeConclusionProtocol';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext} from '../../analysisHistory';
 import {resolveKnowledgeScope} from '../../../services/scopedKnowledgeStore';
 import type {RuntimeToolObserver} from '../../runtimeToolObserver';
@@ -936,6 +942,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           scopes: analysisRunSpec.scopes, authorizedTools: analysisRunSpec.tools}),
         input: {
           runId, sessionId, deadlineMs: requestDeadline, turnIntent,
+          selection: analysisRunSpec.selection,
           providerQuery: {text: analysisRunSpec.query.text, analysisContextFingerprint: options.analysisContextFingerprint},
           strategyRegistry: intentResolver.strategyRegistry,
           traceIdentity: {
@@ -1799,16 +1806,32 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         const issues = [...verification.heuristicIssues, ...(verification.llmIssues ?? [])]
           .filter(issue => issue.severity === 'error' && issue.recoveryKind !== undefined);
         const remainingTurns = runtimeConfig.maxTurns - observedRunTurns();
-        if (issues.length > 0 && projectedCandidate.deliveryContext.completion?.status === 'completed' &&
+        const nativeCandidate = acceptedRawBody ?? conclusionText;
+        const declarationNeed = requestNativeDeclarationCompletion({
+          intent: turnIntent,
+          completion: projectedCandidate.deliveryContext.completion ?? {status: 'unknown'},
+          candidate: nativeCandidate,
+          remainingDeliveryTurns: remainingTurns > 0 ? turnBudget.deliveryTurns : 0,
+        });
+        const declarationRequest = declarationNeed &&
+          nativeDeclarationBodyCanFitOutput(nativeCandidate, 128 * 1024) &&
+          (remainingBudgetUsd === undefined || remainingBudgetUsd > 0) ? declarationNeed : undefined;
+        const correctionNeeded = declarationRequest !== undefined || declarationNeed === undefined && issues.length > 0;
+        if (correctionNeeded &&
+            projectedCandidate.deliveryContext.completion?.status === 'completed' &&
             remainingTurns > 0 && Date.now() < requestDeadline) {
+          assertAuthorized();
           const correctionAttemptId = `${runId}:correction:1`;
           const {stream, close} = sdkQueryWithRetry({
-            prompt: generateCorrectionPrompt(issues, conclusionText, outputLanguage, sceneType),
+            prompt: declarationRequest
+              ? buildNativeDeclarationCompletionPrompt({request: declarationRequest, intent: turnIntent, outputLanguage})
+              : generateCorrectionPrompt(issues, conclusionText, outputLanguage, sceneType),
             options: {
               model: runtimeConfig.model, maxTurns: 1, systemPrompt: ctx.sdkSystemPrompt,
               includePartialMessages: true, settingSources: [], tools: [], allowedTools: [],
               mcpServers: {}, strictMcpConfig: true, persistSession: false,
               ...resolveClaudeSdkPermissionOptions(), cwd: runtimeConfig.cwd,
+              ...(declarationRequest && remainingBudgetUsd !== undefined ? {maxBudgetUsd: remainingBudgetUsd} : {}),
               effort: ctx.effectiveEffort, env: sdkEnv,
             },
           }, {maxRetries: 0, signal: executionLease.signal, runtimePerformance});
@@ -1842,7 +1865,13 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
               }
               if (terminal.status === 'completed' && typeof (message as any).result === 'string' &&
                   (message as any).result.trim()) {
-                conclusionText = (message as any).result.trim();
+                const candidateText = (message as any).result as string;
+                assertAuthorized();
+                if (declarationRequest && !acceptNativeDeclarationCompletion({
+                  request: declarationRequest, completion: terminal, candidate: candidateText,
+                  outputByteLimit: 128 * 1024,
+                })) return;
+                conclusionText = candidateText.trim();
                 acceptedAttemptId = correctionAttemptId;
                 acceptedTerminal = terminal;
                 acceptedOrigin = 'sdk_final';

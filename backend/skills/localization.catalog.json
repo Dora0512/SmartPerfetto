@@ -11,7 +11,7 @@
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
     "stepCount": 1268,
-    "explicitColumnCount": 4203
+    "explicitColumnCount": 4334
   },
   "skills": {
     "ams_module": {
@@ -3108,9 +3108,129 @@
             "en": "Wakeup Chain"
           },
           "columns": {
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "upid"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "utid"
+              }
+            },
+            "thread_state_id": {
+              "label": {
+                "zh-CN": "等待事件ID",
+                "en": "Thread State Id"
+              }
+            },
+            "raw_start_ts": {
+              "label": {
+                "zh-CN": "原始等待开始",
+                "en": "Raw Start Ts"
+              }
+            },
+            "raw_end_ts": {
+              "label": {
+                "zh-CN": "原始等待结束",
+                "en": "Raw End Ts"
+              }
+            },
+            "start_ts": {
+              "label": {
+                "zh-CN": "窗口内等待开始",
+                "en": "Start Ts"
+              }
+            },
+            "end_ts": {
+              "label": {
+                "zh-CN": "窗口内等待结束",
+                "en": "End Ts"
+              }
+            },
+            "is_unfinished": {
+              "label": {
+                "zh-CN": "未结束等待",
+                "en": "Is Unfinished"
+              }
+            },
+            "left_censored": {
+              "label": {
+                "zh-CN": "左边界裁剪",
+                "en": "Left Censored"
+              }
+            },
+            "right_censored": {
+              "label": {
+                "zh-CN": "右边界裁剪",
+                "en": "Right Censored"
+              }
+            },
+            "wakeup_state_id": {
+              "label": {
+                "zh-CN": "后继状态ID",
+                "en": "Wakeup State Id"
+              }
+            },
+            "waker_utid": {
+              "label": {
+                "zh-CN": "唤醒线程身份",
+                "en": "Waker UTID"
+              }
+            },
+            "waker_upid": {
+              "label": {
+                "zh-CN": "唤醒进程身份",
+                "en": "Waker UPID"
+              }
+            },
+            "observed_waker_utid": {
+              "label": {
+                "zh-CN": "原始唤醒线程字段",
+                "en": "Observed Waker UTID"
+              }
+            },
+            "irq_context": {
+              "label": {
+                "zh-CN": "IRQ上下文",
+                "en": "Irq Context"
+              }
+            },
+            "wakeup_status": {
+              "label": {
+                "zh-CN": "唤醒证据状态",
+                "en": "Wakeup Status"
+              }
+            },
+            "relation_status": {
+              "label": {
+                "zh-CN": "关系证据边界",
+                "en": "Relation Status"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            },
+            "wait_span_count": {
+              "label": {
+                "zh-CN": "等待区间数",
+                "en": "Wait Span Count"
+              }
+            },
+            "blocked_state": {
+              "label": {
+                "zh-CN": "等待状态",
+                "en": "Blocked State"
+              }
+            },
             "ts": {
               "label": {
-                "zh-CN": "唤醒时间",
+                "zh-CN": "后继 Runnable 事件时间",
                 "en": "Ts"
               }
             },
@@ -3128,7 +3248,7 @@
             },
             "sleep_dur_ms": {
               "label": {
-                "zh-CN": "Sleep 时长(ms)",
+                "zh-CN": "窗口内等待时长(ms)",
                 "en": "Sleep Dur ms"
               }
             },
@@ -3140,7 +3260,7 @@
             },
             "wakeup_count": {
               "label": {
-                "zh-CN": "唤醒次数",
+                "zh-CN": "有唤醒元数据的事件数",
                 "en": "Wakeup Count"
               }
             }
@@ -11658,7 +11778,7 @@
             "max_freq_mhz": {
               "label": {
                 "zh-CN": "MaxFreqMHz",
-                "en": "Max Freq"
+                "en": "Observed Max Freq"
               }
             },
             "scale_bucket": {
@@ -31325,10 +31445,10 @@
                 "en": "Q3 Runnable ms"
               }
             },
-            "q4a_io_blocked_ms": {
+            "q4a_uninterruptible_ms": {
               "label": {
                 "zh-CN": "Q4a 不可中断等待",
-                "en": "Q4a I/O Blocked ms"
+                "en": "Q4a Uninterruptible ms"
               }
             },
             "q4b_sleeping_ms": {
@@ -31734,6 +31854,12 @@
               "label": {
                 "zh-CN": "启动 ID",
                 "en": "Startup Id"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
               }
             },
             "package": {
@@ -32938,10 +33064,10 @@
                 "en": "Other State ms"
               }
             },
-            "q4a_io_blocked_ms": {
+            "q4a_uninterruptible_ms": {
               "label": {
                 "zh-CN": "Q4a 不可中断等待",
-                "en": "Q4a I/O Blocked ms"
+                "en": "Q4a Uninterruptible ms"
               }
             },
             "q4b_sleeping_ms": {
@@ -33612,10 +33738,10 @@
                 "en": "Priority Evidence"
               }
             },
-            "q4a_io_blocked_ms": {
+            "q4a_uninterruptible_ms": {
               "label": {
                 "zh-CN": "Q4a 不可中断等待(ms)",
-                "en": "Q4a I/O Blocked ms"
+                "en": "Q4a Uninterruptible ms"
               }
             },
             "total_ms": {
@@ -33629,14 +33755,26 @@
         },
         "freq_rampup": {
           "title": {
-            "zh-CN": "CPU 频率爬升分析",
+            "zh-CN": "CPU 频率阶段对比",
             "en": "Freq Rampup"
           },
           "columns": {
-            "core_type": {
+            "ucpu": {
               "label": {
-                "zh-CN": "核类型",
-                "en": "Core Type"
+                "zh-CN": "Ucpu",
+                "en": "UCPU"
+              }
+            },
+            "cpu": {
+              "label": {
+                "zh-CN": "CPU",
+                "en": "CPU"
+              }
+            },
+            "machine_id": {
+              "label": {
+                "zh-CN": "MachineId",
+                "en": "Machine ID"
               }
             },
             "early_avg_freq_mhz": {
@@ -33647,13 +33785,43 @@
             },
             "steady_avg_freq_mhz": {
               "label": {
-                "zh-CN": "稳态均频(MHz)",
+                "zh-CN": "后段均频(MHz)",
                 "en": "Steady Avg Freq MHz"
+              }
+            },
+            "max_freq_mhz": {
+              "label": {
+                "zh-CN": "观测峰值(MHz)",
+                "en": "Max Freq MHz"
+              }
+            },
+            "early_covered_ns": {
+              "label": {
+                "zh-CN": "初期覆盖时长",
+                "en": "Early Covered ns"
+              }
+            },
+            "early_window_ns": {
+              "label": {
+                "zh-CN": "初期窗口时长",
+                "en": "Early Window ns"
+              }
+            },
+            "steady_covered_ns": {
+              "label": {
+                "zh-CN": "后段覆盖时长",
+                "en": "Steady Covered ns"
+              }
+            },
+            "steady_window_ns": {
+              "label": {
+                "zh-CN": "后段窗口时长",
+                "en": "Steady Window ns"
               }
             },
             "rampup_pct": {
               "label": {
-                "zh-CN": "爬升幅度",
+                "zh-CN": "后段相对变化(%)",
                 "en": "Rampup Pct"
               }
             },
@@ -33661,6 +33829,12 @@
               "label": {
                 "zh-CN": "评估",
                 "en": "Assessment"
+              }
+            },
+            "claim_boundary": {
+              "label": {
+                "zh-CN": "证据边界",
+                "en": "Claim Boundary"
               }
             }
           },
@@ -33672,6 +33846,54 @@
             "en": "Hot Slice States"
           },
           "columns": {
+            "sample_rank": {
+              "label": {
+                "zh-CN": "样本排名",
+                "en": "Sample Rank"
+              }
+            },
+            "slice_id": {
+              "label": {
+                "zh-CN": "SliceId",
+                "en": "Slice ID"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "UTID"
+              }
+            },
+            "pid": {
+              "label": {
+                "zh-CN": "PID",
+                "en": "PID"
+              }
+            },
+            "tid": {
+              "label": {
+                "zh-CN": "TID",
+                "en": "TID"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "线程",
+                "en": "Thread Name"
+              }
+            },
             "slice_name": {
               "label": {
                 "zh-CN": "切片名",
@@ -33688,6 +33910,48 @@
               "label": {
                 "zh-CN": "开始时间",
                 "en": "Slice Ts"
+              }
+            },
+            "slice_end_ts": {
+              "label": {
+                "zh-CN": "结束时间",
+                "en": "Slice End Ts"
+              }
+            },
+            "raw_slice_ts": {
+              "label": {
+                "zh-CN": "原始开始时间",
+                "en": "Raw Slice Ts"
+              }
+            },
+            "raw_slice_end_ts": {
+              "label": {
+                "zh-CN": "原始结束时间",
+                "en": "Raw Slice End Ts"
+              }
+            },
+            "raw_slice_dur_ms": {
+              "label": {
+                "zh-CN": "原始耗时",
+                "en": "Raw Slice Dur ms"
+              }
+            },
+            "left_censored": {
+              "label": {
+                "zh-CN": "左侧裁剪",
+                "en": "Left Censored"
+              }
+            },
+            "right_censored": {
+              "label": {
+                "zh-CN": "右侧裁剪",
+                "en": "Right Censored"
+              }
+            },
+            "is_unfinished": {
+              "label": {
+                "zh-CN": "未结束",
+                "en": "Is Unfinished"
               }
             },
             "state": {
@@ -33708,10 +33972,64 @@
                 "en": "State Pct"
               }
             },
+            "state_coverage_ms": {
+              "label": {
+                "zh-CN": "状态覆盖",
+                "en": "State Coverage ms"
+              }
+            },
+            "state_coverage_pct": {
+              "label": {
+                "zh-CN": "状态覆盖率",
+                "en": "State Coverage Pct"
+              }
+            },
+            "uncovered_ms": {
+              "label": {
+                "zh-CN": "未覆盖时长",
+                "en": "Uncovered ms"
+              }
+            },
+            "io_wait": {
+              "label": {
+                "zh-CN": "I/OWait",
+                "en": "io_wait"
+              }
+            },
+            "evidence_strength": {
+              "label": {
+                "zh-CN": "证据强度",
+                "en": "Evidence Strength"
+              }
+            },
             "blocked_functions": {
               "label": {
                 "zh-CN": "阻塞函数",
                 "en": "Blocked Functions"
+              }
+            },
+            "sample_limit": {
+              "label": {
+                "zh-CN": "样本上限",
+                "en": "Sample Limit"
+              }
+            },
+            "sampling_scope": {
+              "label": {
+                "zh-CN": "采样口径",
+                "en": "Sampling Scope"
+              }
+            },
+            "eligible_slice_count": {
+              "label": {
+                "zh-CN": "候选 Slice 数",
+                "en": "Eligible Slice Count"
+              }
+            },
+            "selected_slice_count": {
+              "label": {
+                "zh-CN": "入选 Slice 数",
+                "en": "Selected Slice Count"
               }
             }
           },
@@ -34322,10 +34640,10 @@
                 "en": "Q3 Runnable ms"
               }
             },
-            "q4a_io_blocked_ms": {
+            "q4a_uninterruptible_ms": {
               "label": {
                 "zh-CN": "Q4a不可中断等待(ms)",
-                "en": "Q4a I/O Blocked ms"
+                "en": "Q4a Uninterruptible ms"
               }
             },
             "q4b_sleeping_ms": {
@@ -34541,19 +34859,157 @@
         },
         "thread_blocking_graph": {
           "title": {
-            "zh-CN": "线程阻塞关系图",
+            "zh-CN": "线程等待与唤醒证据",
             "en": "Thread Blocking Graph"
           },
           "columns": {
+            "is_unfinished": {
+              "label": {
+                "zh-CN": "未结束等待",
+                "en": "Is Unfinished"
+              }
+            },
+            "left_censored": {
+              "label": {
+                "zh-CN": "左边界裁剪",
+                "en": "Left Censored"
+              }
+            },
+            "right_censored": {
+              "label": {
+                "zh-CN": "右边界裁剪",
+                "en": "Right Censored"
+              }
+            },
+            "wakeup_state_id": {
+              "label": {
+                "zh-CN": "后继状态ID",
+                "en": "Wakeup State Id"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            },
+            "waker_slice_id": {
+              "label": {
+                "zh-CN": "唤醒时操作ID",
+                "en": "Waker Slice Id"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "upid"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "utid"
+              }
+            },
+            "thread_state_id": {
+              "label": {
+                "zh-CN": "线程StateId",
+                "en": "thread_state_id"
+              }
+            },
+            "raw_start_ts": {
+              "label": {
+                "zh-CN": "原始等待开始",
+                "en": "Raw Start Ts"
+              }
+            },
+            "raw_end_ts": {
+              "label": {
+                "zh-CN": "原始等待结束",
+                "en": "Raw End Ts"
+              }
+            },
+            "start_ts": {
+              "label": {
+                "zh-CN": "窗口内等待开始",
+                "en": "Start Ts"
+              }
+            },
+            "end_ts": {
+              "label": {
+                "zh-CN": "窗口内等待结束",
+                "en": "End Ts"
+              }
+            },
+            "wakeup_ts": {
+              "label": {
+                "zh-CN": "后继事件时间",
+                "en": "Wakeup Ts"
+              }
+            },
+            "wakeup_status": {
+              "label": {
+                "zh-CN": "唤醒证据状态",
+                "en": "Wakeup Status"
+              }
+            },
+            "wakeup_count": {
+              "label": {
+                "zh-CN": "有唤醒元数据的事件数",
+                "en": "Wakeup Count"
+              }
+            },
+            "waker_utid": {
+              "label": {
+                "zh-CN": "唤醒线程身份",
+                "en": "Waker UTID"
+              }
+            },
+            "waker_upid": {
+              "label": {
+                "zh-CN": "唤醒进程身份",
+                "en": "Waker UPID"
+              }
+            },
+            "observed_waker_utid": {
+              "label": {
+                "zh-CN": "原始唤醒线程字段",
+                "en": "Observed Waker UTID"
+              }
+            },
+            "irq_context": {
+              "label": {
+                "zh-CN": "IRQ 上下文",
+                "en": "Irq Context"
+              }
+            },
+            "relation_status": {
+              "label": {
+                "zh-CN": "关系证据边界",
+                "en": "Relation Status"
+              }
+            },
+            "waker_slice_status": {
+              "label": {
+                "zh-CN": "唤醒时操作证据",
+                "en": "Waker Slice Status"
+              }
+            },
             "blocked_thread": {
               "label": {
-                "zh-CN": "被阻塞线程",
+                "zh-CN": "等待线程",
                 "en": "Blocked Thread"
+              }
+            },
+            "blocked_role": {
+              "label": {
+                "zh-CN": "等待线程角色",
+                "en": "Blocked Role"
               }
             },
             "blocked_state": {
               "label": {
-                "zh-CN": "阻塞状态",
+                "zh-CN": "等待状态",
                 "en": "Blocked State"
               }
             },
@@ -34565,7 +35021,7 @@
             },
             "waker_thread": {
               "label": {
-                "zh-CN": "唤醒者",
+                "zh-CN": "唤醒者线程",
                 "en": "Waker Thread"
               }
             },
@@ -34577,20 +35033,32 @@
             },
             "waker_current_slice": {
               "label": {
-                "zh-CN": "唤醒者操作",
+                "zh-CN": "唤醒者当时操作",
                 "en": "Waker Current Slice"
-              }
-            },
-            "total_block_ms": {
-              "label": {
-                "zh-CN": "总阻塞",
-                "en": "Total Block ms"
               }
             },
             "block_count": {
               "label": {
-                "zh-CN": "次数",
+                "zh-CN": "等待区间数",
                 "en": "Block Count"
+              }
+            },
+            "total_block_ms": {
+              "label": {
+                "zh-CN": "窗口内等待时长",
+                "en": "Total Block ms"
+              }
+            },
+            "max_block_ms": {
+              "label": {
+                "zh-CN": "单区间等待时长",
+                "en": "Max Block ms"
+              }
+            },
+            "avg_block_ms": {
+              "label": {
+                "zh-CN": "单区间等待时长",
+                "en": "Avg Block ms"
               }
             }
           },
@@ -34627,6 +35095,12 @@
               "label": {
                 "zh-CN": "启动 ID",
                 "en": "Startup Id"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
               }
             },
             "package": {
@@ -34712,7 +35186,7 @@
         "en": "Startup Freq Rampup"
       },
       "description": {
-        "zh-CN": "分析冷启动初期 CPU 频率爬升速度，检测升频延迟",
+        "zh-CN": "比较启动初期与后段的逐核频率及覆盖率，不据此判定升频延迟",
         "en": "Analyzes Startup Freq Rampup using trace metrics and supporting evidence."
       },
       "type": "atomic",
@@ -34731,10 +35205,22 @@
             "en": "Startup Freq Rampup"
           },
           "columns": {
-            "core_type": {
+            "ucpu": {
               "label": {
-                "zh-CN": "核类型",
-                "en": "Core Type"
+                "zh-CN": "Ucpu",
+                "en": "UCPU"
+              }
+            },
+            "cpu": {
+              "label": {
+                "zh-CN": "CPU",
+                "en": "CPU"
+              }
+            },
+            "machine_id": {
+              "label": {
+                "zh-CN": "MachineId",
+                "en": "Machine ID"
               }
             },
             "early_avg_freq_mhz": {
@@ -34745,19 +35231,43 @@
             },
             "steady_avg_freq_mhz": {
               "label": {
-                "zh-CN": "稳态均频(MHz)",
+                "zh-CN": "后段均频(MHz)",
                 "en": "Steady Avg Freq MHz"
               }
             },
             "max_freq_mhz": {
               "label": {
-                "zh-CN": "最高频率(MHz)",
+                "zh-CN": "观测峰值(MHz)",
                 "en": "Max Freq MHz"
+              }
+            },
+            "early_covered_ns": {
+              "label": {
+                "zh-CN": "初期覆盖时长",
+                "en": "Early Covered ns"
+              }
+            },
+            "early_window_ns": {
+              "label": {
+                "zh-CN": "初期窗口时长",
+                "en": "Early Window ns"
+              }
+            },
+            "steady_covered_ns": {
+              "label": {
+                "zh-CN": "后段覆盖时长",
+                "en": "Steady Covered ns"
+              }
+            },
+            "steady_window_ns": {
+              "label": {
+                "zh-CN": "后段窗口时长",
+                "en": "Steady Window ns"
               }
             },
             "rampup_pct": {
               "label": {
-                "zh-CN": "爬升幅度(%)",
+                "zh-CN": "后段相对变化(%)",
                 "en": "Rampup Pct"
               }
             },
@@ -34765,6 +35275,12 @@
               "label": {
                 "zh-CN": "评估",
                 "en": "Assessment"
+              }
+            },
+            "claim_boundary": {
+              "label": {
+                "zh-CN": "证据边界",
+                "en": "Claim Boundary"
               }
             }
           },
@@ -34850,7 +35366,7 @@
         "en": "Startup Hot Slice States"
       },
       "description": {
-        "zh-CN": "分析启动区间内 Top N 热点 Slice 各自的线程状态分布（Running/S/D/R）及 blocked_functions",
+        "zh-CN": "按窗口内裁剪时长采样启动区间 Top N 主线程 Slice，并分析每个原生 Slice 的线程状态分布及覆盖缺口",
         "en": "Analyzes Startup Hot Slice States using trace metrics and supporting evidence."
       },
       "type": "atomic",
@@ -34869,6 +35385,54 @@
             "en": "Startup Hot Slice States"
           },
           "columns": {
+            "sample_rank": {
+              "label": {
+                "zh-CN": "样本排名",
+                "en": "Sample Rank"
+              }
+            },
+            "slice_id": {
+              "label": {
+                "zh-CN": "SliceId",
+                "en": "Slice ID"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "UTID"
+              }
+            },
+            "pid": {
+              "label": {
+                "zh-CN": "PID",
+                "en": "PID"
+              }
+            },
+            "tid": {
+              "label": {
+                "zh-CN": "TID",
+                "en": "TID"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "线程",
+                "en": "Thread Name"
+              }
+            },
             "slice_name": {
               "label": {
                 "zh-CN": "切片名",
@@ -34885,6 +35449,48 @@
               "label": {
                 "zh-CN": "开始时间",
                 "en": "Slice Ts"
+              }
+            },
+            "slice_end_ts": {
+              "label": {
+                "zh-CN": "结束时间",
+                "en": "Slice End Ts"
+              }
+            },
+            "raw_slice_ts": {
+              "label": {
+                "zh-CN": "原始开始时间",
+                "en": "Raw Slice Ts"
+              }
+            },
+            "raw_slice_end_ts": {
+              "label": {
+                "zh-CN": "原始结束时间",
+                "en": "Raw Slice End Ts"
+              }
+            },
+            "raw_slice_dur_ms": {
+              "label": {
+                "zh-CN": "原始耗时",
+                "en": "Raw Slice Dur ms"
+              }
+            },
+            "left_censored": {
+              "label": {
+                "zh-CN": "左侧裁剪",
+                "en": "Left Censored"
+              }
+            },
+            "right_censored": {
+              "label": {
+                "zh-CN": "右侧裁剪",
+                "en": "Right Censored"
+              }
+            },
+            "is_unfinished": {
+              "label": {
+                "zh-CN": "未结束",
+                "en": "Is Unfinished"
               }
             },
             "state": {
@@ -34905,6 +35511,24 @@
                 "en": "State Pct"
               }
             },
+            "state_coverage_ms": {
+              "label": {
+                "zh-CN": "状态覆盖",
+                "en": "State Coverage ms"
+              }
+            },
+            "state_coverage_pct": {
+              "label": {
+                "zh-CN": "状态覆盖率",
+                "en": "State Coverage Pct"
+              }
+            },
+            "uncovered_ms": {
+              "label": {
+                "zh-CN": "未覆盖时长",
+                "en": "Uncovered ms"
+              }
+            },
             "io_wait": {
               "label": {
                 "zh-CN": "I/OWait",
@@ -34921,6 +35545,30 @@
               "label": {
                 "zh-CN": "阻塞函数",
                 "en": "Blocked Functions"
+              }
+            },
+            "sample_limit": {
+              "label": {
+                "zh-CN": "样本上限",
+                "en": "Sample Limit"
+              }
+            },
+            "sampling_scope": {
+              "label": {
+                "zh-CN": "采样口径",
+                "en": "Sampling Scope"
+              }
+            },
+            "eligible_slice_count": {
+              "label": {
+                "zh-CN": "候选 Slice 数",
+                "en": "Eligible Slice Count"
+              }
+            },
+            "selected_slice_count": {
+              "label": {
+                "zh-CN": "入选 Slice 数",
+                "en": "Selected Slice Count"
               }
             }
           },
@@ -35461,7 +36109,7 @@
         },
         "slow_reason_checks": {
           "title": {
-            "zh-CN": "检测到的慢启动原因",
+            "zh-CN": "检测到的启动性能候选信号",
             "en": "Slow Reason Checks"
           },
           "columns": {
@@ -35493,6 +36141,12 @@
               "label": {
                 "zh-CN": "建议",
                 "en": "Suggestion"
+              }
+            },
+            "claim_boundary": {
+              "label": {
+                "zh-CN": "证据边界",
+                "en": "Claim Boundary"
               }
             }
           },
@@ -35569,7 +36223,7 @@
         "en": "Startup Thread Blocking Graph"
       },
       "description": {
-        "zh-CN": "分析启动期间线程间的 block/wakeup 关系，定位阻塞根因",
+        "zh-CN": "观测启动期间的等待区间和后继唤醒事件；唤醒者身份不证明阻塞原因",
         "en": "Analyzes Startup Thread Blocking Graph using trace metrics and supporting evidence."
       },
       "type": "atomic",
@@ -35588,21 +36242,153 @@
             "en": "Startup Thread Blocking Graph"
           },
           "columns": {
+            "is_unfinished": {
+              "label": {
+                "zh-CN": "未结束等待",
+                "en": "Is Unfinished"
+              }
+            },
+            "left_censored": {
+              "label": {
+                "zh-CN": "左边界裁剪",
+                "en": "Left Censored"
+              }
+            },
+            "right_censored": {
+              "label": {
+                "zh-CN": "右边界裁剪",
+                "en": "Right Censored"
+              }
+            },
+            "wakeup_state_id": {
+              "label": {
+                "zh-CN": "后继状态ID",
+                "en": "Wakeup State Id"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            },
+            "waker_slice_id": {
+              "label": {
+                "zh-CN": "唤醒时操作ID",
+                "en": "Waker Slice Id"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "upid"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "utid"
+              }
+            },
+            "thread_state_id": {
+              "label": {
+                "zh-CN": "线程StateId",
+                "en": "thread_state_id"
+              }
+            },
+            "raw_start_ts": {
+              "label": {
+                "zh-CN": "原始等待开始",
+                "en": "Raw Start Ts"
+              }
+            },
+            "raw_end_ts": {
+              "label": {
+                "zh-CN": "原始等待结束",
+                "en": "Raw End Ts"
+              }
+            },
+            "start_ts": {
+              "label": {
+                "zh-CN": "窗口内等待开始",
+                "en": "Start Ts"
+              }
+            },
+            "end_ts": {
+              "label": {
+                "zh-CN": "窗口内等待结束",
+                "en": "End Ts"
+              }
+            },
+            "wakeup_ts": {
+              "label": {
+                "zh-CN": "后继事件时间",
+                "en": "Wakeup Ts"
+              }
+            },
+            "wakeup_status": {
+              "label": {
+                "zh-CN": "唤醒证据状态",
+                "en": "Wakeup Status"
+              }
+            },
+            "wakeup_count": {
+              "label": {
+                "zh-CN": "有唤醒元数据的事件数",
+                "en": "Wakeup Count"
+              }
+            },
+            "waker_utid": {
+              "label": {
+                "zh-CN": "唤醒线程身份",
+                "en": "Waker UTID"
+              }
+            },
+            "waker_upid": {
+              "label": {
+                "zh-CN": "唤醒进程身份",
+                "en": "Waker UPID"
+              }
+            },
+            "observed_waker_utid": {
+              "label": {
+                "zh-CN": "原始唤醒线程字段",
+                "en": "Observed Waker UTID"
+              }
+            },
+            "irq_context": {
+              "label": {
+                "zh-CN": "IRQ 上下文",
+                "en": "Irq Context"
+              }
+            },
+            "relation_status": {
+              "label": {
+                "zh-CN": "关系证据边界",
+                "en": "Relation Status"
+              }
+            },
+            "waker_slice_status": {
+              "label": {
+                "zh-CN": "唤醒时操作证据",
+                "en": "Waker Slice Status"
+              }
+            },
             "blocked_thread": {
               "label": {
-                "zh-CN": "被阻塞线程",
+                "zh-CN": "等待线程",
                 "en": "Blocked Thread"
               }
             },
             "blocked_role": {
               "label": {
-                "zh-CN": "被阻塞角色",
+                "zh-CN": "等待线程角色",
                 "en": "Blocked Role"
               }
             },
             "blocked_state": {
               "label": {
-                "zh-CN": "阻塞状态",
+                "zh-CN": "等待状态",
                 "en": "Blocked State"
               }
             },
@@ -35632,25 +36418,25 @@
             },
             "block_count": {
               "label": {
-                "zh-CN": "阻塞次数",
+                "zh-CN": "等待区间数",
                 "en": "Block Count"
               }
             },
             "total_block_ms": {
               "label": {
-                "zh-CN": "总阻塞时间",
+                "zh-CN": "窗口内等待时长",
                 "en": "Total Block ms"
               }
             },
             "max_block_ms": {
               "label": {
-                "zh-CN": "最大阻塞时间",
+                "zh-CN": "单区间等待时长",
                 "en": "Max Block ms"
               }
             },
             "avg_block_ms": {
               "label": {
-                "zh-CN": "平均阻塞时间",
+                "zh-CN": "单区间等待时长",
                 "en": "Avg Block ms"
               }
             }

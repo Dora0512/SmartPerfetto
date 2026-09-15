@@ -58,18 +58,28 @@ const CPU_TOPOLOGY_CTE = `
     FROM observed_counter_cpus
     WHERE NOT EXISTS (SELECT 1 FROM observed_sched_cpus)
     UNION
-    SELECT id as cpu_id, 'cpu_table_fallback_no_observed' as universe_source
+    SELECT DISTINCT cpu as cpu_id, 'cpu_table_fallback_no_observed' as universe_source
     FROM cpu
     WHERE NOT EXISTS (SELECT 1 FROM observed_sched_cpus)
       AND NOT EXISTS (SELECT 1 FROM observed_counter_cpus)
+  ),
+  machine_count AS (
+    SELECT COUNT(*) as count FROM (SELECT machine_id FROM cpu GROUP BY machine_id)
+  ),
+  cpu_metadata AS (
+    SELECT cpu as cpu_id, COUNT(*) as metadata_rows, MIN(capacity) as capacity
+    FROM cpu
+    GROUP BY cpu
   ),
   cpu_capacity AS (
     SELECT
       cu.cpu_id,
       cu.universe_source,
-      COALESCE(c.capacity, 0) as capacity
+      CASE WHEN (SELECT count FROM machine_count) = 1 AND c.metadata_rows = 1
+        THEN c.capacity ELSE NULL END as capacity,
+      c.metadata_rows
     FROM cpu_universe cu
-    LEFT JOIN cpu c ON c.id = cu.cpu_id
+    LEFT JOIN cpu_metadata c ON c.cpu_id = cu.cpu_id
   ),
   cpu_max_freq AS (
     SELECT t.cpu as cpu_id, MAX(c.value) as max_freq
@@ -81,27 +91,28 @@ const CPU_TOPOLOGY_CTE = `
   ),
   selected_scale_source AS (
     SELECT
-        CASE
-          WHEN (SELECT COUNT(*) FROM cpu_capacity) > 0
-            AND (SELECT COUNT(*) FROM cpu_capacity WHERE universe_source = 'cpu_table_fallback_no_observed') = 0
-            AND (SELECT COUNT(*) FROM cpu_capacity WHERE capacity > 0) = (SELECT COUNT(*) FROM cpu_capacity)
-            THEN 'capacity_scale'
-          WHEN (SELECT COUNT(*) FROM cpu_capacity) > 0
-            AND (SELECT COUNT(*) FROM cpu_capacity WHERE universe_source = 'cpu_table_fallback_no_observed') = 0
-            AND (SELECT COUNT(*) FROM cpu_max_freq WHERE max_freq > 0) = (SELECT COUNT(*) FROM cpu_capacity)
-            THEN 'freq_rank'
-          ELSE 'observed_no_scale'
-        END as source
+      CASE
+        WHEN (SELECT count FROM machine_count) > 1 THEN 'multi_machine_unresolved'
+        WHEN EXISTS (SELECT 1 FROM cpu_capacity WHERE metadata_rows > 1) THEN 'ambiguous_cpu_metadata'
+        WHEN (SELECT COUNT(*) FROM cpu_capacity) > 0
+          AND (SELECT COUNT(*) FROM cpu_capacity WHERE universe_source = 'cpu_table_fallback_no_observed') = 0
+          AND (SELECT COUNT(*) FROM cpu_capacity WHERE capacity > 0) = (SELECT COUNT(*) FROM cpu_capacity)
+          THEN 'capacity_scale'
+        ELSE 'observed_no_scale'
+      END as source
   ),
   raw_cpu_scale AS (
     SELECT
       cc.cpu_id,
       cc.universe_source,
+      cc.capacity,
+      CASE WHEN s.source IN ('multi_machine_unresolved', 'ambiguous_cpu_metadata')
+            THEN NULL ELSE cf.max_freq END AS max_freq,
       CASE
         WHEN s.source = 'capacity_scale' THEN cc.capacity
-        WHEN s.source = 'freq_rank' THEN cf.max_freq
         ELSE NULL
-      END as scale_value
+      END as scale_value,
+      s.source as topology_source
     FROM cpu_capacity cc
     LEFT JOIN cpu_max_freq cf ON cc.cpu_id = cf.cpu_id
     CROSS JOIN selected_scale_source s
@@ -148,9 +159,13 @@ const CPU_TOPOLOGY_CTE = `
   cpu_topology AS (
     SELECT
       cs.cpu_id,
+      cs.universe_source,
+      cs.capacity,
+      cs.max_freq,
+      cs.scale_value,
+      cs.scale_bucket,
       CASE
         WHEN cs.scale_bucket IS NULL OR cs.scale_bucket <= 0 THEN 'unknown'
-        WHEN sc.cluster_count <= 1 AND (SELECT COUNT(*) FROM cpu_scale) <= 4 THEN 'little'
         WHEN sc.cluster_count <= 1 THEN 'unknown'
         WHEN sc.cluster_count = 2 AND sc.cluster_rank = sc.cluster_count THEN 'big'
         WHEN sc.cluster_rank = 1 THEN 'little'
@@ -159,7 +174,15 @@ const CPU_TOPOLOGY_CTE = `
         WHEN sc.cluster_rank = sc.cluster_count - 1
           AND (SELECT cores_in_cluster FROM scale_clusters WHERE cluster_rank = sc.cluster_count) = 1 THEN 'big'
         ELSE 'medium'
-      END as core_type
+      END as core_type,
+      CASE
+        WHEN cs.scale_bucket IS NULL OR cs.scale_bucket <= 0 THEN cs.topology_source
+        WHEN sc.cluster_count <= 1 THEN cs.topology_source || '_uniform'
+        ELSE cs.topology_source
+      END as topology_source,
+      sc.cluster_rank,
+      sc.cluster_count,
+      sc.cores_in_cluster
     FROM cpu_scale cs
     LEFT JOIN scale_clusters sc ON cs.scale_bucket = sc.scale_bucket
   )
@@ -1373,20 +1396,28 @@ ORDER BY s.ts ASC;
         `t.name = 'main' AND p.name GLOB '${packageName}*'`;
 
       const cpuCoreSql = `
-        WITH ${CPU_TOPOLOGY_CTE}
+        WITH ${CPU_TOPOLOGY_CTE},
+        sched_in_window AS (
+          SELECT sched.cpu,
+            MIN(CASE WHEN sched.dur = -1 THEN (SELECT end_ts FROM trace_bounds)
+              ELSE sched.ts + sched.dur END, ${startupEnd}) - MAX(sched.ts, ${startupStart}) as clipped_dur
+          FROM sched_slice sched
+          JOIN thread t ON sched.utid = t.utid
+          JOIN process p ON t.upid = p.upid
+          WHERE (sched.dur > 0 OR sched.dur = -1)
+            AND ${utidFilter}
+            AND sched.ts < ${startupEnd}
+            AND (sched.dur = -1 OR sched.ts + sched.dur > ${startupStart})
+        )
         SELECT
           sched.cpu,
           COALESCE(ct.core_type, 'unknown') as core_type,
-          SUM(sched.dur) / 1e6 as total_dur_ms,
+          SUM(sched.clipped_dur) / 1e6 as total_dur_ms,
           COUNT(*) as slice_count,
-          AVG(sched.dur) / 1e6 as avg_dur_ms
-        FROM sched_slice sched
-        JOIN thread t ON sched.utid = t.utid
-        JOIN process p ON t.upid = p.upid
+          AVG(sched.clipped_dur) / 1e6 as avg_dur_ms
+        FROM sched_in_window sched
         LEFT JOIN cpu_topology ct ON sched.cpu = ct.cpu_id
-        WHERE sched.dur > 0
-          AND ${utidFilter}
-          AND sched.ts >= ${startupStart} AND sched.ts <= ${startupEnd}
+        WHERE sched.clipped_dur > 0
         GROUP BY sched.cpu
         ORDER BY total_dur_ms DESC
       `;
@@ -1395,23 +1426,31 @@ ORDER BY s.ts ASC;
       if (!cpuCoreResult.error && cpuCoreResult.rows.length > 0) {
         const coreData = rowsToObjects(cpuCoreResult.columns, cpuCoreResult.rows);
 
-        // Calculate big vs little ratio
+        // Retain unclassified Running time in the distribution denominator.
         let bigCoreTime = 0;
         let littleCoreTime = 0;
+        let unknownCoreTime = 0;
         coreData.forEach((row: any) => {
           if (['prime', 'big', 'medium'].includes(row.core_type)) bigCoreTime += row.total_dur_ms || 0;
           else if (row.core_type === 'little') littleCoreTime += row.total_dur_ms || 0;
+          else unknownCoreTime += row.total_dur_ms || 0;
         });
 
-        const totalCoreTime = bigCoreTime + littleCoreTime;
+        const classifiedCoreTime = bigCoreTime + littleCoreTime;
+        const totalCoreTime = classifiedCoreTime + unknownCoreTime;
         sections.cpuCoreDistribution = {
           title: 'CPU 大小核分布',
           data: coreData,
           summary: {
             bigCoreTime: bigCoreTime.toFixed(2),
             littleCoreTime: littleCoreTime.toFixed(2),
-            bigCorePercent: totalCoreTime > 0 ? ((bigCoreTime / totalCoreTime) * 100).toFixed(1) : '0',
-            littleCorePercent: totalCoreTime > 0 ? ((littleCoreTime / totalCoreTime) * 100).toFixed(1) : '0',
+            unknownCoreTime: unknownCoreTime.toFixed(2),
+            totalCoreTime: totalCoreTime.toFixed(2),
+            classificationStatus: classifiedCoreTime === 0 ? 'unknown' : unknownCoreTime > 0 ? 'partial' : 'complete',
+            classificationCoveragePercent: totalCoreTime > 0 ? ((classifiedCoreTime / totalCoreTime) * 100).toFixed(1) : null,
+            unknownCorePercent: totalCoreTime > 0 ? ((unknownCoreTime / totalCoreTime) * 100).toFixed(1) : null,
+            bigCorePercent: totalCoreTime > 0 ? ((bigCoreTime / totalCoreTime) * 100).toFixed(1) : null,
+            littleCorePercent: totalCoreTime > 0 ? ((littleCoreTime / totalCoreTime) * 100).toFixed(1) : null,
           },
           sql: cpuCoreSql,
         };
@@ -1786,8 +1825,14 @@ ORDER BY s.ts ASC;
     if (sections.cpuCoreDistribution?.summary) {
       const s = sections.cpuCoreDistribution.summary;
       lines.push('【CPU 大小核分布】');
-      lines.push(`  大核运行时间: ${s.bigCoreTime}ms (${s.bigCorePercent}%)`);
-      lines.push(`  小核运行时间: ${s.littleCoreTime}ms (${s.littleCorePercent}%)`);
+      if (s.classificationStatus === 'unknown') {
+        lines.push('  核心类型未知，无法确定大小核运行比例');
+      } else {
+        lines.push(`  大核运行时间: ${s.bigCoreTime}ms (${s.bigCorePercent ?? 'N/A'}%)`);
+        lines.push(`  小核运行时间: ${s.littleCoreTime}ms (${s.littleCorePercent ?? 'N/A'}%)`);
+      }
+      lines.push(`  未分类运行时间: ${s.unknownCoreTime}ms (${s.unknownCorePercent ?? 'N/A'}%)`);
+      lines.push(`  分类覆盖率: ${s.classificationCoveragePercent ?? 'N/A'}%`);
       lines.push('');
     }
 

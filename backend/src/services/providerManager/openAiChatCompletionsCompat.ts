@@ -6,19 +6,36 @@ export type OpenAIChatCompletionsTokenLimit =
   | { max_tokens: number }
   | { max_completion_tokens: number };
 
-export type OpenAITextRequestPurpose = 'classification';
+export type OpenAITextRequestPurpose = 'classification' | 'final_semantic';
 
-/** Bounded classification does not spend its output cap on provider-default thinking.
- * Apply only to the actual official origin; gateways own their protocol semantics.
+export type OpenAITextRequestPurposeOptions = {
+  thinking?: {type: 'disabled'};
+  reasoning?: {effort: 'none'};
+  response_format?: {type: 'json_object'};
+  text?: {format: {type: 'json_object'}};
+};
+
+/** Apply purpose-specific controls only to the exact official origin.
+ * Classification disables default thinking; final semantic review requests JSON
+ * syntax without changing its thinking policy. Gateways own their protocol semantics.
  * https://api-docs.deepseek.com/guides/thinking_mode/
+ * https://api-docs.deepseek.com/guides/json_mode/
  */
 export function buildOpenAITextRequestPurposeOptions(input: {
   requestUrl: URL;
   protocol: 'chat_completions' | 'responses';
   purpose?: OpenAITextRequestPurpose;
-}): {thinking?: {type: 'disabled'}; reasoning?: {effort: 'none'}} {
-  if (input.purpose !== 'classification' || input.requestUrl.origin !== 'https://api.deepseek.com') return {};
-  return input.protocol === 'responses' ? {reasoning: {effort: 'none'}} : {thinking: {type: 'disabled'}};
+}): OpenAITextRequestPurposeOptions {
+  if (input.requestUrl.origin !== 'https://api.deepseek.com') return {};
+  if (input.purpose === 'classification') {
+    return input.protocol === 'responses' ? {reasoning: {effort: 'none'}} : {thinking: {type: 'disabled'}};
+  }
+  if (input.purpose === 'final_semantic') {
+    return input.protocol === 'responses'
+      ? {text: {format: {type: 'json_object'}}}
+      : {response_format: {type: 'json_object'}};
+  }
+  return {};
 }
 
 const MAX_COMPLETION_TOKENS_MODEL_PATTERNS = [

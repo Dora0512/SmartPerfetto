@@ -234,12 +234,12 @@ describe('claim_verifier@2 reference cells', () => {
     expect(result.deterministicProof.reason).toBe('execution_capture_missing');
   });
 
-  it('denies every positive path for an ineligible binding', () => {
+  it('denies every positive path for an ineligible binding without calling it contradicted', () => {
     const evidence = metric();
     const output = verify(claim([evidence], {bindingEligibility: 'ineligible', semantics: semantics(evidence)}));
-    expect(output.status).toBe('unsupported');
-    expect(output.referenceCells.every(cell => cell.status !== 'matched')).toBe(true);
-    expect(output.deterministicProof).toEqual(expect.objectContaining({status: 'rejected', reason: 'binding_ineligible'}));
+    expect(output.status).toBe('not_checked');
+    expect(output.referenceCells.map(cell => cell.status)).toEqual(['ineligible']);
+    expect(output.deterministicProof).toEqual(expect.objectContaining({status: 'not_checked', reason: 'binding_ineligible'}));
     expect(output.propositionCoverage.status).toBe('none');
   });
 
@@ -623,6 +623,8 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     denied?: boolean;
     invalidScope?: boolean;
     ineligible?: boolean;
+    /** Register a capture whose table the product could not map, with this reason. */
+    unavailableTable?: string;
   } = {}) {
     const ref = options.reference ?? {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: '54'};
     const raw: ConclusionContract = {
@@ -648,9 +650,11 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     });
     const originalData = structuredClone(envelope.data);
     const store = new ArtifactStore();
-    expect(store.registerStandaloneEvidenceCapture(captureEvidenceTable(envelope.data, {
-      value: {unit: 'count', origin: {kind: 'native_producer', definitionFingerprint: 'count-v1'}},
-    }), {meta: envelope.meta, display: envelope.display})).toBe(true);
+    expect(store.registerStandaloneEvidenceCapture(options.unavailableTable
+      ? captureEvidenceTable(undefined, {}, options.unavailableTable)
+      : captureEvidenceTable(envelope.data, {
+        value: {unit: 'count', origin: {kind: 'native_producer', definitionFingerprint: 'count-v1'}},
+      }), {meta: envelope.meta, display: envelope.display})).toBe(true);
     const prepared = await prepareClaimEvidence({conclusionContract: parsed.contract, bindingEligibility: 'eligible',
       evidenceReadView: store.createEvidenceReadView({ownerKey: 'prepared-test',
         allowedTraces: [{traceId: options.denied ? 'another-trace' : 'trace-current', traceSide: 'current'}],
@@ -738,7 +742,6 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     {reference: {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'absent', value: 54}},
     {denied: true},
     {invalidScope: true},
-    {ineligible: true},
   ])('retains missing, denied and invalid binding failures: %j', async input => {
     const {output, built} = await preparedFixture(input);
     expect(built.anchors[0].missing).toBe(true);
@@ -746,6 +749,34 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     expect(output.status).toBe('failed');
     expect(output.claimResults[0].referenceCells[0].status).toBe('missing');
     expect(output.passed).toBe(false);
+  });
+
+  it('keeps an ineligible declaration unverified instead of contradicted', async () => {
+    const {output, built} = await preparedFixture({ineligible: true, declaredNumber: 55});
+    expect(built.anchors[0].missing).toBe(true);
+    expect(output.status).toBe('not_checked');
+    expect(output.unsupportedClaimCount).toBe(0);
+    expect(output.claimResults[0]).toMatchObject({status: 'not_checked',
+      deterministicProof: {status: 'not_checked', reason: 'binding_ineligible'}});
+    expect(output.claimResults[0].referenceCells.map(cell => cell.status)).toEqual(['ineligible']);
+    expect(output.issues).toEqual([expect.objectContaining({severity: 'warning', code: 'binding_ineligible'})]);
+  });
+
+  it.each(['display_transformation_unmapped', 'unmapped_evidence_shape'])(
+    'reports evidence the product could not read (%s) once as unverified', async reason => {
+      const {output, built, resolution} = await preparedFixture({unavailableTable: reason});
+      expect(resolution).toMatchObject({status: 'missing', reason});
+      expect(built.anchors[0]).toMatchObject({missing: true, missingReason: reason});
+      expect(output.claimResults[0].referenceCells.map(cell => cell.status)).toEqual(['not_checked']);
+      expect(output.status).not.toBe('failed');
+      expect(output.issues).toEqual([{claimId: 'count', severity: 'warning', code: 'claim_reference_unverified', message: reason}]);
+    });
+
+  it('does not let a copied unreadable reason downgrade a missing reference', async () => {
+    const {built} = await preparedFixture({unavailableTable: 'display_transformation_unmapped'});
+    const copied = runDeterministicClaimVerifier({claimSupport: structuredClone(built.claimSupport)});
+    expect(copied.claimResults[0].referenceCells.map(cell => cell.status)).toEqual(['missing']);
+    expect(copied.status).toBe('failed');
   });
 
   it('still rejects a different same-type value with an exact captured locator', async () => {

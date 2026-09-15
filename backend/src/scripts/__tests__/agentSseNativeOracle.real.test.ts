@@ -64,6 +64,51 @@ function expectReleased(group: AnalysisRunTraceProcessorLeases) {
 }
 
 describe('real native oracle lease lifecycle', () => {
+  it('binds the synthetic source marker to exact thread-state and first-frame boundaries', async () => {
+    await withLoadedTrace(async (service, traceId) => {
+      const result = await service.query(traceId, `
+        WITH target AS (
+          SELECT s.ts AS start_ts, s.ts + s.dur AS end_ts, s.dur, t.utid, t.name AS thread_name,
+                 p.upid, p.name AS process_name
+          FROM slice s JOIN thread_track tt ON tt.id = s.track_id
+          JOIN thread t USING (utid) JOIN process p USING (upid)
+          WHERE s.name = 'StartupHooks.initializeOnMainThread#before-first-frame-sync-policy'
+        ), first_frame AS (
+          SELECT s.ts, s.ts + s.dur AS end_ts, s.dur, t.utid, p.upid
+          FROM slice s JOIN thread_track tt ON tt.id = s.track_id
+          JOIN thread t USING (utid) JOIN process p USING (upid)
+          WHERE s.name = 'StartupHooks.onFirstFrame#synthetic-first-frame-boundary'
+        ), state_totals AS (
+          SELECT SUM(MIN(st.ts + st.dur, target.end_ts) - MAX(st.ts, target.start_ts)) AS covered_ns,
+                 SUM(CASE WHEN st.state = 'Running' THEN
+                   MIN(st.ts + st.dur, target.end_ts) - MAX(st.ts, target.start_ts) ELSE 0 END) AS running_ns,
+                 SUM(CASE WHEN st.state = 'D' THEN
+                   MIN(st.ts + st.dur, target.end_ts) - MAX(st.ts, target.start_ts) ELSE 0 END) AS d_ns
+          FROM target JOIN thread_state st ON st.utid = target.utid
+          WHERE st.dur >= 0 AND st.ts < target.end_ts AND st.ts + st.dur > target.start_ts
+        ), first_frame_state AS (
+          SELECT SUM(MIN(st.ts + st.dur, first_frame.end_ts) - MAX(st.ts, first_frame.ts)) AS running_ns
+          FROM first_frame JOIN thread_state st ON st.utid = first_frame.utid
+          WHERE st.state = 'Running' AND st.dur >= 0 AND st.ts < first_frame.end_ts
+            AND st.ts + st.dur > first_frame.ts
+        )
+        SELECT target.dur, target.process_name, target.thread_name, state_totals.covered_ns,
+               state_totals.running_ns, state_totals.d_ns, first_frame.ts - target.end_ts,
+               first_frame_state.running_ns,
+               (SELECT COUNT(*) FROM slice s JOIN thread_track tt ON tt.id = s.track_id
+                 JOIN thread t USING (utid) JOIN process p USING (upid)
+                 WHERE s.name = 'StartupHooks.initializeOnMainThread#before-first-frame-sync-policy'
+                   AND p.name = 'com.example.androidappdemo') AS base_marker_count,
+               target.utid = first_frame.utid AND target.upid = first_frame.upid AS same_actor
+        FROM target, first_frame, state_totals, first_frame_state`);
+
+      expect(result.rows).toEqual([[
+        42_000_000, 'com.smartperfetto.fixture', 'main', 42_000_000, 22_000_000, 20_000_000,
+        38_000_000, 1_000_000, 0, 1,
+      ]]);
+    });
+  });
+
   it('queries two actual native processors under one pair lease without crossing side pins', async () => {
     await withLoadedTrace(async (service, traceId) => {
       const referenceTraceId = await service.loadTraceFromFilePath(path.resolve(process.cwd(), '../Trace/real/android-startup-light/trace.pftrace'));

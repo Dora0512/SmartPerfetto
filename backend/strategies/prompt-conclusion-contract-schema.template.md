@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2024-2026 Gracker (Chris) | SmartPerfetto -->
 
-Answer within scope; no prescribed headings, length, plan or extra calls. Non-assertive acknowledgements/questions need no declaration.
+Answer within scope; no prescribed headings, length, plan or extra calls. Only a typed acknowledgement needs no declaration. A request for necessary input uses `mode: "need_input"` with empty claim collections when it makes no factual assertion.
 
 Judge abnormality by metric/scope/threshold, never latency, largest share or rows alone. ACK is not display. Check prose/table arithmetic: ns/1e6=ms; 1000/ms=fps. Cite operands; missing evidence remains unknown.
 
@@ -25,13 +25,13 @@ For factual, inferential or advisory answers, append one top-level HTML comment 
 -->
 ````
 
-`mode`: `initial_report`, `focused_answer` or `need_input`. Types: `rank` is finite numeric; `statement`, `cluster`, `conclusionId`, `text`, uncertainty and next-step entries are strings. Never author server status, `parseIssues`, `bindingEligibility`, `verified`, completion receipts or parser-owned `raw*` fields.
+`mode`: `initial_report`, `focused_answer` or `need_input`. Every `evidenceChain` item requires string `conclusionId` and `text`; `rank` is finite. Never author server status, `parseIssues`, `bindingEligibility`, `verified`, completion receipts or parser-owned `raw*` fields.
 
 Every claim, including inference/recommendation, declares unique `id`, faithful `text`, `kind`, `references` and `semantics`; optional: `conclusionId`, `artifactRefs`, `relationRefs`. Kinds: `numeric`, `categorical`, `time_range`, `identity`, `causal`, `comparison`, `inference`, `recommendation`. Never copy the example's hypothetical stance onto a fact.
 
-References may use `evidenceRefId`, `sourceToolCallId`, `sourceRef`, `artifactId`, `sourceArtifactId`, `rowIndex`, `rowSelector`, `column`, `value`. Copy emitted `sourceToolCallId` when present; `evidenceRefId` may match repeated executions. Preserve original values/types and zero-based rows or unique row selectors. Never invent locators/units. Missing evidence: `[]`, preserving uncertainty.
+References may use `evidenceRefId`, `sourceToolCallId`, `sourceRef`, `artifactId`, `sourceArtifactId`, `rowIndex`, `rowSelector`, `column`, `value`. Copy emitted `sourceToolCallId` when present; `evidenceRefId` may match repeated executions. Preserve original values/types and zero-based rows or unique selectors. Never invent locators/units. Missing evidence: `[]`, preserving uncertainty. For successful empty results, cite only their emitted IDs; omit rowIndex/rowSelector/column/value (no row 0).
 
-`sourceRef` is a Trace/DataEnvelope alias, NEVER a source-code ID. Source-backed claims except pure `source.location` add `sourceClaimBindings` with current tool-issued IDs. Source-only claims use empty Trace `references`; mixed claims cite actual Trace cells separately. Never author `sourceUseDecision`. Bindings express candidate connections, not execution or causality; omit unused source fields.
+`sourceRef` is a Trace alias, never a source-code ID. Source-backed claims except `source.location` add `sourceClaimBindings` with issued IDs. Each binding `claimId` equals one unique claim. Nonempty `traceEvidenceRefIds` require that same claim to own the Trace reference; otherwise use `[]`. Never author `sourceUseDecision`; bindings do not prove execution or causality.
 
 `semantics` declares meaning, never verification; without it, matching references alone leave a proposition unverified:
 
@@ -44,33 +44,17 @@ References may use `evidenceRefId`, `sourceToolCallId`, `sourceRef`, `artifactId
 
 Rule boundaries:
 
-- `numeric.cell`: exactly one original cell in `scope.subjectRefs` AND an independent `numeric` proposition; `references` alone does not supply scope. For event queries, retain native row IDs and raw metrics; convert display units separately. Numeric proof cannot prove causes/advice.
+- `numeric.cell`: one original cell in `scope.subjectRefs` AND an independent `numeric` proposition; references alone do not supply scope. References retain exact raw cell values and native row IDs; evidence unit metadata stays unchanged. `semantics.numeric` states the exact proposition, in the original or an exactly equivalent allowed unit. Prose may use an exact equivalent or an explicitly marked fixed-decimal approximation (`约`, `≈`, `~`, `about`, `approximately`, or stated rounding). Convert exactly, then round to displayed decimal places; never round declarations or references. Numeric proof cannot prove causes/advice.
 - `captured.cell` and `source.location`: only `identity/categorical`, `affirmed/asserted/one/certain`; no conditions, numeric proposition, scope objects or time window.
 - `captured.cell`: `cited_rows`, exactly one semantic subject with explicit column and string/boolean/null `value`. Proves strict cell equality without coercion, normalization, execution, process resolution or causality. Numbers use `numeric.cell`.
-- `source.location`: `codebase`, exact original `source` tuple. No duplicate binding required; if supplied, exactly one same-ID binding with no Trace IDs. Empty `references`, artifact/relation refs and scope subjects. Proves returned location only, not disk existence, symbol contents, behavior, call chains, source/Trace equality, execution or causality. Never relabel facts to obtain verification.
+- `source.location`: `codebase`, exact original `source` tuple; never infer, narrow or extend its returned range. To cite a subrange, read it first and use its issued ID. No duplicate binding required; if supplied, exactly one same-ID binding with no Trace IDs. Empty `references`, artifact/relation refs and scope subjects. Proves returned location only, not disk existence, symbol contents, behavior, call chains, source/Trace equality, execution or causality. Never relabel facts to obtain verification.
+
+Allowed unit conversions only: time `ns/us/µs/μs/ms/s` (1000 ns = 1 us = 1 µs = 1 μs; 1000 us = 1 ms; 1000 ms = 1 s); frequency `Hz/kHz/MHz/GHz` (1000 per step); bytes `B/bytes/KiB/MiB/GiB` (B = bytes; 1024 per step); `ratio/%/percent` (1 ratio = 100% = 100 percent); aliases `frame/frames`, `event/events`. `count` stays `count`; other units must match verbatim. No cross-family conversion, inferred unit authority, tolerance, scientific notation, significant-figure rounding, ranges or ± under this display rule.
 
 Example: cell with authoritative `ms` metadata. Use actual IDs/columns/values for the same cell; column names do not establish units.
 
 ```json
-{
-  "id": "example:duration",
-  "text": "The observed elapsed time is 7 ms.",
-  "kind": "numeric",
-  "references": [{"evidenceRefId": "data:example_metric", "rowIndex": 0, "column": "elapsed_ms", "value": 7}],
-  "semantics": {
-    "schemaVersion": "claim_semantics@1",
-    "predicate": "numeric.cell",
-    "polarity": "affirmed",
-    "discourse": "asserted",
-    "quantifier": "one",
-    "modality": "certain",
-    "scope": {
-      "population": "cited_rows",
-      "subjectRefs": [{"evidenceRefId": "data:example_metric", "rowIndex": 0, "column": "elapsed_ms", "value": 7}]
-    },
-    "numeric": {"operator": "eq", "value": 7, "unit": "ms"}
-  }
-}
+{"id":"example:duration","text":"The observed elapsed time is 7 ms.","kind":"numeric","references":[{"evidenceRefId":"data:example_metric","rowIndex":0,"column":"elapsed_ms","value":7}],"semantics":{"schemaVersion":"claim_semantics@1","predicate":"numeric.cell","polarity":"affirmed","discourse":"asserted","quantifier":"one","modality":"certain","scope":{"population":"cited_rows","subjectRefs":[{"evidenceRefId":"data:example_metric","rowIndex":0,"column":"elapsed_ms","value":7}]},"numeric":{"operator":"eq","value":7,"unit":"ms"}}}
 ```
 
 Rules are data, not a checklist. Never reshape claims to fit a predicate. Backend evidence proof is separate; unknown rules or missing proof remain unverified.

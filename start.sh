@@ -355,8 +355,9 @@ fi
 if [ ! -f "$PROJECT_ROOT/backend/.env" ]; then
   echo "=============================================="
   echo "NOTICE: backend/.env not found."
-  echo "This is OK if Claude Code already works in this terminal."
-  echo "For direct API, Docker, or a different provider:"
+  echo "After startup, configure AI Assistant Settings > Providers."
+  echo "Claude Code login alone does not configure the Claude Agent SDK."
+  echo "Or create an env file:"
   echo "  cp backend/.env.example backend/.env"
   echo "=============================================="
 fi

@@ -6,8 +6,8 @@ import Database from 'better-sqlite3';
 import yaml from 'js-yaml';
 
 function load(name: string, id: string): any {
-  const skill = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/composite', `${name}.skill.yaml`), 'utf8')) as any;
-  return skill.steps.find((s: any) => s.id === id);
+  const skill = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills', name.startsWith('atomic/') ? '' : 'composite', `${name}.skill.yaml`), 'utf8')) as any;
+  return id === 'root' ? skill : skill.steps.find((s: any) => s.id === id);
 }
 
 function query(db: Database.Database, name: string, id: string, extra: Record<string, string> = {}): any[] {
@@ -23,8 +23,9 @@ function query(db: Database.Database, name: string, id: string, extra: Record<st
     '__process_scope.upid': '42', package: 'com.example.app', process_name: 'com.example.app', ...extra,
   };
   sql = sql.replace(/\$\{([^}]+)\}/g, (_, key: string) => {
-    if (!(key in params)) throw new Error(`Unbound parameter ${key}`);
-    return params[key];
+    const [name, fallback] = key.split('|');
+    if (!(name in params) && fallback === undefined) throw new Error(`Unbound parameter ${key}`);
+    return params[name] ?? fallback;
   });
   return db.prepare(sql).all();
 }
@@ -113,6 +114,27 @@ describe('cross-scene canonical system consumers', () => {
     } finally { db.close(); }
   });
 
+  it('reports selection performance-core percentage only with complete running topology', () => {
+    const db = fixture();
+    try {
+      const selection = () => query(db, 'selection_range_cpu_sched_summary', 'running_thread_quadrants')
+        .find(row => row.utid === 1);
+      const partial = selection();
+      expect(partial).toMatchObject({unknown_running_ms: 5, perf_core_pct: null,
+        q4a_uninterruptible_ms: 5});
+      expect(partial).not.toHaveProperty('q4a_io_blocked_ms');
+
+      db.exec('UPDATE thread_state SET dur=1 WHERE id=3');
+      expect(selection()).toMatchObject({unknown_running_ms: 0.000001, perf_core_pct: null});
+
+      db.exec('UPDATE thread_state SET dur=5000000,cpu=0,ucpu=0 WHERE id=3');
+      expect(selection()).toMatchObject({unknown_running_ms: 0, perf_core_pct: 50});
+
+      db.exec('UPDATE thread_state SET cpu=0,ucpu=0 WHERE id=1');
+      expect(selection()).toMatchObject({unknown_running_ms: 0, perf_core_pct: 0});
+    } finally { db.close(); }
+  });
+
   it.each([[5000000,10000000],[35000000,10000000],[35000000,-1]])('clips deep IO and Runnable metrics for ts=%i dur=%i without inventing event endpoints', (ts, dur) => {
     const db = fixture();
     try {
@@ -148,6 +170,74 @@ describe('cross-scene canonical system consumers', () => {
         expect.objectContaining({upid:42,utid:1,waker_thread:'unknown',waker_process:'unknown',
           wakeup_count:0,wait_span_count:1,total_sleep_ms:5,raw_max_sleep_ms:null,unfinished_wait_count:1}),
       ]);
+    } finally { db.close(); }
+  });
+
+  it.each([
+    ['atomic/startup_thread_blocking_graph', 'root'],
+    ['atomic/anr_main_thread_blocking', 'wakeup_chain'],
+  ])('%s keeps native wait/wakeup identity and clipping without inventing blockers', (name, step) => {
+    const db = fixture();
+    try {
+      db.exec(`CREATE TABLE thread_track(id INTEGER PRIMARY KEY,utid INTEGER);
+        CREATE TABLE slice(id INTEGER PRIMARY KEY,track_id INTEGER,ts INTEGER,dur INTEGER,depth INTEGER,name TEXT);
+        INSERT INTO thread_track VALUES(1,3);
+        INSERT INTO slice VALUES(1,1,10000000,15000000,0,'outer'),(2,1,20000000,2000000,1,'actual_task'),
+          (3,1,18000000,2000000,2,'ends_at_wakeup');
+        INSERT INTO process VALUES(44,103,'com.example.app:remote');
+        INSERT INTO thread VALUES(4,44,103,'remote',0),(5,42,104,'same_name',0),(6,42,105,'same_name',0);
+        DELETE FROM thread_state;
+        INSERT INTO thread_state(id,utid,ts,dur,state,blocked_function,waker_utid,irq_context) VALUES
+          (50,1,5000000,15000000,'S','futex_wait',4,NULL),
+          (51,1,20000000,1000000,'R',NULL,3,0),
+          (52,1,21000000,3000000,'D','io_schedule',NULL,NULL),
+          (53,1,24000000,1000000,'R',NULL,4,1),
+          (54,1,25000000,3000000,'S',NULL,NULL,NULL),
+          (55,1,28000000,1000000,'R',NULL,NULL,NULL),
+          (56,1,30000000,5000000,'S',NULL,NULL,NULL),
+          (57,1,35000000,1000000,'R',NULL,3,0),
+          (58,1,35000000,1000000,'R',NULL,4,0),
+          (59,1,36000000,-1,'DK',NULL,4,NULL),
+          (60,3,30000000,15000000,'S',NULL,NULL,NULL),
+          (61,3,45000000,1000000,'R',NULL,1,0),
+          (62,4,10000000,5000000,'S',NULL,NULL,NULL),
+          (63,4,15000000,1000000,'R',NULL,3,0),
+          (64,5,10000000,5000000,'S',NULL,NULL,NULL),
+          (65,6,10000000,5000000,'S',NULL,NULL,NULL);`);
+      const rows = query(db,name,step);
+      const wait = (id: number) => rows.find(row=>row.thread_state_id===id);
+      expect(wait(50)).toMatchObject({upid:42,utid:1,raw_start_ts:'5000000',raw_end_ts:'20000000',
+        start_ts:'10000000',end_ts:'20000000',left_censored:1,right_censored:0,is_unfinished:0,
+        wakeup_state_id:51,observed_waker_utid:3,waker_utid:3,waker_upid:43,wakeup_count:1,
+        wakeup_status:'observed_thread',relation_status:'observed_wakeup_not_proven_blocking_cause'});
+      expect(wait(52)).toMatchObject({observed_waker_utid:4,irq_context:1,waker_utid:null,waker_upid:null,
+        wakeup_status:'observed_irq',wakeup_count:1});
+      expect(wait(54)).toMatchObject({wakeup_status:'successor_without_wake_metadata',wakeup_count:0,waker_utid:null});
+      expect(wait(56)).toMatchObject({wakeup_status:'ambiguous_successor',wakeup_count:0,wakeup_state_id:null});
+      expect(wait(59)).toMatchObject({raw_end_ts:null,end_ts:'40000000',is_unfinished:1,right_censored:1,
+        wakeup_status:'no_in_window_wakeup',wakeup_count:0,waker_utid:null});
+      expect(wait(60)).toMatchObject({upid:43,utid:3,raw_end_ts:'45000000',end_ts:'40000000',right_censored:1,
+        wakeup_status:'no_in_window_wakeup',wakeup_count:0});
+      expect(wait(62)).toMatchObject({upid:44,utid:4,waker_utid:3,wakeup_count:1});
+      if (name.includes('startup')) {
+        expect(wait(50)).toMatchObject({total_block_ms:10,max_block_ms:10,avg_block_ms:10,block_count:1,
+          waker_current_slice:'actual_task',waker_slice_id:2,waker_slice_status:'observed_unique_deepest'});
+        expect(wait(52)).toMatchObject({waker_current_slice:'-',waker_slice_status:'not_observed'});
+        expect(wait(59).total_block_ms).toBe(4);
+        expect(wait(64).utid).not.toBe(wait(65).utid);
+        db.exec("INSERT INTO slice VALUES(4,1,20000000,3000000,1,'ambiguous_task')");
+        expect(query(db,name,step).find(row=>row.thread_state_id===50)).toMatchObject({
+          waker_current_slice:'-',waker_slice_id:null,waker_slice_status:'ambiguous_deepest'});
+      } else {
+        expect(wait(50)).toMatchObject({ts:'20000000',sleep_dur_ms:10,wait_span_count:1});
+        expect(wait(59)).toMatchObject({ts:null,sleep_dur_ms:4});
+      }
+      expect(query(db,name,step,{end_ts:'20000000'}).find(row=>row.thread_state_id===50))
+        .toMatchObject({wakeup_count:0,wakeup_status:'no_in_window_wakeup',end_ts:'20000000'});
+      expect(query(db,name,step,{end_ts:'60000000'}).find(row=>row.thread_state_id===59))
+        .toMatchObject({end_ts:'50000000',is_unfinished:1,wakeup_count:0});
+      const declared = new Set(load(name,step).display.columns.map((column: any)=>column.name));
+      for (const field of Object.keys(rows[0])) expect(declared.has(field)).toBe(true);
     } finally { db.close(); }
   });
 

@@ -46,6 +46,12 @@ Options:
 后续 `ask`、`list`、`report` 也要使用同一目录。共享 SQLite 已有 5 秒锁等待，
 独立目录用于隔离测试状态，不能代替对持续锁冲突的排查。
 
+会话标记：`✓` 已交付且核验通过或不适用；`~` 已交付但核验未完成或覆盖不全（例如结论声明无效、
+语义复核超时），不能视为已核验结论；`!` 分析未完整结束，或断言与证据不符导致质量校验失败；
+`✗` 失败。结论块下方的“断言核验”行给出已核验数量与原因；没有 findings 时置信度只是固定基线，
+文本输出不再显示。JSON/NDJSON 的 `complete` 事件带 `deliveryVerdict`
+（`completed`/`unverified`/`partial`/`failed`）。
+
 分析未完成时，CLI 显示终止原因及可用的具体诊断，并区分未生成正文与已有正文但
 质量校验失败。JSON/NDJSON 同样保留 `terminationMessage` 和 `hasConclusion`。
 `quality_gate_failed` 可能表示声明或证据绑定无效，不等同于缺少报告段落。
@@ -109,21 +115,28 @@ smp provider test system
 smp provider test <providerId> --format json
 ```
 
-CLI 配置文件和 Web UI 配置不是同一个入口。第一次使用 CLI 时，推荐先运行
-`smp config init`，然后编辑输出路径里的 env 文件，通常是
-`~/.smartperfetto/env`。没有显式传 `--env-file` 时，CLI 读取顺序是：
+CLI 配置与 Web UI 配置默认彼此独立。CLI Provider store 位于
+`<CLI home>/runtime/data/providers.json`，通常是
+`~/.smartperfetto/runtime/data/providers.json`；源码 Web 后端默认使用
+`backend/data/providers.json`。只有两个进程显式使用同一个
+`SMARTPERFETTO_BACKEND_DATA_DIR` 时，网页 Provider 修改才会作用于 CLI。
+
+第一次使用 CLI 时，推荐先运行 `smp config init`，然后编辑输出路径里的 env 文件，
+通常是 `~/.smartperfetto/env`。没有显式传 `--env-file` 时，CLI 读取顺序是：
 
 1. 包内或源码目录的 `backend/.env`。
 2. `~/.smartperfetto/env`，覆盖前面的值。
 
-如果传了 `--env-file /path/to/env`，CLI 只读取这个文件。和 Web/Docker 一样，
-首次配置只启用一个 provider 来源：本机 Claude 登录态、一个
-Claude-compatible env block，或一个 OpenAI-compatible env block。
+如果传了 `--env-file /path/to/env`，CLI 只读取这个文件。首次配置只启用一个 CLI
+provider 来源：当前 CLI store 中已有的 active profile、一个 Claude-compatible env
+block，或一个 OpenAI-compatible env block。`smp provider list` 和
+`smp provider test <providerId>` 只检查该 CLI store；CLI 当前不提供 profile 的
+add、edit 或 activate 命令。
 
 Runtime 判断按实际选择的 provider/runtime 执行：
 
-- Claude Agent SDK：允许 API key、Anthropic-compatible proxy、Bedrock、
-  Vertex，也允许本地 Claude 登录态 fallback。
+- Claude Agent SDK：需要 API key/auth token 或 Bedrock/Vertex 配置；仅有代理地址或
+  Claude Code 登录态时，运行前校验、doctor 和 system provider test 均不通过。
 - OpenAI Agents SDK：需要 `OPENAI_API_KEY`，或本地
   `localhost` / `127.0.0.1` / `0.0.0.0` OpenAI-compatible endpoint。
 - Ollama provider 默认走 OpenAI-compatible runtime。
@@ -334,7 +347,9 @@ CLI 文件存储在：
         └── 001.html
 ```
 
-两组 source sidecar 只在本轮有 canonical safe source provenance 时生成。最新文件会随新 turn 替换；一次无源码 turn 会清除过期的“最新” sidecar，但不删除历史 turn 文件。JSON、Markdown 和 HTML 只保留安全决策、相对 `CodeRef` 与 mechanism binding，不包含绝对 root、snippet、检索 query 或自由文本 binding reason。
+两组 source sidecar 只在本轮有 canonical safe source provenance 时生成。最新文件会随新 turn 替换；一次无源码 turn 会清除过期的“最新” sidecar，但不删除历史 turn 文件。这两组来源元数据只保留安全决策、相对 `CodeRef` 与 mechanism binding，不包含绝对 root、snippet、检索 query 或自由文本 binding reason。分析正文与正式声明可以保留 `provider_send` 已授权的源码摘录；密钥、私有 canary 和绝对 root 仍受输出投影保护。
+
+`conclusion.md` 与 `turns/NNN.md` 保留正文记录。`analysis-evidence.json` 和 `turns/NNN.analysis-evidence.json` 独立保存与同一会话、回合及候选正文绑定的呈现数据。终端、`show` 和 Markdown 导出完整显示声明、引用、核验问题和源码关联；JSON/NDJSON 同时提供结构化详情。损坏或错配的证据包显示为不可用，不借用其他回合的验证结果。这些文件用于展示，不重新签发证据或执行验证。
 
 `ui-action-proposals.json` 只保存证据回链和 UI 提案元数据，用于报告/后续轮次
 追溯；CLI 不会自动执行跳转、打开表或固定证据。

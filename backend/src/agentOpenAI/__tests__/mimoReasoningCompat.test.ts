@@ -3,6 +3,8 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import { describe, expect, it, jest } from '@jest/globals';
+import {OpenAIChatCompletionsModel, withTrace} from '@openai/agents';
+import OpenAI from 'openai';
 import {
   createMimoReasoningContentFetch,
   normalizeMimoChatCompletionPayload,
@@ -107,6 +109,101 @@ describe('reasoning_content compatibility', () => {
     });
     expect(payload.messages[1]).not.toHaveProperty('reasoning');
     expect(payload.messages[2]).toMatchObject({ role: 'tool', tool_call_id: 'call_1' });
+  });
+
+  it('removes only a closed-shape SDK reasoning-only message from the wire', async () => {
+    const history: any[] = [
+      {role: 'user', content: 'Inspect the selected interval.'},
+      {type: 'function_call', callId: 'call_1', name: 'execute_sql', arguments: '{}'},
+      {type: 'function_call_result', callId: 'call_1', output: '{"ok":true}'},
+      {
+        type: 'reasoning',
+        content: [],
+        rawContent: [{type: 'reasoning_text', text: 'Need a bounded final answer.'}],
+      },
+      {role: 'user', content: 'Complete the final answer.'},
+    ];
+    const originalHistory = structuredClone(history);
+    let captured: any;
+    const baseFetch = jest.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const body = input instanceof Request ? await input.clone().text() : init?.body;
+      captured = JSON.parse(String(body));
+      return new Response(JSON.stringify({
+        id: 'chatcmpl-reasoning-history',
+        choices: [{
+          index: 0,
+          finish_reason: 'stop',
+          message: {role: 'assistant', content: 'Complete.'},
+        }],
+        created: 0,
+        model: 'deepseek-flash',
+        object: 'chat.completion',
+      }), {headers: {'content-type': 'application/json'}});
+    });
+    const client = new OpenAI({
+      apiKey: 'test-key',
+      baseURL: 'https://api.deepseek.com/v1',
+      fetch: createMimoReasoningContentFetch(baseFetch as any) as any,
+    });
+    const model = new OpenAIChatCompletionsModel(client, 'deepseek-flash');
+
+    await withTrace('MiMo reasoning-only wire normalization test', async () => {
+      await model.getResponse({
+        input: history,
+        systemInstructions: '',
+        modelSettings: {},
+        tools: [],
+        handoffs: [],
+        outputType: 'text',
+        tracing: false,
+      } as any);
+    });
+
+    expect(history).toEqual(originalHistory);
+    expect(captured.messages).toEqual([
+      {role: 'user', content: 'Inspect the selected interval.'},
+      expect.objectContaining({
+        role: 'assistant',
+        content: null,
+        tool_calls: [expect.objectContaining({id: 'call_1'})],
+      }),
+      {role: 'tool', tool_call_id: 'call_1', content: '{"ok":true}'},
+      {role: 'user', content: 'Complete the final answer.'},
+    ]);
+  });
+
+  it('also removes the closed SDK shape with explicit empty tool_calls', () => {
+    const payload = {messages: [{
+      role: 'assistant',
+      content: null,
+      reasoning_content: 'Need more evidence.',
+      tool_calls: [],
+    }]};
+
+    expect(normalizeMimoChatRequestPayload(payload)).toBe(true);
+    expect(payload.messages).toEqual([]);
+  });
+
+  it.each([
+    ['refusal', {refusal: 'Cannot comply'}],
+    ['audio', {audio: {id: 'audio_1'}}],
+    ['name', {name: 'assistant-name'}],
+    ['tool call id', {tool_call_id: 'call_1'}],
+    ['unknown field', {provider_extension: 'preserve-me'}],
+    ['non-empty content', {content: 'Visible answer'}],
+    ['array content', {content: []}],
+    ['tool calls', {tool_calls: [{id: 'call_1'}]}],
+  ] as const)('preserves a reasoning assistant with %s', (_label, extra) => {
+    const message = {
+      role: 'assistant',
+      content: null,
+      reasoning_content: 'Need more evidence.',
+      ...extra,
+    };
+    const payload = {messages: [message]};
+
+    expect(normalizeMimoChatRequestPayload(payload)).toBe(false);
+    expect(payload.messages).toEqual([message]);
   });
 
   it('maps MiMo reasoning_content responses into SDK reasoning', () => {

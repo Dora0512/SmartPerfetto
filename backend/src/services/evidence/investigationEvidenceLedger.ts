@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 
 import type {RuntimeToolInvocationEvent} from '../../agentRuntime/runtimeToolObserver';
+import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../finalSemanticLimits';
 import type {EvidenceReadRecord, EvidenceReadViewOptions} from './evidenceReadView';
 import {capturedEvidenceTable, evidenceCaptureHash, freezeEvidenceValue,
   type CapturedFieldSemantics, type EvidenceScalar, type EvidenceTableWitness} from './evidenceCapture';
@@ -169,9 +170,9 @@ export interface CompactInvestigationEvidenceSnapshot {
 }
 
 /** Bounded provider projection. Cohorts are kept whole and never selected by success or value. */
-export function compactInvestigationEvidence(snapshot: InvestigationEvidenceSnapshot,
-  maxBytes = 64 * 1024): CompactInvestigationEvidenceSnapshot | undefined {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > 64 * 1024) return undefined;
+function compactInvestigationEvidenceWithin(snapshot: InvestigationEvidenceSnapshot,
+  maxBytes: number, ceilingBytes: number): CompactInvestigationEvidenceSnapshot | undefined {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > ceilingBytes) return undefined;
   const groups = new Map<string, CompactInvestigationEvidenceRecord[]>();
   for (const record of snapshot.records) {
     const {recordId, captureId, domain, metricId, status, origin, originRunId, traceId, traceSide,
@@ -199,6 +200,18 @@ export function compactInvestigationEvidence(snapshot: InvestigationEvidenceSnap
     view = candidate;
   }
   return freezeEvidenceValue(view);
+}
+
+/** Preserve the existing general provider-view contract and its 64 KiB ceiling. */
+export function compactInvestigationEvidence(snapshot: InvestigationEvidenceSnapshot,
+  maxBytes = 64 * 1024): CompactInvestigationEvidenceSnapshot | undefined {
+  return compactInvestigationEvidenceWithin(snapshot, maxBytes, 64 * 1024);
+}
+
+/** Semantic review may use the shared total-input ceiling; final prompt sizing remains authoritative. */
+export function compactInvestigationEvidenceForSemantic(snapshot: InvestigationEvidenceSnapshot,
+  maxBytes: number): CompactInvestigationEvidenceSnapshot | undefined {
+  return compactInvestigationEvidenceWithin(snapshot, maxBytes, FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
 }
 
 /** The caller supplies retained private witnesses, never serialized artifact payloads. */
