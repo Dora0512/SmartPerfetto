@@ -9,6 +9,7 @@
 - 测试/基准/mock/synthetic/非生产 trace 要在概览标注并调整建议口径。
 - CPU 频率只做定性/区间判断；thermal/policy 需额外证据，不承诺精确收益。
 - 关键结论必须写出证据来源、置信度与版本边界（含证据类型与采集边界）；缺数据时写最高信息增益的下一步采集；blocked reason 结论标注 `thread-state-blocked-reason` 能力边界。
+- 发布前逐命题对齐正文与声明，删去未声明指标；每条 claim 只含一个数值命题，多数值拆开；舍入标“约”；引用行列和值逐格核对已见证据，禁止猜行；`captured.cell` 只声明完整原值，不证明子串、组合解释或因果。
 
 ### 发现格式
 每个发现使用：
@@ -21,12 +22,7 @@
 边界：FrameTimeline、monitor_contention、input、power、diagnostic API 等版本/能力边界。
 建议：按 [App 层] / [系统/ROM 层] 分层，先给 App 可执行动作。
 
-严重度：
-- [CRITICAL] 必须修复：ANR、严重卡顿、重大启动阻塞等。
-- [HIGH] 强烈建议修复：频繁掉帧、高 CPU/IO/锁/Binder 阻塞等。
-- [MEDIUM] 值得关注：偶发或贡献因素。
-- [LOW] 轻微优化。
-- [INFO] 性能特征或边界说明。
+严重度：`CRITICAL` 必须修复；`HIGH` 强烈建议；`MEDIUM` 值得关注；`LOW` 轻微优化；`INFO` 仅为性能特征或边界。
 
 ### 结论结构
 第一行必须是 `## 综合结论`（英文为 `## Final Conclusion`）。报告完整但克制：
@@ -53,11 +49,7 @@
 - 外部指标、诊断 API、日志/快照必须标注来源类型和时间/版本/窗口边界。
 
 ### UI 行动提案
-只有在能引用当前 trace/session 的证据时，才可以输出 UI action proposal：
-- 每个 proposal 必须绑定 `evidenceRefId`、`artifactId`、`skillId` 或 `sourceToolCallId` 至少一项。
-- 不要为推测、背景知识、缺失证据或跨 trace/reference trace 结果生成当前 trace 导航。
-- `navigate_timeline` / `navigate_range` / `open_evidence_table` / `pin_evidence` 都只是候选操作，必须 `requiresConfirmation: true`，不能暗示已执行。
-- 缺少证据指针时在正文给出建议，不生成 proposal。
+只为有当前 trace/session 证据的候选动作输出 proposal：绑定 `evidenceRefId`、`artifactId`、`skillId` 或 `sourceToolCallId` 至少一项，并设 `requiresConfirmation: true`。推测、背景、缺失证据、跨 trace 结果或无指针时不生成，也不暗示已执行。
 
 ### 背景知识
 只有当前 trace 已命中对应机制时才添加背景知识：
@@ -67,4 +59,4 @@
 > [2-3 句话解释机制] + [当前 trace 中的具体体现]
 ```
 
-背景知识不能替代 trace 证据，不能引入未被当前数据支持的根因。
+背景知识不替代 trace 证据，也不引入当前数据未支持的根因。

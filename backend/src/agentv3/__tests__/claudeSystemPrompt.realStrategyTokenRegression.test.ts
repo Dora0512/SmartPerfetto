@@ -139,6 +139,16 @@ describe('typed prompt with real strategy assets', () => {
     }]}).claimResults[0].deterministicProof.status).toBe('rejected');
   });
 
+  it('keeps the final answer preflight aligned with the strict semantic reviewer', () => {
+    const template = stripTemplateComments(loadPromptTemplate('prompt-output-format')!);
+    expect(template).toContain('删去未声明指标');
+    expect(template).toContain('每条 claim 只含一个数值命题');
+    expect(template).toContain('舍入标“约”');
+    expect(template).toContain('禁止猜行');
+    expect(template).toContain('`captured.cell` 只声明完整原值');
+    expect(template).toContain('不证明子串、组合解释或因果');
+  });
+
   it('keeps startup system conclusions scoped to each covered dimension', () => {
     const startup = getRegisteredScenes().find(scene => scene.scene === 'startup')!;
     const requirement = startup.finalReportContract?.requiredSections.find(item => item.id === 'audience_recommendations');
