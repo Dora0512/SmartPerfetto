@@ -11,6 +11,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Commit prefixes follow [Conventional Commits](https://www.conventionalcommits.org/).
 Detailed commit-level history is available via `git log`.
 
+## [1.11.0] - 2026-09-16
+
+### Added
+- Evidence-backed final delivery: conclusion claims are checked against retained
+  execution captures and one bounded, no-tool semantic review of the full answer.
+  Web, CLI, HTML reports and snapshots show each claim's verification result,
+  including failed and unchecked claims, while keeping the conclusion body intact.
+- CLI session markers (`✓`, `~`, `!`, `✗`) and `deliveryVerdict` in JSON/NDJSON
+  `complete` events. CLI turns persist their evidence bundle so exported reports
+  keep claim verification.
+- `AGENT_MAX_RUN_TIMEOUT_MS` / `OPENAI_MAX_RUN_TIMEOUT_MS`: the OpenAI runtime
+  extends its initial deadline while tools return data or the provider is still
+  producing output, and reserves one no-tool call to deliver a limited
+  `partial` / `timeout` conclusion from returned data.
+
+### Changed
+- Startup analysis collects scheduling, blocking, CPU frequency and main-thread
+  state evidence against explicit investigation requirements, and final reports
+  keep exact values or mark rounded ones.
+- All five runtimes share one conclusion declaration protocol, and MCP tool
+  descriptions are loaded from strategy templates.
+- Missing-credential errors, `smp doctor` and runtime health include setup
+  guidance. The CLI Provider store stays separate from a source Web backend
+  unless both use the same `SMARTPERFETTO_BACKEND_DATA_DIR`.
+
+### Removed
+- The Claude Agent SDK runtime no longer falls back to a local Claude Code login,
+  and `ANTHROPIC_BASE_URL` alone no longer counts as configured, including for
+  gateways that previously worked without a key. Analysis now stops early with
+  setup guidance instead. To migrate, add a provider under
+  **AI Assistant Settings → Providers**, or set `ANTHROPIC_API_KEY` /
+  `ANTHROPIC_AUTH_TOKEN` (plus `ANTHROPIC_BASE_URL` for a compatible gateway),
+  Bedrock or Vertex configuration in `backend/.env`, `~/.smartperfetto/env` or
+  the Docker env.
+
+### Fixed
+- Delivery diagnostics name semantic review failures (answer text that differs
+  from its declared claim, undeclared assertions) instead of reporting an
+  unclassified check failure.
+- CLI source supplements rebuild the turn evidence fingerprint, so later report
+  export no longer reports valid evidence as mismatched.
+- Qoder provider connection tests accept a local `qodercli` login, matching the
+  runtime.
+
+### Known issues
+- With real providers, long startup and scrolling reports are frequently
+  delivered as `partial`: the semantic review rejects rounded values written
+  without an approximation marker and assertions without a matching claim
+  declaration. The answer is still delivered with the failing checks named;
+  treat it as unverified.
+
 ## [1.10.0] - 2026-09-11
 
 ### Added
@@ -515,7 +566,8 @@ Detailed commit-level history is available via `git log`.
 - HTML report generation and CSV / JSON export.
 - AGPL v3.0 licensing throughout.
 
-[Unreleased]: https://github.com/Gracker/SmartPerfetto/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/Gracker/SmartPerfetto/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.8.4...v1.9.0
 [1.8.4]: https://github.com/Gracker/SmartPerfetto/compare/v1.8.3...v1.8.4
