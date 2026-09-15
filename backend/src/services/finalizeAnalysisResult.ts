@@ -21,6 +21,7 @@ import {runClaimVerification, collectMatchedTraceEvidenceRefIdsByClaimId,
   collectVerifiedTraceOccurrenceRefIdsByClaimId} from './verifier/claimVerificationRunner';
 import {assessFinalSemantics, buildFinalSemanticPrompt, FINAL_SEMANTIC_INPUT_BYTE_LIMIT,
   type FinalSemanticAssessment, type FinalSemanticSnapshot} from './finalSemanticAssessment';
+import {SEMANTIC_UNDECLARED_CLAIM_ISSUE_CODE, semanticClaimIssueCode} from './finalSemanticIssueCodes';
 import {applyFinalResultQualityGate, type FinalResultComparisonIdentity, type FinalResultQualityIssue} from './finalResultQualityGate';
 import {projectCodeAwareStructuredText, withOwnerCodeAwareProjection} from './security/codeAwareOutputRegistry';
 import {projectConclusionSemanticInput} from './security/conclusionProtocolProjection';
@@ -161,7 +162,7 @@ function joinClaimVerification(input: {
     }
     if (bound && review?.consistency === 'inconsistent') {
       for (const issue of review.issues) issues.push({claimId: id, severity: 'error',
-        code: `semantic_${issue.code}`, message: `Claim ${id}: ${issue.code}`});
+        code: semanticClaimIssueCode(issue.code), message: `Claim ${id}: ${issue.code}`});
       return {...prior, status: 'unsupported'};
     }
     if (!complete || review?.consistency !== 'consistent') return {...prior, status: 'partial'};
@@ -174,7 +175,7 @@ function joinClaimVerification(input: {
       prior.propositionCoverage?.status === 'complete' ? 'verified' : 'partial'};
   });
   if (bound && semantic?.omissions.length) issues.push({claimId: '', severity: 'error',
-    code: 'semantic_undeclared_claim', message: 'The answer contains assertions missing from its declared claims.'});
+    code: SEMANTIC_UNDECLARED_CLAIM_ISSUE_CODE, message: 'The answer contains assertions missing from its declared claims.'});
   const unsupportedClaimCount = claimResults.filter(claim => claim.status === 'unsupported').length;
   const failed = unsupportedClaimCount > 0 || issues.some(issue => issue.severity === 'error');
   const passed = !failed && complete && semantic?.omissions.length === 0 &&

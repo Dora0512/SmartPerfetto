@@ -12,6 +12,7 @@ import {assessFinalInvestigationContract, type FinalInvestigationContractResult}
 import {verifySourceClaimBindingsForResult} from './codebase/sourceClaimVerifier';
 import {isUnusedSourceDecision} from './codebase/sourceUseDecision';
 import {assessScrollingJankClaimBoundary} from './scrollingJankClaimBoundary';
+import {isSemanticClaimIssueCode, SEMANTIC_UNDECLARED_CLAIM_ISSUE_CODE} from './finalSemanticIssueCodes';
 import type {IdentityResolutionV1} from '../types/identityContract';
 import {
   analysisDeliveryFingerprint,
@@ -457,12 +458,19 @@ function describeContradictedClaims(
     if (proof?.status === 'rejected' && proof.reason !== 'binding_ineligible') rejectedPropositionIds.add(claim.claimId);
   }
   for (const id of bindingIds) missingIds.delete(id);
+  const semanticInconsistentIds = new Set(verification.issues
+    .filter(issue => issue.severity === 'error' && isSemanticClaimIssueCode(issue.code) && claimIds.has(issue.claimId))
+    .map(issue => issue.claimId));
+  const undeclaredAssertions = verification.issues.some(issue =>
+    issue.severity === 'error' && issue.code === SEMANTIC_UNDECLARED_CLAIM_ISSUE_CODE);
   const details = [
     ...(bindingIds.size ? [`${bindingIds.size} 条断言的声明或绑定无效，相关断言未通过核验准入`] : []),
     ...(globalBindingFailure ? ['声明或绑定校验存在未关联到具体断言的错误'] : []),
     ...(mismatchedIds.size ? [`${mismatchedIds.size} 条断言的引用值与证据不符`] : []),
     ...(rejectedPropositionIds.size ? [`${rejectedPropositionIds.size} 条断言的命题未通过确定性证明`] : []),
     ...(missingIds.size ? [`${missingIds.size} 条断言的引用未找到所需证据`] : []),
+    ...(semanticInconsistentIds.size ? [`${semanticInconsistentIds.size} 条断言的正文表述与其声明不一致`] : []),
+    ...(undeclaredAssertions ? ['正文包含未声明的断言'] : []),
   ];
   return `${details.length ? details.join('；') : '断言核验存在未通过的检查，具体原因尚未归类'}；不能作为已核验结论交付。`;
 }

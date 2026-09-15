@@ -3472,6 +3472,17 @@ describe('a contradicted claim degrades full mode, not only quick mode', () => {
     expect(text).toBe('1 条断言的引用值与证据不符；不能作为已核验结论交付。');
   });
 
+  it('classifies semantic review inconsistencies per claim and body omissions', () => {
+    const text = failedDiagnostic({schemaVersion: 'claim_verifier@2', claimResults: [
+      {claimId: 'c:ttid', status: 'unsupported', referenceCells: [{status: 'matched'}]},
+    ], issues: [
+      {claimId: 'c:ttid', severity: 'error', code: 'semantic_numeric_mismatch', message: 'arbitrary'},
+      {claimId: 'c:ttid', severity: 'error', code: 'semantic_scope_mismatch', message: 'arbitrary'},
+      {claimId: '', severity: 'error', code: 'semantic_undeclared_claim', message: 'arbitrary'},
+    ]});
+    expect(text).toBe('1 条断言的正文表述与其声明不一致；正文包含未声明的断言；不能作为已核验结论交付。');
+  });
+
   it('describes unclassified failure without inventing a count or missing evidence', () => {
     const text = failedDiagnostic({schemaVersion: 'claim_verifier@2', checkedClaimCount: 0, unsupportedClaimCount: 9,
       claimResults: [], issues: [{claimId: '', severity: 'error', code: 'unknown_error_code', message: '引用的证据行或列未找到'}]});

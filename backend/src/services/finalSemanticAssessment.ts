@@ -23,6 +23,8 @@ import type {InvestigationContentAssessment} from '../types/analysisInvestigatio
 import {compactInvestigationEvidenceForSemantic,
   type CompactInvestigationEvidenceSnapshot} from './evidence/investigationEvidenceLedger';
 import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT, FINAL_SEMANTIC_OUTPUT_BYTE_LIMIT} from './finalSemanticLimits';
+import {SEMANTIC_ISSUE_CODES, type SemanticIssueCode} from './finalSemanticIssueCodes';
+export type {SemanticIssueCode} from './finalSemanticIssueCodes';
 import {expandSemanticSourceSnapshot} from './evidence/semanticSourceSnapshot';
 export {FINAL_SEMANTIC_INPUT_BYTE_LIMIT, FINAL_SEMANTIC_OUTPUT_BYTE_LIMIT} from './finalSemanticLimits';
 
@@ -73,12 +75,6 @@ interface SemanticLocationCatalog {
   };
   readonly locations: Readonly<Record<string, SemanticContentLocation>>;
 }
-const ISSUE_CODES = [
-  'kind_mismatch', 'predicate_mismatch', 'polarity_mismatch', 'discourse_mismatch',
-  'modality_mismatch', 'quantifier_mismatch', 'scope_mismatch', 'numeric_mismatch',
-  'declaration_not_expressed', 'unclear_semantics',
-] as const;
-export type SemanticIssueCode = typeof ISSUE_CODES[number];
 export interface SemanticClaimAssessment {
   readonly claimId: string;
   readonly consistency: 'consistent' | 'inconsistent' | 'unknown';
@@ -489,7 +485,7 @@ function parseResponseStrict(
     if (!locations) return invalidResponse('claim', 'invalid_location', {ordinal: index + 1});
     const issues: Array<{code: SemanticIssueCode; contentLocations: SemanticContentLocation[]}> = [];
     for (const issue of item.issues) {
-      if (!record(issue) || !keys(issue, ['code', 'contentLocations']) || !member(issue.code, ISSUE_CODES)) {
+      if (!record(issue) || !keys(issue, ['code', 'contentLocations']) || !member(issue.code, SEMANTIC_ISSUE_CODES)) {
         return invalidResponse('claim', 'invalid_shape', {ordinal: index + 1});
       }
       const issueLocations = parseLocations(issue.contentLocations, body, locationFormat, locationCatalog);
