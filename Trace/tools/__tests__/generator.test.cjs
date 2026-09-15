@@ -69,56 +69,68 @@ test('source-analysis ground truth requires executable marker, file read, and ca
   assert.ok(groundTruth.sourceLines.policyLine < groundTruth.sourceLines.endLine);
   assert.ok(groundTruth.sourceLines.endLine < groundTruth.sourceLines.readLine);
 
-  const commentOnlyRead = source.replace('return policyFile.readText()',
+  const commentOnlyRead = mutateSource(source, 'return policyFile.readText()',
     '// return policyFile.readText()\n    return "startup-policy"');
   assert.throws(() => parseSourceAnalysisGroundTruth(commentOnlyRead), /File\.readText call/);
-  const stringOnlyBegin = source.replace('Trace.beginSection(TRACE_SOURCE_MARKER)',
+  const stringOnlyBegin = mutateSource(source, 'Trace.beginSection(TRACE_SOURCE_MARKER)',
     'val ignoredMarkerCall = "Trace.beginSection(TRACE_SOURCE_MARKER)"');
   assert.throws(() => parseSourceAnalysisGroundTruth(stringOnlyBegin), /TRACE_SOURCE_MARKER begin/);
-  const missingCaller = source.replace('StartupHooks.initializeOnMainThread(policyFile)',
+  const missingCaller = mutateSource(source, 'StartupHooks.initializeOnMainThread(policyFile)',
     '// StartupHooks.initializeOnMainThread(policyFile)');
   assert.throws(() => parseSourceAnalysisGroundTruth(missingCaller), /Application startup caller/);
   for (const decoy of [
-    source.replace('Trace.beginSection(TRACE_SOURCE_MARKER)',
+    mutateSource(source, 'Trace.beginSection(TRACE_SOURCE_MARKER)',
       'val decoy = """prefix " Trace.beginSection(TRACE_SOURCE_MARKER) " suffix"""'),
-    source.replace('return policyFile.readText()',
+    mutateSource(source, 'return policyFile.readText()',
       'val decoy = """policyFile.readText()"""\n    return "startup-policy"'),
-    source.replace('StartupHooks.initializeOnMainThread(policyFile)',
+    mutateSource(source, 'StartupHooks.initializeOnMainThread(policyFile)',
       'val decoy = """StartupHooks.initializeOnMainThread(policyFile)"""'),
   ]) {
     assert.throws(() => parseSourceAnalysisGroundTruth(decoy), /Kotlin raw strings are not allowed/);
   }
-  const callerOutsideOnCreate = source
-    .replace('StartupHooks.initializeOnMainThread(policyFile)', '// moved outside onCreate')
-    .replace('StartupHooks.onFirstFrame()',
-      'StartupHooks.initializeOnMainThread(policyFile)\n    StartupHooks.onFirstFrame()');
+  const callerOutsideOnCreate = mutateSource(
+    mutateSource(source, 'StartupHooks.initializeOnMainThread(policyFile)', '// moved outside onCreate'),
+    'StartupHooks.onFirstFrame()',
+    'StartupHooks.initializeOnMainThread(policyFile)\n    StartupHooks.onFirstFrame()',
+  );
   assert.throws(() => parseSourceAnalysisGroundTruth(callerOutsideOnCreate), /Application startup caller/);
-  const firstFrameBeginOutside = source
-    .replace('Trace.beginSection(FIRST_FRAME_TRACE_MARKER)', '// moved outside onFirstFrame')
-    .replace('fun onFirstFrame() {', 'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)\n\n  fun onFirstFrame() {');
+  const firstFrameBeginOutside = mutateSource(
+    mutateSource(source, 'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)', '// moved outside onFirstFrame'),
+    'fun onFirstFrame() {',
+    'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)\n\n  fun onFirstFrame() {',
+  );
   assert.throws(() => parseSourceAnalysisGroundTruth(firstFrameBeginOutside), /synthetic first-frame begin/);
-  const missingFirstFrameEnd = source.replace(
+  const missingFirstFrameEnd = mutateSource(source,
     'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)\n    Trace.endSection()',
     'Trace.beginSection(FIRST_FRAME_TRACE_MARKER)',
   );
   assert.throws(() => parseSourceAnalysisGroundTruth(missingFirstFrameEnd), /first-frame Trace\.endSection/);
-  assert.throws(() => parseSourceAnalysisGroundTruth(source.replace('import android.os.Trace', '')), /Trace import/);
-  assert.throws(() => parseSourceAnalysisGroundTruth(source.replace('import java.io.File', '')), /File import/);
-  assert.throws(() => parseSourceAnalysisGroundTruth(source.replace(
+  assert.throws(() => parseSourceAnalysisGroundTruth(mutateSource(source, 'import android.os.Trace', '')), /Trace import/);
+  assert.throws(() => parseSourceAnalysisGroundTruth(mutateSource(source, 'import java.io.File', '')), /File import/);
+  assert.throws(() => parseSourceAnalysisGroundTruth(mutateSource(source,
     'val policyFile = File(filesDir, "startup-policy.txt")',
     'val policyFile = filesDir',
   )), /policy File construction/);
-  const endBeforeFinally = source.replace(
+  const endBeforeFinally = mutateSource(source,
     '} finally {\n      Trace.endSection()',
     'Trace.endSection()\n    } finally {',
   );
   assert.throws(() => parseSourceAnalysisGroundTruth(endBeforeFinally), /marker must enclose/);
-  const endAfterFinally = source.replace(
+  const endAfterFinally = mutateSource(source,
     '} finally {\n      Trace.endSection()\n    }',
     '} finally {\n      check(TRACE_SOURCE_MARKER.isNotEmpty())\n    }\n    Trace.endSection()',
   );
   assert.throws(() => parseSourceAnalysisGroundTruth(endAfterFinally), /marker must enclose/);
 });
+
+/** Edit the fixture in its checkout's native line ending; a no-op edit would pass vacuously. */
+function mutateSource(source, search, replacement) {
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const nativeSearch = search.replaceAll('\n', eol);
+  const mutated = source.replace(nativeSearch, () => replacement.replaceAll('\n', eol));
+  assert.notEqual(mutated, source, `fixture edit did not apply: ${JSON.stringify(search)}`);
+  return mutated;
+}
 
 function fixtureScenario() {
   return {
