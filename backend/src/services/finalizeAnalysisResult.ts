@@ -34,7 +34,7 @@ import {isUnusedSourceDecision, type SourceExecutionScopeV1, type SourceUseDecis
 import {projectOwnerClaimVerification, projectOwnerClaimSupport,
   projectOwnerConclusionContract} from './security/privateAnalysisProjection';
 import {resolveAnalysisInvestigationRequirements} from '../agentRuntime/analysisInvestigationRequirements';
-import {assessInvestigationAcquisition} from './finalInvestigationContractGate';
+import {assessInvestigationAcquisition, assessLedgerAcquisition} from './finalInvestigationContractGate';
 import type {ResolvedAnalysisInvestigationRequirements} from '../types/analysisInvestigation';
 import type {FinalInvestigationAssessment} from '../types/analysisInvestigationAssessment';
 
@@ -210,21 +210,33 @@ function semanticReportAssessment(input: {
 }
 
 /** The only asynchronous final-verification boundary; all acquisition belongs to the run. */
-function semanticInvestigationAssessment(input: {
+/**
+ * Build the investigation assessment.
+ *
+ * `semantic` is optional because the content rows need the final review and
+ * that review is exactly what is missing on the runs worth catching: a
+ * conclusion that excludes a mechanism it never measured. Without the review
+ * the content side stays `unavailable`, and the ledger-derived acquisition
+ * rows are still produced, so the coverage question is answered either way.
+ */
+function buildInvestigationAssessment(input: {
   candidate: AnalysisCandidateIdentity; result: AnalysisResult; context: RuntimeFinalizationContext;
-  evidenceFingerprint: string; requirements: ResolvedAnalysisInvestigationRequirements; semantic: FinalSemanticAssessment;
+  evidenceFingerprint: string; requirements: ResolvedAnalysisInvestigationRequirements; semantic?: FinalSemanticAssessment;
 }): FinalInvestigationAssessment {
   const {candidate, result, context, requirements, semantic} = input;
-  const bound = sameAnalysisCandidate(semantic.binding?.canonicalCandidate, candidate, result.conclusion);
-  const investigation = semantic.investigation;
-  return {schemaVersion: 1, binding: {...candidate,
+  const bound = !!semantic && sameAnalysisCandidate(semantic.binding?.canonicalCandidate, candidate, result.conclusion);
+  const investigation = semantic?.investigation;
+  const ledgerAcquisition = requirements.status === 'resolved'
+    ? assessLedgerAcquisition(requirements.requirements, context.investigationEvidence) : [];
+  return {schemaVersion: 1, ...(ledgerAcquisition.length ? {ledgerAcquisition} : {}), binding: {...candidate,
     conclusionContractFingerprint: analysisDeliveryFingerprint(result.conclusionContract),
     evidenceFingerprint: input.evidenceFingerprint, requirementsFingerprint: analysisDeliveryFingerprint(requirements),
     registryFingerprint: context.strategyRegistry.registryFingerprint,
     intentFingerprint: analysisDeliveryFingerprint(context.turnIntent),
     ledgerFingerprint: analysisDeliveryFingerprint(context.investigationEvidence ?? null),
     evidenceRecordsFingerprint: analysisDeliveryFingerprint(context.investigationEvidence?.records ?? [])},
-    status: !bound ? 'not_checked' : semantic.status === 'unavailable' || semantic.status === 'not_checked'
+    status: !semantic ? 'unavailable' : !bound ? 'not_checked'
+      : semantic.status === 'unavailable' || semantic.status === 'not_checked'
       ? semantic.status : semantic.coverage.body !== 'complete' ? 'coverage_incomplete' : investigation?.status ?? 'not_checked',
     evidenceRecords: context.investigationEvidence?.records,
     requirements: bound ? (investigation?.requirements ?? []).map(row => {
@@ -414,7 +426,7 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
         verificationFingerprint: analysisDeliveryFingerprint(result.sourceClaimVerificationResult)} : undefined,
       reportRequirements: requirements, caseRetrieval,
       investigationRequirements, investigationEvidence: context?.investigationEvidence,
-      investigationAssessment: context && semantic && investigationRequirements ? semanticInvestigationAssessment({
+      investigationAssessment: context && investigationRequirements ? buildInvestigationAssessment({
         candidate, result, context, evidenceFingerprint, requirements: investigationRequirements, semantic}) : undefined,
       reportAssessment: context && semantic ? semanticReportAssessment({candidate, result, context,
         evidenceFingerprint, requirements, caseRetrieval, semantic}) : undefined};

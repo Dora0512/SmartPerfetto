@@ -600,8 +600,11 @@ steps:
       insights:
         - condition: "jank_rate > 10"
           template: "感知掉帧率 {{jank_rate}}% 较高，需要优化"
+        # A stuffing share does not by itself say which side produced it: a slow
+        # consumer and an app that submits ahead of the queue look the same here.
+        # State the observation and the fork, and name the skill that separates them.
         - condition: "buffer_stuffing_rate > 50"
-          template: "Buffer Stuffing 占比 {{buffer_stuffing_rate}}%，管线背压显著（非 App 问题）"
+          template: "Buffer Stuffing 占比 {{buffer_stuffing_rate}}%，帧呈现被队列推迟为主；需区分消费端回收慢与生产端提交节奏，用 consumer_jank_detection / fence_wait_decomposition 定位，勿直接归因任一侧"
         - condition: "app_jank > sf_jank"
           template: "App 侧掉帧 ({{app_jank}}) 多于 SF 侧 ({{sf_jank}})"
     display:
@@ -988,9 +991,33 @@ steps:
         (SELECT fps_source FROM resolved_jank) as fps_source,
         (SELECT max_vsync_missed FROM resolved_jank) as max_vsync_missed,
         (SELECT total_vsync_missed FROM resolved_jank) as total_vsync_missed,
-        ROUND((SELECT vsync_period_ns FROM timing_config) / 1e6, 2) as vsync_period_ms
+        ROUND((SELECT vsync_period_ns FROM timing_config) / 1e6, 2) as vsync_period_ms,
+        -- Producer-bound ledger columns. The window is the analysed frame range
+        -- rather than the requested range, so a later requirement binds to what
+        -- was actually measured. Status is `unavailable` rather than a zero rate
+        -- when the sample is too small to mean anything.
+        (SELECT start_ts FROM time_range) as evidence_window_start_ts,
+        (SELECT end_ts FROM time_range) as evidence_window_end_ts,
+        CASE
+          WHEN (SELECT total FROM app_stats) >= 20
+            AND (SELECT buffer_stuffing_frames FROM resolved_jank) IS NOT NULL
+            THEN 'observed'
+          ELSE 'unavailable'
+        END as buffer_stuffing_evidence
       LIMIT 1
     save_as: perf_summary
+    investigation_evidence:
+      window: {start: evidence_window_start_ts, end: evidence_window_end_ts}
+      metrics:
+        # Buffer Stuffing share of the analysed frames, as a percentage.
+        # Requirements that condition on this compare against the same percent
+        # scale; do not restate the threshold in a ratio.
+        - domain: frame_production
+          metric_id: render.frame.buffer_stuffing.rate
+          value: buffer_stuffing_rate
+          unit: percent
+          status: buffer_stuffing_evidence
+          aggregation: analysed_frame_window
     condition: "frame_timeline.data[0]?.has_frame_timeline === 1 && environment.data[0]?.has_data === 1 && buffer_tx_coverage.data[0]?.coverage_status !== 'target_process_not_found' && buffer_tx_coverage.data[0]?.should_fallback !== 1"
 
   # FrameTimeline 在部分 SurfaceView/软件渲染/OEM trace 中存在但无目标包行。

@@ -15,6 +15,23 @@ investigation_contract:
     - id: scrolling_dependencies
       domain: dependency_chain
       description: "Connect Main/Render/raster/GPU/SF/present only with matching identities and timing. Explain separate app, system and pipeline evidence; a long frame or sleeping main thread is not itself the cause."
+    # When most frames are presented late because the queue holds them, the
+    # producer/consumer boundary is the question, and a frame-pacing answer that
+    # never measured buffer return has ruled out nothing. The condition is
+    # resolved from the ledger, so this obligation still applies when the final
+    # semantic review is unavailable. Threshold is a percentage, matching
+    # `render.frame.buffer_stuffing.rate`.
+    - id: scrolling_buffer_backpressure
+      domain: dependency_chain
+      description: "Buffer Stuffing dominates the analysed frames. Decompose the producer/consumer boundary before attributing or excluding a side: measure dequeueBuffer waits and release-fence return, and say which side the evidence supports. A stuffing rate alone is the symptom, not the mechanism."
+      condition:
+        kind: evidence
+        description: "Buffer Stuffing accounts for more than half of the analysed frames."
+        metric_id: render.frame.buffer_stuffing.rate
+        operator: gt
+        value: 50
+      evidence_metrics:
+        - render.buffer.dequeue.wait.duration
 classification_description: "Scroll and window-animation smoothness, frame pacing, and main-thread work during continuous visual updates, including concurrent content loading."
 priority: 3
 effort: medium

@@ -241,6 +241,14 @@ function schemas(strict: boolean) {
       acquisition: z.enum(['observed', 'insufficient', 'not_checked', 'failed', 'not_applicable', 'unknown']),
     })),
     evidenceRecords: z.array(evidenceRecord).optional(),
+    ledgerAcquisition: z.array(object({
+      requirementId: z.string(), domain: z.string(),
+      applicability: z.enum(['applicable', 'not_applicable', 'unknown']),
+      status: z.enum(['observed', 'partial', 'evidence_absent', 'not_applicable', 'not_declared', 'unknown']),
+      declaredMetrics: z.array(z.string()), observedMetrics: z.array(z.string()),
+      condition: object({metricId: z.string(), operator: z.string(), value: z.number(),
+        observed: z.number().nullable(), met: z.boolean().nullable()}).optional(),
+    })).optional(),
   });
   const assuranceStatus = z.enum(['not_applicable', 'not_checked', 'unavailable', 'coverage_incomplete', 'passed', 'failed']);
   const deliveryAssurance = object({

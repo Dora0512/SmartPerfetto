@@ -2330,7 +2330,7 @@
           },
           {
             "id": "release_fence_impact",
-            "sha256": "1b0dde5f4a0241f6ae950c14e492a1b56c4e192505f5b5dca683ac4d6579b5ba",
+            "sha256": "d8bebbf0b61922e331743c46c035b8118bbdff9cbcb3a16788db481b3a25b3b8",
             "required_columns": [
               "total_dequeue_buffer",
               "avg_dequeue_ms",
@@ -9511,7 +9511,7 @@
           },
           {
             "id": "performance_summary",
-            "sha256": "c310e4a748708a99c42271ceaa086ecfa105f7b1c425c91783de6c5b49f171be",
+            "sha256": "62089756748a7648ebf6ba9d07346943019236a95d9535a12fe4ca9d8a90ad90",
             "required_columns": [
               "total_frames",
               "perceived_jank_frames",

@@ -191,6 +191,10 @@ supersede、phase-hint renderer 和 worktree runner。这些是可测试组件�
 - Legacy `ReviewWorker` 没有在 `backend/src/index.ts` 构造；
 - `SELF_IMPROVE_NOTES_WRITE_ENABLED` 和 `SELF_IMPROVE_AUTOPATCH_ENABLED` 没有生产读取点；
 - Strategy patch 只允许模板化 `phase_hints`，模型不能提交任意 YAML；
+  注意 `phase_hints` 当前不参与分析运行时：提案、门控、应用、对账都会成功，
+  但注入结果不改变任何一次分析的行为。需要影响运行时的注入请用 `skillNotes`
+  （由五个 runtime 消费），需要绑定实际取证的义务请用场景的
+  `investigation_contract`；`phase_hints` 的持久化结构保留是为了兼容既有 overlay；
 - worktree、内容扫描、fingerprint 和测试通过也只生成候选变更，永不自动 merge；
 - Skill SQL patch 没有可用入口。
 

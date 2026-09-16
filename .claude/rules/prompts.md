@@ -83,7 +83,14 @@ entering the native prompt path. Missing or evicted data remains unavailable.
 - Prompt/template variables use `{{variable}}`.
 - Skill YAML parameter substitution uses `${param|default}`.
 - Strategy frontmatter may include `keywords`, `compound_patterns`, `priority`,
-  `phase_hints`, and final-report contract fields.
+  `investigation_contract`, and final-report contract fields.
+- `phase_hints` and `plan_template` are historical. They are parsed, pinned and
+  fingerprinted, but no runtime path injects them into an analysis; their
+  `critical_tools` admit and suggest nothing. Do not add an obligation there
+  expecting it to take effect. An obligation that must bind to what a run
+  actually measured belongs in `investigation_contract`, whose `evidence`
+  condition and `evidence_metrics` resolve against the producer ledger and so
+  still apply when the final semantic review is unavailable.
 - Never write a variable in braces inside a template comment. Rendering
   substitutes inside comments too, and split points that search for a
   placeholder find the documented one first — that once injected the whole

@@ -222,8 +222,28 @@ steps:
           WHERE rn = CAST(total * 0.95 AS INTEGER)
           LIMIT 1
         ), 0) as p95_dequeue_ms,
-        COALESCE((SELECT COUNT(*) FROM dequeue_slices WHERE dur_ns > 5e6), 0) as blocked_dequeue_count
+        COALESCE((SELECT COUNT(*) FROM dequeue_slices WHERE dur_ns > 5e6), 0) as blocked_dequeue_count,
+        -- Ledger columns. A window with no dequeueBuffer slices is reported as
+        -- `unavailable`, not as a measured zero: the difference between "the
+        -- producer never blocked" and "this trace does not carry the slice" is
+        -- the whole point of asking.
+        ${start_ts} as evidence_window_start_ts,
+        ${end_ts} as evidence_window_end_ts,
+        CASE WHEN (SELECT COUNT(*) FROM dequeue_slices) > 0
+          THEN 'observed' ELSE 'unavailable' END as dequeue_evidence
     save_as: release_fence_impact
+    investigation_evidence:
+      window: {start: evidence_window_start_ts, end: evidence_window_end_ts}
+      metrics:
+        # Producer-side wait on buffer return. This is the measurement that
+        # separates a slow consumer from an app that submits ahead of the queue;
+        # a frame-pacing conclusion that never acquired it has not ruled either out.
+        - domain: frame_production
+          metric_id: render.buffer.dequeue.wait.duration
+          value: avg_dequeue_ms
+          unit: ms
+          status: dequeue_evidence
+          aggregation: window_mean
 
   # Step 4: Fence 三分综合归因
   - id: fence_attribution_hint

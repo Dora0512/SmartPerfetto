@@ -4,13 +4,33 @@
 
 import type {AnalysisTurnIntent} from '../agentRuntime/analysisTurnIntent';
 
+/**
+ * Why a requirement applies.
+ *
+ * `semantic` needs the final review to judge applicability from the answer.
+ * `evidence` is decided from the producer-bound ledger alone, so the obligation
+ * still activates when that review is unavailable. Use it when a captured
+ * metric — not the wording of the answer — establishes that the mechanism is
+ * in play.
+ */
+export type AnalysisInvestigationCondition =
+  | {kind: 'semantic'; description: string}
+  | {
+      kind: 'evidence';
+      description: string;
+      /** Trusted producer metric ID; never inferred from a column name. */
+      metricId: string;
+      operator: 'gt' | 'gte' | 'lt' | 'lte';
+      value: number;
+    };
+
 /** Strategy-owned evidence obligations, independent of report presentation. */
 export interface AnalysisInvestigationRequirement {
   id: string;
   domain: string;
   description: string;
   required: boolean;
-  condition?: {kind: 'semantic'; description: string};
+  condition?: AnalysisInvestigationCondition;
   profileId?: string;
   profileVersion?: number;
   /** Trusted producer metric IDs, never inferred from column names or prose.

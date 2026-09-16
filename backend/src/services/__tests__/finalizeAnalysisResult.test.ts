@@ -135,7 +135,11 @@ afterEach(() => {clearAllCodeAwareOutputGuards(); jest.useRealTimers();});
 
 describe('issued investigation ledger through finalization', () => {
   function investigationRun(settings: {rows?: number; originRunId?: string; partialSibling?: boolean;
-    fakeLedger?: boolean; explanationOnly?: boolean; report?: boolean; oversizedBody?: boolean} = {}) {
+    fakeLedger?: boolean; explanationOnly?: boolean; report?: boolean; oversizedBody?: boolean;
+    /** Distinct metrics the producer declares. A real run spreads its ledger
+     * across several; a fixture that puts every record under one metric would
+     * be measuring the per-metric share rather than the semantic byte budget. */
+    metrics?: number} = {}) {
     const body = 'The captured value is 49. CPU evidence describes the selected window.' +
       (settings.oversizedBody ? 'x'.repeat(FINAL_SEMANTIC_INPUT_BYTE_LIMIT) : '');
     const claimText = 'The captured value is 49.';
@@ -159,14 +163,21 @@ describe('issued investigation ledger through finalization', () => {
       store.observeInvestigationTool({toolCallId: 'system-call', toolName: 'fixture', params: {}, extra: {}, phase: 'started'}, originRunId);
       store.observeInvestigationTool({toolCallId: 'system-call', toolName: 'fixture', params: {}, extra: {}, phase: 'completed',
         result: {content: []}}, originRunId);
-      const data = {columns: ['start', 'end', 'cpu', 'freq', 'status'], rows: Array.from({length: settings.rows ?? 2}, (_, index) =>
-        [100 * Math.floor(index / 10), 100 * Math.floor(index / 10) + 100, index % 10, 1200,
+      // Each declared metric needs its own value column: captured field
+      // semantics are keyed by column, so two metrics sharing one collide
+      // instead of recording twice.
+      const valueColumns = Array.from({length: settings.metrics ?? 1},
+        (_, index) => index === 0 ? 'freq' : `freq_${index}`);
+      const data = {columns: ['start', 'end', 'cpu', ...valueColumns, 'status'], rows: Array.from({length: settings.rows ?? 2}, (_, index) =>
+        [100 * Math.floor(index / 10), 100 * Math.floor(index / 10) + 100, index % 10, ...valueColumns.map(() => 1200),
           settings.partialSibling && index === 1 ? 'partial' : 'observed'])};
       const witness = captureEvidenceTable(data);
       attachInvestigationEvidence(witness, {skillId: 'cpu_fixture', stepId: 'root', traceId: 'trace',
         definitionFingerprint: 'producer-v1', selectedSqlHash: 'actual-sql', declaration: {
-          window: {start: 'start', end: 'end'}, identity: {cpu: 'cpu'}, metrics: [{domain: 'cpu_frequency',
-            metric_id: 'system.cpu.frequency.time_weighted', value: 'freq', unit: 'kHz', status: 'status', aggregation: 'window_time_weighted'}]}});
+          window: {start: 'start', end: 'end'}, identity: {cpu: 'cpu'},
+          metrics: valueColumns.map((column, index) => ({domain: 'cpu_frequency',
+            metric_id: index === 0 ? 'system.cpu.frequency.time_weighted' : `system.cpu.frequency.sibling_${index}`,
+            value: column, unit: 'kHz', status: 'status', aggregation: 'window_time_weighted'}))}});
       const envelope = createDataEnvelope(data, {type: 'skill_result', source: 'cpu_fixture', title: 'CPU',
         traceId: 'trace', traceSide: 'current', sourceToolCallId: 'system-call', evidenceRefId: 'data:system', executionStatus: 'observed'});
       store.registerStandaloneEvidenceCapture(witness, {meta: envelope.meta, display: envelope.display, originRunId});
@@ -271,7 +282,7 @@ describe('issued investigation ledger through finalization', () => {
   });
 
   it('omits only complete cohorts when the full ledger exceeds the shared semantic budget', async () => {
-    const target = investigationRun({rows: 2000, report: true});
+    const target = investigationRun({rows: 1000, metrics: 2, report: true});
     const final = await target.run();
     expect(target.dispatch).toHaveBeenCalledTimes(1);
     const input = target.dispatch.mock.calls[0][0];

@@ -32,15 +32,32 @@ import {currentRunManifestAttributionSink} from '../services/selfEvolution/runMa
 import type {RunManifestScope} from '../types/selfEvolution';
 import type {AnalysisInvestigationContract, AnalysisInvestigationRequirement} from '../types/analysisInvestigation';
 
-/** Phase-level restatement hint — loaded from strategy frontmatter `phase_hints`. */
+/**
+ * Historical phase hint from strategy frontmatter `phase_hints`.
+ *
+ * These are **not injected into an analysis run**. The `update_plan_phase`
+ * restatement that consumed them was removed when typed intent replaced
+ * prescribed plans, and its matcher followed; the fields remain readable so
+ * pinned snapshots, fingerprints and existing Self-Evolution overlays keep
+ * loading. Nothing here selects a tool, reaches the model, or constrains a
+ * phase.
+ *
+ * The selector also could not have done the job it reads as doing: it matched
+ * keywords against the phase name and goal the model wrote itself, so a hint
+ * could only reinforce an investigation already chosen, never redirect one
+ * that was not. Evidence-keyed obligations belong in a scene's
+ * `investigation_contract`, which binds to producer metrics instead of to
+ * phrasing.
+ */
 export interface PhaseHint {
   id: string;
   keywords: string[];
   constraints: string;
+  /** @deprecated Historical configuration; never admitted or suggested a tool. */
   criticalTools: string[];
   /** @deprecated Read only for historical overlay/fingerprint compatibility; never enforces tool admission. */
   maxToolCalls?: Readonly<Record<string, number>>;
-  /** When true, this hint is injected as unconditional fallback if keyword matching fails. */
+  /** @deprecated Historical fallback flag; no injection path consumes it. */
   critical: boolean;
 }
 
@@ -146,7 +163,7 @@ export interface StrategyDefinition {
   investigationRequirements?: string[];
   /** Expanded profile contents travel with the same immutable registry pin. */
   investigationContract?: AnalysisInvestigationContract;
-  /** Phase-level hints for mid-analysis restatement injection. */
+  /** Historical phase hints. Retained for snapshots and overlays; see `PhaseHint`. */
   phaseHints: PhaseHint[];
   /**
    * Optional historical plan advice. `null` means no advice was declared;
@@ -378,11 +395,31 @@ function parseInvestigationRequirement(value: unknown): AnalysisInvestigationReq
   }
   let condition: AnalysisInvestigationRequirement['condition'];
   if (value.condition !== undefined) {
-    if (!isRecord(value.condition) || !hasOnlyKeys(value.condition, ['kind', 'description'])
-      || value.condition.kind !== 'semantic' || !nonEmptyString(value.condition.description)) {
+    if (!isRecord(value.condition) || !nonEmptyString(value.condition.description)) {
       throw new Error('strategy_invalid_investigation_condition');
     }
-    condition = {kind: 'semantic', description: value.condition.description.trim()};
+    if (value.condition.kind === 'semantic') {
+      if (!hasOnlyKeys(value.condition, ['kind', 'description'])) {
+        throw new Error('strategy_invalid_investigation_condition');
+      }
+      condition = {kind: 'semantic', description: value.condition.description.trim()};
+    } else if (value.condition.kind === 'evidence') {
+      // An evidence condition is resolved from the ledger, so its metric and
+      // threshold have to be exact; a loose value would silently activate or
+      // suppress the obligation on every run of the scene.
+      if (!hasOnlyKeys(value.condition, ['kind', 'description', 'metric_id', 'operator', 'value'])
+        || !nonEmptyString(value.condition.metric_id)
+        || !['gt', 'gte', 'lt', 'lte'].includes(String(value.condition.operator))
+        || typeof value.condition.value !== 'number' || !Number.isFinite(value.condition.value)) {
+        throw new Error('strategy_invalid_investigation_condition');
+      }
+      condition = {kind: 'evidence', description: value.condition.description.trim(),
+        metricId: value.condition.metric_id.trim(),
+        operator: value.condition.operator as 'gt' | 'gte' | 'lt' | 'lte',
+        value: value.condition.value};
+    } else {
+      throw new Error('strategy_invalid_investigation_condition');
+    }
   }
   let evidenceMetrics: string[] | undefined;
   if (value.evidence_metrics !== undefined) {

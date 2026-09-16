@@ -55,6 +55,24 @@ export interface InvestigationEvidenceRecord {
   readonly coverage?: number | string;
   readonly denominator?: number | string;
 }
+/**
+ * Total ledger capacity for one run.
+ *
+ * Records are appended in tool-call order, so a saturated ledger silently
+ * truncates whatever ran last. A real 10s scrolling trace reached this cap
+ * exactly, with a single per-handoff metric holding more than half of it.
+ */
+export const LEDGER_RECORD_BUDGET = 4096;
+
+/**
+ * Per `(skillId, metricId)` capacity. This is the share any one producer may
+ * take, so a high-cardinality metric cannot starve the requirements that are
+ * acquired later in the run. Truncation here is reported as
+ * `ledger_metric_budget_exhausted` and scoped to that metric; it is not the
+ * whole-ledger `ledger_record_budget_exhausted` verdict.
+ */
+export const LEDGER_PER_METRIC_BUDGET = 1024;
+
 export interface InvestigationEvidenceSnapshot {
   readonly schemaVersion: 'investigation_evidence@1';
   readonly ownerKey: string;
@@ -220,6 +238,7 @@ export function buildInvestigationEvidenceSnapshot(captures: readonly EvidenceRe
   const records: InvestigationEvidenceRecord[] = [];
   const issues = new Set<string>();
   const incompleteCaptureIds = new Set<string>();
+  const perMetricCounts = new Map<string, number>();
   const allowed = new Set(options.allowedTraces.map(trace => `${trace.traceSide}:${trace.traceId}`));
   const toolStates = new Map(observations.map(observation => [`${observation.originRunId || ''}:${observation.toolCallId}`, observation]));
   for (const observation of toolStates.values()) {
@@ -250,7 +269,7 @@ export function buildInvestigationEvidenceSnapshot(captures: readonly EvidenceRe
     const origin = originRunId && options.currentRunId
       ? originRunId === options.currentRunId ? 'current_run' : 'reused' : 'unknown';
     for (let rowIndex = 0; rowIndex < table.rows.length; rowIndex++) {
-      if (records.length >= 4096) {incomplete('ledger_record_budget_exhausted'); break;}
+      if (records.length >= LEDGER_RECORD_BUDGET) {incomplete('ledger_record_budget_exhausted'); break;}
       const read = (column: string | undefined) => column ? table.rows[rowIndex][table.columns.indexOf(column)] : undefined;
       const start = read(declaration.window.start), end = read(declaration.window.end);
       const upid = read(declaration.identity?.upid), utid = read(declaration.identity?.utid);
@@ -268,7 +287,15 @@ export function buildInvestigationEvidenceSnapshot(captures: readonly EvidenceRe
         incomplete('capture_window_or_identity_invalid'); continue;
       }
       for (const [metricIndex, metric] of declaration.metrics.entries()) {
-        if (records.length >= 4096) {incomplete('ledger_record_budget_exhausted'); break;}
+        if (records.length >= LEDGER_RECORD_BUDGET) {incomplete('ledger_record_budget_exhausted'); break;}
+        // One chatty producer must not consume the whole budget. Without this,
+        // a per-handoff or per-frame metric fills the ledger in tool-call order
+        // and every later requirement reads as unacquired because its records
+        // never got in, not because nobody looked.
+        const metricKey = `${binding.skillId}:${metric.metric_id}`;
+        const metricCount = perMetricCounts.get(metricKey) ?? 0;
+        if (metricCount >= LEDGER_PER_METRIC_BUDGET) {incomplete('ledger_metric_budget_exhausted'); continue;}
+        perMetricCounts.set(metricKey, metricCount + 1);
         const value = read(metric.value), rawStatus = read(metric.status);
         const coverage = read(metric.coverage), denominator = read(metric.denominator);
         const validCoverage = !metric.coverage || (exactNs(coverage) && exactNs(denominator) &&

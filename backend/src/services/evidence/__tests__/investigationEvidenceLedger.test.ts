@@ -11,7 +11,7 @@ import {buildTraceProcessorQueryProvenance} from '../../traceProcessorConnection
 import {captureEvidenceTable, evidenceTableFor} from '../evidenceCapture';
 import {isIssuedInvestigationEvidenceSnapshot, investigationEvidenceFingerprint, compactInvestigationEvidence,
   compactInvestigationEvidenceForSemantic,
-  investigationCaptureFields, validateInvestigationEvidenceDeclarations,
+  investigationCaptureFields, validateInvestigationEvidenceDeclarations, LEDGER_PER_METRIC_BUDGET,
   type InvestigationEvidenceDeclaration, type InvestigationEvidenceSnapshot} from '../investigationEvidenceLedger';
 import type {RuntimeToolInvocationEvent} from '../../../agentRuntime/runtimeToolObserver';
 import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../../finalSemanticLimits';
@@ -76,6 +76,23 @@ describe('trusted investigation evidence ledger', () => {
       inputSchema: {}, exposure: 'public', evidenceEffect: effect, handler: async () => ({content: []})});
     for (const tool of registry.list()) await expect(tool.shared.handler({}, {})).resolves.toEqual({content: []});
     expect(phases).toEqual(['started', 'completed']);
+  });
+
+  // A real 10s scrolling trace filled the whole ledger with one per-handoff
+  // metric, so every requirement acquired later read as unacquired because its
+  // records never got in. The per-metric share keeps one producer from
+  // deciding what the rest of the run is allowed to record.
+  it('caps a single metric so a later producer still reaches the ledger', async () => {
+    const chatty = Array.from({length: LEDGER_PER_METRIC_BUDGET + 40},
+      (_, index) => [10 + index, 110 + index, 42, 43, 1234, 'observed', 100, 100]);
+    const {store} = await fixture(chatty);
+    const snapshot = store.createEvidenceReadView(options).investigationEvidence!();
+    expect(snapshot.records).toHaveLength(LEDGER_PER_METRIC_BUDGET);
+    expect(snapshot.issues).toContain('ledger_metric_budget_exhausted');
+    // Truncating one metric is scoped to that metric; it is not the
+    // whole-ledger verdict, which other requirements read as insufficient.
+    expect(snapshot.issues).not.toContain('ledger_record_budget_exhausted');
+    expect(snapshot.records.every(record => record.metricId === 'system.cpu.frequency.time_weighted')).toBe(true);
   });
 
   it('rejects malformed declarations before Skill registration', () => {
