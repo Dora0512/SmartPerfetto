@@ -21,8 +21,8 @@ export type IntentTransportUnavailableReason =
   | 'output_limit';
 
 export type IntentTransportResult =
-  | {status: 'ok'; text: string; actualModel?: string; finishReason?: string}
-  | {status: 'unavailable'; reason: IntentTransportUnavailableReason};
+  | {status: 'ok'; text: string; actualModel?: string; finishReason?: string; attempts?: number}
+  | {status: 'unavailable'; reason: IntentTransportUnavailableReason; httpStatus?: number; attempts?: number};
 
 type Cleanup = (signal: AbortSignal) => unknown | Promise<unknown>;
 export interface IntentTransportScope {

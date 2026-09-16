@@ -14,6 +14,7 @@ import {
   runIntentTransport,
   type IntentTransportInput,
   type IntentTransportResult,
+  type IntentTransportScope,
 } from '../../intentTransport';
 
 export interface OpenAiIntentTransportInput extends IntentTransportInput {
@@ -88,7 +89,41 @@ function responsesResult(body: Record<string, unknown>, input: OpenAiIntentTrans
   });
 }
 
-/** One request in the pinned native protocol; truncation never starts another call. */
+/** One bounded retry for transient provider failures; protocol errors never repeat. */
+const PROVIDER_ERROR_RETRY_BACKOFF_MS = 2_000;
+/** Only retry while enough of the shared deadline remains for a full second call. */
+const PROVIDER_ERROR_RETRY_MIN_REMAINING_MS = 15_000;
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, {once: true});
+  });
+}
+
+/** Config fields the request builder may treat as defined; validated by the caller. */
+type ValidatedIntentConfig = {
+  baseURL: string;
+  apiKey?: string;
+  lightModel: string;
+  protocol: 'chat_completions' | 'responses';
+};
+
+/**
+ * One request in the pinned native protocol; truncation never starts another
+ * call. A transient provider failure (5xx, gateway reset, rate limit) is
+ * retried once inside the same deadline, so the single semantic-review call
+ * per captured context survives endpoint hiccups without ever extending the
+ * run budget.
+ */
 export function runOpenAiIntentTransport(input: OpenAiIntentTransportInput) {
   return runIntentTransport(input, async scope => {
     const {config} = input;
@@ -99,37 +134,72 @@ export function runOpenAiIntentTransport(input: OpenAiIntentTransportInput) {
       || (config.protocol !== 'chat_completions' && config.protocol !== 'responses')) {
       return {status: 'unavailable', reason: 'invalid_configuration'};
     }
-    const endpoint = config.protocol === 'responses' ? 'responses' : 'chat/completions';
-    const url = new URL(endpoint, config.baseURL.replace(/\/?$/, '/'));
-    const purposeOptions = buildOpenAITextRequestPurposeOptions({requestUrl: url, protocol: config.protocol, purpose: input.purpose});
-    const body = config.protocol === 'responses' ? {
-      model: config.lightModel,
-      instructions: input.systemPrompt,
-      input: [{role: 'user', content: input.prompt}],
-      tools: [], store: false,
-      ...purposeOptions,
-      ...(input.maxOutputTokens !== undefined ? {max_output_tokens: input.maxOutputTokens} : {}),
-    } : {
-      model: config.lightModel,
-      messages: [{role: 'system', content: input.systemPrompt}, {role: 'user', content: input.prompt}],
-      temperature: 0,
-      ...purposeOptions,
-      ...(input.maxOutputTokens !== undefined
-        ? buildOpenAIChatCompletionsTokenLimit(config.lightModel, input.maxOutputTokens) : {}),
+    const validated: ValidatedIntentConfig = {
+      baseURL: config.baseURL,
+      apiKey: config.apiKey,
+      lightModel: config.lightModel,
+      protocol: config.protocol,
     };
-    const response = await (input.fetchImpl ?? fetch)(url, {
-      method: 'POST', signal: scope.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.apiKey ? {Authorization: `Bearer ${config.apiKey}`} : {}),
-      },
-      body: JSON.stringify(body),
-    });
-    scope.throwIfInactive();
-    if (!response.ok) return {status: 'unavailable', reason: 'provider_error'};
-    const output = object(await response.json());
-    scope.throwIfInactive();
-    if (!output || output.error != null) return {status: 'unavailable', reason: 'provider_error'};
-    return config.protocol === 'responses' ? responsesResult(output, input) : chatResult(output, input);
+    for (let attempt = 1; ; attempt++) {
+      // A thrown fetch error (connection reset, gateway drop) is as transient
+      // as a 5xx; runIntentTransport's outer catch would otherwise swallow it
+      // without retry or diagnostics. Cancellation still propagates.
+      let result: IntentTransportResult;
+      try {
+        result = await dispatchOneRequest(input, validated, scope);
+      } catch (error) {
+        if (scope.signal.aborted || input.signal?.aborted) throw error;
+        result = {status: 'unavailable', reason: 'provider_error'};
+      }
+      const transient = result.status === 'unavailable' && result.reason === 'provider_error';
+      if (!transient || attempt > 1 || scope.remainingMs() < PROVIDER_ERROR_RETRY_MIN_REMAINING_MS) {
+        // `attempts` is diagnostic only; attach it when a retry actually ran.
+        return attempt > 1 ? {...result, attempts: attempt} : result;
+      }
+      await abortableDelay(PROVIDER_ERROR_RETRY_BACKOFF_MS, scope.signal);
+      scope.throwIfInactive();
+    }
   });
+}
+
+async function dispatchOneRequest(
+  input: OpenAiIntentTransportInput,
+  config: ValidatedIntentConfig,
+  scope: IntentTransportScope,
+): Promise<IntentTransportResult> {
+  const endpoint = config.protocol === 'responses' ? 'responses' : 'chat/completions';
+  const url = new URL(endpoint, config.baseURL.replace(/\/?$/, '/'));
+  const purposeOptions = buildOpenAITextRequestPurposeOptions({requestUrl: url, protocol: config.protocol, purpose: input.purpose});
+  const body = config.protocol === 'responses' ? {
+    model: config.lightModel,
+    instructions: input.systemPrompt,
+    input: [{role: 'user', content: input.prompt}],
+    tools: [], store: false,
+    ...purposeOptions,
+    ...(input.maxOutputTokens !== undefined ? {max_output_tokens: input.maxOutputTokens} : {}),
+  } : {
+    model: config.lightModel,
+    messages: [{role: 'system', content: input.systemPrompt}, {role: 'user', content: input.prompt}],
+    temperature: 0,
+    ...purposeOptions,
+    ...(input.maxOutputTokens !== undefined
+      ? buildOpenAIChatCompletionsTokenLimit(config.lightModel, input.maxOutputTokens) : {}),
+  };
+  const response = await (input.fetchImpl ?? fetch)(url, {
+    method: 'POST', signal: scope.signal,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(config.apiKey ? {Authorization: `Bearer ${config.apiKey}`} : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  scope.throwIfInactive();
+  if (!response.ok) return {status: 'unavailable', reason: 'provider_error',
+    // Only 4xx/5xx carry triage value; anything else stays codeless so exact
+    // result contracts are unchanged for ordinary gateways.
+    ...(response.status >= 400 ? {httpStatus: response.status} : {})};
+  const output = object(await response.json());
+  scope.throwIfInactive();
+  if (!output || output.error != null) return {status: 'unavailable', reason: 'provider_error'};
+  return config.protocol === 'responses' ? responsesResult(output, input) : chatResult(output, input);
 }

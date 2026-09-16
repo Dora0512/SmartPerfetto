@@ -280,3 +280,62 @@ describe('OpenAI native intent transport', () => {
     await expect(runOpenAiIntentTransport(input)).resolves.toEqual({status: 'unavailable', reason: 'provider_error'});
   });
 });
+
+describe('OpenAI native intent transport provider retry', () => {
+  beforeEach(() => {jest.useFakeTimers({now: 1000});});
+  afterEach(() => {jest.useRealTimers();});
+
+  const retryConfig = {protocol: 'chat_completions' as const, baseURL: 'https://retry.example/v4',
+    apiKey: 'k', lightModel: 'm'};
+  const okBody = () => new Response(JSON.stringify({model: 'm', choices: [
+    {message: {role: 'assistant', content: 'fine'}, finish_reason: 'stop'},
+  ]}), {status: 200});
+
+  it('retries once after a transient 5xx and reports the attempt count', async () => {
+    const calls: number[] = [];
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => {
+      calls.push(calls.length);
+      return calls.length === 1 ? new Response('{}', {status: 500}) : okBody();
+    });
+    const pending = runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
+      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl});
+    await jest.advanceTimersByTimeAsync(2_500);
+    await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine', attempts: 2});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a thrown fetch error the same as a 5xx', async () => {
+    const fetchImpl = jest.fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockImplementation(async () => okBody());
+    const pending = runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
+      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl});
+    await jest.advanceTimersByTimeAsync(2_500);
+    await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine', attempts: 2});
+  });
+
+  it('keeps the http status and attempt count when both calls fail', async () => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 502}));
+    const pending = runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
+      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl});
+    await jest.advanceTimersByTimeAsync(2_500);
+    await expect(pending).resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: 502, attempts: 2});
+  });
+
+  it('does not retry when the deadline is nearly exhausted', async () => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 500}));
+    await expect(runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
+      deadlineMs: Date.now() + 1_000, outputByteLimit: 1024, config: retryConfig, fetchImpl}))
+      .resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: 500});
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('never retries protocol failures', async () => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify({model: 'm', choices: []}), {status: 200}));
+    await expect(runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
+      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl}))
+      .resolves.toEqual({status: 'unavailable', reason: 'invalid_response'});
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
