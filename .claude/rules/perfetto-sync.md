@@ -86,13 +86,11 @@ npm --prefix backend run cli:e2e
 cd backend && npm run test:scene-trace-regression
 ```
 
-Also verify the submodule commit is reachable from the fork remote before
-landing the root gitlink:
-
-```bash
-git -C perfetto branch --contains HEAD
-git -C perfetto ls-remote fork HEAD
-```
+Also verify the gitlink is anchored before landing it, using the anchoring
+check in `.claude/rules/git.md`. That check owns the policy; do not restate a
+weaker form here. `ls-remote fork HEAD` and `branch --contains HEAD` are
+satisfied by any feature branch and do not prove the gitlink survives branch
+cleanup.
 
 When the sync changes Skills or Strategies, also run:
 
@@ -115,12 +113,12 @@ If `perfetto/` changed:
 
 1. Commit inside `perfetto/`.
 2. Push the submodule commit to the `fork` remote, never upstream `origin`.
-3. Confirm the pushed commit is reachable from `fork`.
+3. Confirm the pushed commit is anchored to `fork/main` with the anchoring
+   check in `.claude/rules/git.md`, not merely present on some `fork` branch.
 4. Return to the root repository.
 5. Stage the root gitlink, refreshed `frontend/`, updated pins, regenerated
    SQL/stdlib data, and Skill/Strategy changes that belong to the sync.
-6. Commit and push the root repository only after the submodule commit is
-   reachable.
+6. Commit and push the root repository only after that anchoring check passes.
 
 Do not push a root commit that points at a local-only Perfetto submodule commit.
 

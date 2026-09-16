@@ -128,11 +128,62 @@ When a task changes `perfetto/`:
    `frontend/` changes.
 6. Stage the root gitlink (`perfetto`) plus required root artifacts.
 7. Commit and push the root repository only after the submodule commit is
-   reachable from `fork`.
+   reachable from `fork/main`, not merely from some `fork` branch.
 
 Do not push a root commit that points to a local-only submodule commit. Docker
 Hub and user installs consume the root `frontend/` prebuild and the root
 gitlink; both must point to committed, pushed artifacts.
+
+## Submodule Gitlink Anchoring
+
+A pushed submodule commit is not safe merely because some `fork` branch
+contains it. A gitlink reachable only from a feature branch becomes an
+unreachable commit the moment that branch is deleted, and a fresh
+`git clone --recursive` then fails for every root commit that points at it.
+Every gitlink the root repository publishes must be reachable from `fork/main`.
+
+Run this before pushing a root gitlink, and again before deleting any submodule
+branch:
+
+```bash
+git -C perfetto fetch --prune fork
+GITLINK=$(git ls-tree HEAD perfetto | awk '{print $3}')
+git -C perfetto merge-base --is-ancestor "$GITLINK" fork/main
+```
+
+A non-zero exit means the gitlink is not anchored. Fast-forward the submodule
+branch and push it before continuing:
+
+```bash
+git -C perfetto checkout main
+git -C perfetto merge --ff-only "$GITLINK"
+git -C perfetto push fork main
+```
+
+If that fast-forward is not clean, the submodule branch has genuinely diverged.
+Resolve the divergence; never force-push `fork/main` to make the check pass.
+
+Branch deletion has to clear the tags too, because each release tag pins its own
+gitlink and the current `main` says nothing about older ones:
+
+```bash
+for t in $(git tag); do
+  gl=$(git ls-tree "$t" perfetto 2>/dev/null | awk '{print $3}')
+  [ -n "$gl" ] || continue
+  git -C perfetto merge-base --is-ancestor "$gl" fork/main 2>/dev/null \
+    || echo "ORPHAN: $t -> $gl"
+done
+```
+
+Every `ORPHAN` line names a published release whose submodule commit would stop
+being reachable. Anchor it before deleting the branch that currently holds it.
+
+`ls-remote fork HEAD` and `branch --contains HEAD` do not prove anchoring: both
+are satisfied by any feature branch. On 2026-09-16 the root `main` gitlink was
+reachable only from `codex/source-activation-latency-20260901`, with the
+submodule's own `main` 15 commits behind it, so the weaker checks reported it as
+reachable while a routine branch cleanup would have orphaned the v1.11.0
+gitlink. Fast-forwarding `main` re-anchored all 58 release tags at once.
 
 ## Generated and Ignored Files
 
