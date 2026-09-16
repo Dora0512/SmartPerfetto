@@ -737,20 +737,6 @@ export function assessFinalSemantics(input: FinalSemanticAssessmentInput): Promi
         ? 'input_projection_limit' : 'input_projection_incomplete');
     if (captured.snapshot.declarationBindingEligibility === 'ineligible') {
       const detailCodes = declarationIssueCodes(captured.snapshot.protocolDiagnostics, captured.snapshot.conclusionContract);
-      if (process.env.SMARTPERFETTO_DEBUG_ELIGIBILITY === '1') {
-        // Operator-only structural fingerprint; never provider text or claim values.
-        const pd = captured.snapshot.protocolDiagnostics as Record<string, unknown> | undefined;
-        const cc = captured.snapshot.conclusionContract as Record<string, unknown> | undefined;
-        console.error(`[eligibility:fail] codes=${JSON.stringify(detailCodes)} diagnostics=${pd ? JSON.stringify(
-          Object.fromEntries(Object.entries(pd).map(([name, channel]) => [name,
-            channel && typeof channel === 'object' ? {
-              status: (channel as {status?: unknown}).status,
-              issues: Array.isArray((channel as {issues?: unknown}).issues) ? (channel as {issues: unknown[]}).issues.length : 'none',
-            } : String(channel)]))) : 'undefined'} contract=${cc ? JSON.stringify({
-          eligibility: cc.bindingEligibility,
-          parseIssues: Array.isArray(cc.parseIssues) ? cc.parseIssues.length : 'absent',
-        }) : 'undefined'}`);
-      }
       return fail('not_checked', 'invalid_declarations', detailCodes.join(',') || undefined);
     }
     try { if (!inputIsBound(captured, context)) return fail('not_checked', 'invalid_snapshot'); }

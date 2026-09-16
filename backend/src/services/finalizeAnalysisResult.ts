@@ -388,25 +388,6 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
         safeSnapshot = unsafe ?? templateUnavailable ?? best ?? smallestOverLimit?.snapshot ?? noLedgerFits;
       }
       assertOwner(owner);
-      if (process.env.SMARTPERFETTO_DEBUG_ELIGIBILITY === '1' && canonical.bindingEligibility === 'ineligible') {
-        // Operator-only structural fingerprint; never provider text or claim values.
-        const contractRecord = validationContract as Record<string, unknown> | undefined;
-        console.error(`[eligibility] channels=${diagnostics ? JSON.stringify({
-          sidecar: diagnostics.sidecar.status, sidecarIssues: diagnostics.sidecar.issues.length,
-          typedJson: diagnostics.typedJson?.status ?? 'none', typedJsonIssues: diagnostics.typedJson?.issues.length ?? 0,
-          conversation: diagnostics.conversation?.status ?? 'none', conversationIssues: diagnostics.conversation?.issues.length ?? 0,
-        }) : 'none'} contract=${contractRecord ? JSON.stringify({
-          eligibility: contractRecord.bindingEligibility,
-          keys: Object.keys(contractRecord).join(','),
-          parseIssueCount: Array.isArray(contractRecord.parseIssues) ? contractRecord.parseIssues.length : 'absent',
-          claimCount: Array.isArray(contractRecord.claims) ? contractRecord.claims.length : 'absent',
-        }) : 'none'} native=${JSON.stringify(nativeDeclaration ? {
-          hasContract: Boolean(nativeDeclaration.contract),
-          rawLength: nativeDeclaration.raw.length,
-          rawHasSidecarMarker: nativeDeclaration.raw.includes('smartperfetto:conclusion-contract'),
-          rawHasJsonFence: nativeDeclaration.raw.includes('```json'),
-        } : 'none')}`);
-      }
       semantic = await assessFinalSemantics({context, canonicalCandidate: candidate, snapshot: safeSnapshot, signal: owner.signal});
       assertOwner(owner);
     }
