@@ -56,7 +56,7 @@ describe('SkillExecutor run manifest attribution', () => {
   let executor: SkillExecutor;
 
   beforeEach(() => {
-    query = jest.fn<any>();
+    query = jest.fn<(...args: any[]) => any>();
     sink = attributionSink();
     executor = new SkillExecutor({query}, undefined, undefined, sink);
   });

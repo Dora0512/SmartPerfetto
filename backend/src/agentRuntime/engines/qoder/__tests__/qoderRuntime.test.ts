@@ -8,7 +8,7 @@ import type {CodeAwareTextProjectionReceipt} from '../../../../services/security
 const mockInterrupt = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
 const mockClose = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
 const mockQuery = jest.fn();
-const mockIntentTransport = jest.fn<any>();
+const mockIntentTransport = jest.fn<(...args: any[]) => any>();
 const defaultIntentDecision = {
   schemaVersion: 1, taskKind: 'investigation', sceneId: 'general', scope: 'scene_wide',
   recommendedComplexity: 'full', deliverable: 'answer', evidenceAccess: 'read_new',
@@ -93,8 +93,8 @@ const mockSdkModule = {
 
 const mockRegisterSkills = jest.fn();
 const mockSetFragmentRegistry = jest.fn();
-const mockEnsureSkillRegistryInitialized = jest.fn<any>().mockResolvedValue(undefined);
-const mockLoadQoderSdkModule = jest.fn<any>().mockResolvedValue(mockSdkModule);
+const mockEnsureSkillRegistryInitialized = jest.fn<(...args: any[]) => any>().mockResolvedValue(undefined);
+const mockLoadQoderSdkModule = jest.fn<(...args: any[]) => any>().mockResolvedValue(mockSdkModule);
 const mockResetQoderSdkModuleCache = jest.fn();
 const mockCreateClaudeMcpServer = jest.fn().mockReturnValue({
   server: { name: 'smartperfetto' },
@@ -104,9 +104,9 @@ const mockCreateClaudeMcpServer = jest.fn().mockReturnValue({
 const mockProjectionWrite = jest.fn<(text: string) => string>().mockImplementation(text => text);
 const mockProjectionFlush = jest.fn<() => string>().mockReturnValue('');
 const mockProjectionProjectComplete = jest.fn<(text: string) => CodeAwareTextProjectionReceipt>();
-const mockBuildComparisonContext = jest.fn<any>().mockResolvedValue(undefined);
-const mockBuildQuickConversationContext = jest.fn<any>().mockReturnValue(undefined);
-const mockFormatTraceContext = jest.fn<any>().mockReturnValue('');
+const mockBuildComparisonContext = jest.fn<(...args: any[]) => any>().mockResolvedValue(undefined);
+const mockBuildQuickConversationContext = jest.fn<(...args: any[]) => any>().mockReturnValue(undefined);
+const mockFormatTraceContext = jest.fn<(...args: any[]) => any>().mockReturnValue('');
 
 jest.mock('../qoderSdkLoader', () => ({
   loadQoderSdkModule: (...args: unknown[]) => mockLoadQoderSdkModule(...args),
@@ -114,7 +114,7 @@ jest.mock('../qoderSdkLoader', () => ({
 }));
 
 jest.mock('../../../../services/skillEngine/skillExecutor', () => ({
-  createSkillExecutor: jest.fn<any>().mockReturnValue({
+  createSkillExecutor: jest.fn<(...args: any[]) => any>().mockReturnValue({
     registerSkills: mockRegisterSkills,
     setFragmentRegistry: mockSetFragmentRegistry,
     executeSkill: jest.fn(),
@@ -124,20 +124,20 @@ jest.mock('../../../../services/skillEngine/skillExecutor', () => ({
 jest.mock('../../../../services/skillEngine/skillLoader', () => ({
   ensureSkillRegistryInitialized: (...args: unknown[]) => mockEnsureSkillRegistryInitialized(...args),
   skillRegistry: {
-    isInitialized: jest.fn<any>().mockReturnValue(false),
-    getAllSkills: jest.fn<any>().mockReturnValue([]),
-    getFragmentCache: jest.fn<any>().mockReturnValue({}),
+    isInitialized: jest.fn<(...args: any[]) => any>().mockReturnValue(false),
+    getAllSkills: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
+    getFragmentCache: jest.fn<(...args: any[]) => any>().mockReturnValue({}),
   },
 }));
 
 jest.mock('../../../../agentv3/claudeMcpServer', () => ({
   createClaudeMcpServer: (...args: unknown[]) => mockCreateClaudeMcpServer(...args),
-  loadLearnedSqlFixPairs: jest.fn<any>().mockReturnValue([]),
+  loadLearnedSqlFixPairs: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
 }));
 
 jest.mock('../../../../agent/detectors/architectureDetector', () => ({
-  createArchitectureDetector: jest.fn<any>().mockReturnValue({
-    detect: jest.fn<any>().mockResolvedValue({ type: 'pixel' }),
+  createArchitectureDetector: jest.fn<(...args: any[]) => any>().mockReturnValue({
+    detect: jest.fn<(...args: any[]) => any>().mockResolvedValue({ type: 'pixel' }),
   }),
 }));
 
@@ -147,12 +147,12 @@ jest.mock('../../../../agentv3/focusAppDetector', () => {
   );
   return {
     ...actual,
-    detectFocusApps: jest.fn<any>().mockResolvedValue({ apps: [], method: 'none' }),
+    detectFocusApps: jest.fn<(...args: any[]) => any>().mockResolvedValue({ apps: [], method: 'none' }),
   };
 });
 
 jest.mock('../../../../agentv3/traceCompletenessProber', () => ({
-  probeTraceCompleteness: jest.fn<any>().mockResolvedValue({
+  probeTraceCompleteness: jest.fn<(...args: any[]) => any>().mockResolvedValue({
     available: [],
     missingConfig: [],
     notApplicable: [],
@@ -165,7 +165,7 @@ jest.mock('../../../../services/finalResultQualityGate', () => ({
 }));
 
 jest.mock('../../claude/claudeVerifier', () => ({
-  verifyConclusion: jest.fn<any>().mockResolvedValue({ heuristicIssues: [], llmIssues: [] }),
+  verifyConclusion: jest.fn<(...args: any[]) => any>().mockResolvedValue({ heuristicIssues: [], llmIssues: [] }),
 }));
 
 jest.mock('../../../../services/security/codeAwareOutputRegistry', () => {
@@ -174,7 +174,7 @@ jest.mock('../../../../services/security/codeAwareOutputRegistry', () => {
   );
   return {
     ...actual,
-    createCodeAwareStreamingTextProjection: jest.fn<any>().mockImplementation((sessionId: string, channel: string) => channel === 'qoder-answer' ? ({
+    createCodeAwareStreamingTextProjection: jest.fn<(...args: any[]) => any>().mockImplementation((sessionId: string, channel: string) => channel === 'qoder-answer' ? ({
       write: mockProjectionWrite,
       flush: mockProjectionFlush,
       projectComplete: (text: string) => text,
@@ -184,7 +184,7 @@ jest.mock('../../../../services/security/codeAwareOutputRegistry', () => {
 });
 
 jest.mock('../../../../agentv3/claudeFindingExtractor', () => ({
-  extractFindingsFromText: jest.fn<any>().mockReturnValue([]),
+  extractFindingsFromText: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
 }));
 
 jest.mock('../../../runtimePromptContext', () => ({

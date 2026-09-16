@@ -1666,7 +1666,7 @@ describe('experimental OpenCode runtime contract', () => {
 
   it('uses OpenCode promptAsync and polls completed assistant messages', async () => {
     const promptAsync = jest.fn(async (_input?: unknown) => ({ response: { status: 204 } }));
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValue({
         data: [
@@ -1742,7 +1742,7 @@ describe('experimental OpenCode runtime contract', () => {
       info: {role: 'assistant', finish: 'stop', id: 'msg-final'},
       parts: [{type: 'text', text: 'idle 后规范读取到的最终报告'}],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [final, intermediate]});
 
@@ -1792,7 +1792,7 @@ describe('experimental OpenCode runtime contract', () => {
       },
       parts: [{type: 'text', text: '多次滞后后最终报告'}],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [intermediate]})
@@ -1850,13 +1850,13 @@ describe('experimental OpenCode runtime contract', () => {
       info: {role: 'assistant', finish: 'stop', id: 'msg-final'},
       parts: [{type: 'text', text: '最终报告'}],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [final, intermediate]})
       .mockResolvedValue({data: [final, intermediate]});
-    const status = jest.fn<any>()
+    const status = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: {'ses-opencode': {type: 'busy'}}})
       .mockResolvedValueOnce({data: {'ses-opencode': {type: 'busy'}}})
       .mockResolvedValueOnce({data: {'ses-opencode': {type: 'busy'}}})
@@ -1978,7 +1978,7 @@ describe('experimental OpenCode runtime contract', () => {
       parts: [{type: 'text', text: '本轮超过五十条历史后的新报告'}],
     };
     const promptAsync = jest.fn(async () => ({response: {status: 204}}));
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [oldMessages[oldMessages.length - 1]]})
       .mockResolvedValue({data: [newMessage, ...oldMessages.slice(-49).reverse()]});
     const status = jest.fn(async () => ({data: {'ses-opencode': {type: 'idle'}}}));
@@ -2125,7 +2125,7 @@ describe('experimental OpenCode runtime contract', () => {
       info: {role: 'assistant', finish: 'stop', id: 'msg-older', time: {completed: 1}},
       parts: [{type: 'text', text: '更旧内容'}],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [baseline]})
       .mockResolvedValueOnce({data: [changed, older]});
 
@@ -2171,7 +2171,7 @@ describe('experimental OpenCode runtime contract', () => {
         {type: 'tool', name: 'invoke_skill', state: {input: {skillId: 'new_skill'}}},
       ],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [baseline]})
       .mockResolvedValue({data: [changed]});
 
@@ -2209,7 +2209,7 @@ describe('experimental OpenCode runtime contract', () => {
       info: {role: 'assistant', finish: 'stop', time: {completed: 30}},
       parts: [{type: 'text', text: '没有 ID 的本轮最终报告'}],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [baseline]})
       .mockResolvedValueOnce({data: [baseline]})
       .mockResolvedValueOnce({data: [missingIdFinal, baseline]});
@@ -2253,7 +2253,7 @@ describe('experimental OpenCode runtime contract', () => {
       info: {role: 'assistant', finish: 'stop', id: 'msg-final'},
       parts: [{type: 'text', text: '工具完成后的最终报告'}],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [intermediate]})
       .mockResolvedValueOnce({data: [final, intermediate]});
     const status = jest.fn(async () => ({data: {'ses-other': {type: 'idle'}}}));
@@ -2404,7 +2404,7 @@ describe('experimental OpenCode runtime contract', () => {
       info: { role: 'assistant', finish: 'stop', id: 'msg-final' },
       parts: [{ type: 'text', text: '完整最终报告' }],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({ data: [] })
       .mockImplementationOnce(async () => {
         clock = 10;
@@ -2415,7 +2415,7 @@ describe('experimental OpenCode runtime contract', () => {
         return { data: [finalAssistant, intermediateAssistant] };
       })
       .mockResolvedValue({ data: [finalAssistant, intermediateAssistant] });
-    const status = jest.fn<any>()
+    const status = jest.fn<(...args: any[]) => any>()
       .mockImplementationOnce(async () => {
         observations.push(`status:${clock}`);
         return { data: { 'ses-opencode': { type: 'busy' } } };
@@ -2468,11 +2468,11 @@ describe('experimental OpenCode runtime contract', () => {
       info: { role: 'assistant', finish: 'stop', id: 'msg-final' },
       parts: [{ type: 'text', text: '完整最终报告' }],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValueOnce({ data: [intermediateAssistant] })
       .mockResolvedValue({ data: [finalAssistant, intermediateAssistant] });
-    const status = jest.fn<any>()
+    const status = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({ data: { 'ses-opencode': { type: 'busy' } } })
       .mockResolvedValueOnce({ data: { 'ses-opencode': { type: 'idle' } } });
 
@@ -2503,7 +2503,7 @@ describe('experimental OpenCode runtime contract', () => {
 
   it('falls back to a completed assistant message when status omits the target session', async () => {
     const promptAsync = jest.fn(async (_input?: unknown) => ({ response: { status: 204 } }));
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValueOnce({
         data: [{
@@ -2547,7 +2547,7 @@ describe('experimental OpenCode runtime contract', () => {
       info: { role: 'assistant', finish: 'stop', id: 'msg-new' },
       parts: [{ type: 'text', text: '本轮新报告' }],
     };
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({ data: [oldAssistant] })
       .mockResolvedValueOnce({ data: [oldAssistant] })
       .mockResolvedValueOnce({ data: [newAssistant, oldAssistant] });
@@ -2590,7 +2590,7 @@ describe('experimental OpenCode runtime contract', () => {
       parts: [{ type: 'text', text: '本轮同步短报告' }],
     };
     const prompt = jest.fn(async () => ({data: newAssistant}));
-    const messages = jest.fn<any>()
+    const messages = jest.fn<(...args: any[]) => any>()
       .mockResolvedValueOnce({data: [oldAssistant]})
       .mockResolvedValueOnce({data: [newAssistant, oldAssistant]});
 

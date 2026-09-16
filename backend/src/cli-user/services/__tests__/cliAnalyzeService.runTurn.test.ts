@@ -35,7 +35,7 @@ const mockPrepareSession = jest.fn();
 const mockRunManifestLifecycles: any[] = [];
 let mockLeaseGroupActive = false;
 const mockReleaseTraceLeases = jest.fn();
-const mockPrepareTraceLeases = jest.fn<any>();
+const mockPrepareTraceLeases = jest.fn<(...args: any[]) => any>();
 jest.mock('../../../services/analysisRunTraceProcessorLease', () => ({
   prepareAnalysisRunTraceProcessorLeases: (...args: unknown[]) => mockPrepareTraceLeases(...args),
 }));

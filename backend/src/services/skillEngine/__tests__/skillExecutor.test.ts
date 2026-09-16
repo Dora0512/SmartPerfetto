@@ -50,15 +50,15 @@ import Database from 'better-sqlite3';
 
 // Mock TraceProcessorService
 const createMockTraceProcessorService = () => ({
-  query: jest.fn<any>().mockResolvedValue({
+  query: jest.fn<(...args: any[]) => any>().mockResolvedValue({
     columns: ['name', 'value'],
     rows: [
       ['metric1', 100],
       ['metric2', 200],
     ],
   }),
-  touchTrace: jest.fn<any>(),
-  getTraceWithPort: jest.fn<any>().mockResolvedValue({ port: 9100 }),
+  touchTrace: jest.fn<(...args: any[]) => any>(),
+  getTraceWithPort: jest.fn<(...args: any[]) => any>().mockResolvedValue({ port: 9100 }),
 });
 
 // Mock 执行上下文
@@ -518,7 +518,7 @@ describe('SkillExecutor 类', () => {
   beforeEach(() => {
     mockTraceProcessor = createMockTraceProcessorService();
     mockAiService = {
-      chat: jest.fn<any>().mockResolvedValue('AI response' as string),
+      chat: jest.fn<(...args: any[]) => any>().mockResolvedValue('AI response' as string),
     };
     emittedEvents = [];
     executor = createSkillExecutor(
@@ -1771,7 +1771,7 @@ describe('AI Decision Step 执行', () => {
   beforeEach(() => {
     mockTraceProcessor = createMockTraceProcessorService();
     mockAiService = {
-      chat: jest.fn<any>().mockResolvedValue('选择方案 A'),
+      chat: jest.fn<(...args: any[]) => any>().mockResolvedValue('选择方案 A'),
     };
     emittedEvents = [];
     executor = createSkillExecutor(
@@ -1897,7 +1897,7 @@ describe('AI Summary Step 执行', () => {
   beforeEach(() => {
     mockTraceProcessor = createMockTraceProcessorService();
     mockAiService = {
-      chat: jest.fn<any>().mockResolvedValue('总结：性能良好，无明显问题'),
+      chat: jest.fn<(...args: any[]) => any>().mockResolvedValue('总结：性能良好，无明显问题'),
     };
     executor = createSkillExecutor(mockTraceProcessor, mockAiService);
   });

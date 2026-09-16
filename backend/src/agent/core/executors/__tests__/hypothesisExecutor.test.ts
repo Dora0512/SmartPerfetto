@@ -36,7 +36,7 @@ import type { IncrementalScope } from '../../incrementalAnalyzer';
 // =============================================================================
 
 const createMockModelRouter = () => ({
-  callWithFallback: jest.fn<any>().mockResolvedValue({
+  callWithFallback: jest.fn<(...args: any[]) => any>().mockResolvedValue({
     success: true,
     response: JSON.stringify({
       tasks: [
@@ -67,65 +67,65 @@ const createMockAgentRegistry = () => {
   };
 
   return {
-    getForDomain: jest.fn<any>().mockReturnValue(mockAgent),
-    get: jest.fn<any>().mockReturnValue(mockAgent),
-    getAgentsForTopic: jest.fn<any>().mockReturnValue([mockAgent]),
-    getAll: jest.fn<any>().mockReturnValue([mockAgent]),
-    getAgentIds: jest.fn<any>().mockReturnValue(['frame_agent']),
-    getAgentDescriptionsForLLM: jest.fn<any>().mockReturnValue('- frame_agent: Frame Agent'),
+    getForDomain: jest.fn<(...args: any[]) => any>().mockReturnValue(mockAgent),
+    get: jest.fn<(...args: any[]) => any>().mockReturnValue(mockAgent),
+    getAgentsForTopic: jest.fn<(...args: any[]) => any>().mockReturnValue([mockAgent]),
+    getAll: jest.fn<(...args: any[]) => any>().mockReturnValue([mockAgent]),
+    getAgentIds: jest.fn<(...args: any[]) => any>().mockReturnValue(['frame_agent']),
+    getAgentDescriptionsForLLM: jest.fn<(...args: any[]) => any>().mockReturnValue('- frame_agent: Frame Agent'),
   };
 };
 
 const createMockStrategyPlanner = () => ({
-  planNextIteration: jest.fn<any>().mockResolvedValue({
+  planNextIteration: jest.fn<(...args: any[]) => any>().mockResolvedValue({
     strategy: 'conclude',
     confidence: 0.8,
     reasoning: 'Sufficient findings collected',
   } as StrategyDecision),
-  resetProgressTracking: jest.fn<any>(),
-  getSkillsForFocusArea: jest.fn<any>().mockReturnValue([]),
-  updateConfig: jest.fn<any>(),
+  resetProgressTracking: jest.fn<(...args: any[]) => any>(),
+  getSkillsForFocusArea: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
+  updateConfig: jest.fn<(...args: any[]) => any>(),
 });
 
 const createMockMessageBus = () => ({
-  dispatchTasksParallel: jest.fn<any>().mockResolvedValue([createMockAgentResponse()]),
-  updateHypothesis: jest.fn<any>(),
-  registerAgent: jest.fn<any>(),
-  send: jest.fn<any>(),
-  broadcast: jest.fn<any>(),
-  subscribe: jest.fn<any>(),
-  unsubscribe: jest.fn<any>(),
+  dispatchTasksParallel: jest.fn<(...args: any[]) => any>().mockResolvedValue([createMockAgentResponse()]),
+  updateHypothesis: jest.fn<(...args: any[]) => any>(),
+  registerAgent: jest.fn<(...args: any[]) => any>(),
+  send: jest.fn<(...args: any[]) => any>(),
+  broadcast: jest.fn<(...args: any[]) => any>(),
+  subscribe: jest.fn<(...args: any[]) => any>(),
+  unsubscribe: jest.fn<(...args: any[]) => any>(),
 });
 
 const createMockCircuitBreaker = () => ({
-  recordFailure: jest.fn<any>().mockReturnValue({ action: 'retry' }),
-  recordSuccess: jest.fn<any>(),
-  recordIteration: jest.fn<any>().mockReturnValue({ action: 'continue' }),
-  canExecute: jest.fn<any>().mockReturnValue({ action: 'continue' }),
-  forceClose: jest.fn<any>().mockReturnValue(true),
-  reset: jest.fn<any>(),
-  handleUserResponse: jest.fn<any>().mockReturnValue({ action: 'continue' }),
+  recordFailure: jest.fn<(...args: any[]) => any>().mockReturnValue({ action: 'retry' }),
+  recordSuccess: jest.fn<(...args: any[]) => any>(),
+  recordIteration: jest.fn<(...args: any[]) => any>().mockReturnValue({ action: 'continue' }),
+  canExecute: jest.fn<(...args: any[]) => any>().mockReturnValue({ action: 'continue' }),
+  forceClose: jest.fn<(...args: any[]) => any>().mockReturnValue(true),
+  reset: jest.fn<(...args: any[]) => any>(),
+  handleUserResponse: jest.fn<(...args: any[]) => any>().mockReturnValue({ action: 'continue' }),
   isClosed: true,
   isTripped: false,
   isHalfOpen: false,
   circuitState: 'closed',
   forceCloseCallCount: 0,
   isForceCloseLimitReached: false,
-  getDiagnostics: jest.fn<any>().mockReturnValue({}),
-  getAllDiagnostics: jest.fn<any>().mockReturnValue({}),
-  on: jest.fn<any>(),
-  off: jest.fn<any>(),
-  emit: jest.fn<any>(),
+  getDiagnostics: jest.fn<(...args: any[]) => any>().mockReturnValue({}),
+  getAllDiagnostics: jest.fn<(...args: any[]) => any>().mockReturnValue({}),
+  on: jest.fn<(...args: any[]) => any>(),
+  off: jest.fn<(...args: any[]) => any>(),
+  emit: jest.fn<(...args: any[]) => any>(),
 });
 
 const createMockFocusStore = () => ({
-  getTopFocuses: jest.fn<any>().mockReturnValue([]),
-  recordInteraction: jest.fn<any>(),
-  getFocus: jest.fn<any>().mockReturnValue(null),
-  getAllFocuses: jest.fn<any>().mockReturnValue([]),
-  toSnapshot: jest.fn<any>().mockReturnValue({ version: 1, focuses: [] }),
-  fromSnapshot: jest.fn<any>(),
-  clear: jest.fn<any>(),
+  getTopFocuses: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
+  recordInteraction: jest.fn<(...args: any[]) => any>(),
+  getFocus: jest.fn<(...args: any[]) => any>().mockReturnValue(null),
+  getAllFocuses: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
+  toSnapshot: jest.fn<(...args: any[]) => any>().mockReturnValue({ version: 1, focuses: [] }),
+  fromSnapshot: jest.fn<(...args: any[]) => any>(),
+  clear: jest.fn<(...args: any[]) => any>(),
 });
 
 function createMockAgentResponse(overrides?: Partial<AgentResponse>): AgentResponse {
@@ -296,7 +296,7 @@ describe('HypothesisExecutor', () => {
         ],
       });
 
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([mockResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([mockResponse]);
 
       const result = await executor.execute(ctx, emitter);
 
@@ -361,7 +361,7 @@ describe('HypothesisExecutor', () => {
         findings: [],
         toolResults: [],
       });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([emptyResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([emptyResponse]);
 
       await executor.execute(ctx, emitter);
 
@@ -416,7 +416,7 @@ describe('HypothesisExecutor', () => {
       const mockResponse = createMockAgentResponse({
         findings: [{ id: 'f1', severity: 'warning', title: 'Issue', description: 'desc', source: 'test', confidence: 0.8 }],
       });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([mockResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([mockResponse]);
 
       strategyPlanner.planNextIteration.mockResolvedValue({
         strategy: 'continue',
@@ -523,7 +523,7 @@ describe('HypothesisExecutor', () => {
       });
 
       const emptyResponse = createMockAgentResponse({ findings: [] });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([emptyResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([emptyResponse]);
 
       strategyPlanner.planNextIteration.mockResolvedValue({
         strategy: 'continue',
@@ -557,7 +557,7 @@ describe('HypothesisExecutor', () => {
         createMockAgentResponse({ success: false, findings: [] }),
         createMockAgentResponse({ success: false, findings: [] }),
       ];
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue(failedResponses);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue(failedResponses);
 
       strategyPlanner.planNextIteration.mockResolvedValue({
         strategy: 'continue',
@@ -574,7 +574,7 @@ describe('HypothesisExecutor', () => {
 
     it('stops before dispatch when circuit breaker preflight blocks execution', async () => {
       const ctx = createMockExecutionContext();
-      (services.circuitBreaker.canExecute as jest.Mock<any>).mockReturnValueOnce({
+      (services.circuitBreaker.canExecute as jest.Mock<(...args: any[]) => any>).mockReturnValueOnce({
         action: 'ask_user',
         reason: 'Circuit breaker open',
       });
@@ -596,7 +596,7 @@ describe('HypothesisExecutor', () => {
       mockCircuitBreaker.recordFailure.mockReturnValue({ action: 'ask_user', reason: 'Too many failures' });
 
       const failedResponse = createMockAgentResponse({ success: false, findings: [] });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([failedResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([failedResponse]);
 
       services.circuitBreaker = mockCircuitBreaker as any;
       executor = new HypothesisExecutor(services, agentRegistry as any, strategyPlanner as any);
@@ -621,7 +621,7 @@ describe('HypothesisExecutor', () => {
       });
 
       let callCount = 0;
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockImplementation(() => {
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockImplementation(() => {
         callCount++;
         // Round 1: finding, Round 2: no finding, Round 3: finding (resets), Round 4: conclude
         if (callCount === 1 || callCount === 3) {
@@ -656,7 +656,7 @@ describe('HypothesisExecutor', () => {
     it('does not emit intervention progress for low-confidence analysis', async () => {
       const ctx = createMockExecutionContext();
       const minimalResponse = createMockAgentResponse({ findings: [] });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([minimalResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([minimalResponse]);
 
       ctx.sharedContext.hypotheses = new Map();
       strategyPlanner.planNextIteration.mockResolvedValue({
@@ -715,7 +715,7 @@ describe('HypothesisExecutor', () => {
 
       expect(services.modelRouter.callWithFallback).toHaveBeenCalled();
 
-      const callArgs = (services.modelRouter.callWithFallback as jest.Mock<any>).mock.calls[0];
+      const callArgs = (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mock.calls[0];
       const prompt = callArgs[0] as string;
 
       expect(prompt).toContain('假设');
@@ -724,7 +724,7 @@ describe('HypothesisExecutor', () => {
     it('executes tasks in dependency order', async () => {
       const ctx = createMockExecutionContext();
 
-      (services.modelRouter.callWithFallback as jest.Mock<any>).mockResolvedValue({
+      (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         success: true,
         response: JSON.stringify({
           tasks: [
@@ -745,7 +745,7 @@ describe('HypothesisExecutor', () => {
     it('handles no tasks generated gracefully', async () => {
       const ctx = createMockExecutionContext();
 
-      (services.modelRouter.callWithFallback as jest.Mock<any>).mockResolvedValue({
+      (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         success: true,
         response: JSON.stringify({ tasks: [] }),
         modelId: 'test',
@@ -776,7 +776,7 @@ describe('HypothesisExecutor', () => {
 
       const ctx = createMockExecutionContext({ incrementalScope });
 
-      (services.modelRouter.callWithFallback as jest.Mock<any>).mockResolvedValue({
+      (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         success: true,
         response: JSON.stringify({
           tasks: [
@@ -897,7 +897,7 @@ describe('HypothesisExecutor', () => {
           },
         ],
       });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([alignedResponse]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([alignedResponse]);
 
       executor.setFocusStore(mockFocusStore as any);
 
@@ -930,7 +930,7 @@ describe('HypothesisExecutor', () => {
     it('handles task graph planning failure gracefully', async () => {
       const ctx = createMockExecutionContext();
 
-      (services.modelRouter.callWithFallback as jest.Mock<any>).mockRejectedValue(
+      (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mockRejectedValue(
         new Error('LLM unavailable')
       );
 
@@ -946,7 +946,7 @@ describe('HypothesisExecutor', () => {
     it('handles concurrent task execution', async () => {
       const ctx = createMockExecutionContext();
 
-      (services.modelRouter.callWithFallback as jest.Mock<any>).mockResolvedValue({
+      (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         success: true,
         response: JSON.stringify({
           tasks: [
@@ -968,7 +968,7 @@ describe('HypothesisExecutor', () => {
         return agents.find(a => a.config.domain === domain);
       });
 
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([
         createMockAgentResponse({ agentId: 'frame_agent' }),
         createMockAgentResponse({ agentId: 'cpu_agent' }),
         createMockAgentResponse({ agentId: 'memory_agent' }),
@@ -995,11 +995,11 @@ describe('HypothesisExecutor', () => {
 
     it('handles session context for entity tracking', async () => {
       const mockSessionContext = {
-        startTraceAgentExperiment: jest.fn<any>().mockReturnValue('exp_1'),
-        completeTraceAgentExperiment: jest.fn<any>(),
-        ingestEvidenceFromResponses: jest.fn<any>().mockReturnValue(['ev_1']),
-        generatePromptContext: jest.fn<any>().mockReturnValue(''),
-        getTraceAgentState: jest.fn<any>().mockReturnValue({ contradictions: [] }),
+        startTraceAgentExperiment: jest.fn<(...args: any[]) => any>().mockReturnValue('exp_1'),
+        completeTraceAgentExperiment: jest.fn<(...args: any[]) => any>(),
+        ingestEvidenceFromResponses: jest.fn<(...args: any[]) => any>().mockReturnValue(['ev_1']),
+        generatePromptContext: jest.fn<(...args: any[]) => any>().mockReturnValue(''),
+        getTraceAgentState: jest.fn<(...args: any[]) => any>().mockReturnValue({ contradictions: [] }),
       };
 
       const ctx = createMockExecutionContext({
@@ -1014,11 +1014,11 @@ describe('HypothesisExecutor', () => {
 
     it('uses contradictions from session context as information gaps', async () => {
       const mockSessionContext = {
-        startTraceAgentExperiment: jest.fn<any>().mockReturnValue('exp_1'),
-        completeTraceAgentExperiment: jest.fn<any>(),
-        ingestEvidenceFromResponses: jest.fn<any>().mockReturnValue([]),
-        generatePromptContext: jest.fn<any>().mockReturnValue(''),
-        getTraceAgentState: jest.fn<any>().mockReturnValue({
+        startTraceAgentExperiment: jest.fn<(...args: any[]) => any>().mockReturnValue('exp_1'),
+        completeTraceAgentExperiment: jest.fn<(...args: any[]) => any>(),
+        ingestEvidenceFromResponses: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
+        generatePromptContext: jest.fn<(...args: any[]) => any>().mockReturnValue(''),
+        getTraceAgentState: jest.fn<(...args: any[]) => any>().mockReturnValue({
           contradictions: [
             { description: 'CPU and frame data disagree' },
             { description: 'Memory spike timing mismatch' },
@@ -1033,7 +1033,7 @@ describe('HypothesisExecutor', () => {
       await executor.execute(ctx, emitter);
 
       expect(services.modelRouter.callWithFallback).toHaveBeenCalled();
-      const prompt = (services.modelRouter.callWithFallback as jest.Mock<any>).mock.calls[0][0] as string;
+      const prompt = (services.modelRouter.callWithFallback as jest.Mock<(...args: any[]) => any>).mock.calls[0][0] as string;
 
       expect(prompt.toLowerCase()).toContain('矛盾');
     });
@@ -1050,7 +1050,7 @@ describe('HypothesisExecutor', () => {
       const responseWithFindings = createMockAgentResponse({
         findings: [{ id: 'f1', severity: 'critical', title: 'Critical issue', description: 'desc', source: 'test' }],
       });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([responseWithFindings]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([responseWithFindings]);
 
       await executor.execute(ctx, emitter);
 
@@ -1063,7 +1063,7 @@ describe('HypothesisExecutor', () => {
       const ctx = createMockExecutionContext();
 
       const responseNoFindings = createMockAgentResponse({ findings: [] });
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockResolvedValue([responseNoFindings]);
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockResolvedValue([responseNoFindings]);
 
       await executor.execute(ctx, emitter);
 
@@ -1075,7 +1075,7 @@ describe('HypothesisExecutor', () => {
       const ctx = createMockExecutionContext();
 
       let roundCount = 0;
-      (services.messageBus.dispatchTasksParallel as jest.Mock<any>).mockImplementation(() => {
+      (services.messageBus.dispatchTasksParallel as jest.Mock<(...args: any[]) => any>).mockImplementation(() => {
         roundCount++;
         return Promise.resolve([
           createMockAgentResponse({

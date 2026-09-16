@@ -11,7 +11,7 @@ import { DirectSkillExecutor } from '../directSkillExecutor';
 import { emitDataEnvelopes } from '../../taskGraphExecutor';
 import { synthesizeFeedback } from '../../feedbackSynthesizer';
 
-const mockExecuteTasks = jest.fn<any>();
+const mockExecuteTasks = jest.fn<(...args: any[]) => any>();
 
 jest.mock('../directSkillExecutor', () => ({
   DirectSkillExecutor: jest.fn(),
@@ -292,7 +292,7 @@ describe('DirectDrillDownExecutor', () => {
   });
 
   it('uses traceProcessorService.query(traceId, sql) for interval enrichment', async () => {
-    const queryMock = jest.fn<any>().mockResolvedValue({
+    const queryMock = jest.fn<(...args: any[]) => any>().mockResolvedValue({
       columns: ['frame_id', 'start_ts', 'end_ts', 'process_name', 'jank_type', 'layer_name', 'vsync_missed'],
       rows: [[
         1435500,
@@ -324,7 +324,7 @@ describe('DirectDrillDownExecutor', () => {
   });
 
   it('falls back to doFrame alias mapping when frame token enrichment misses', async () => {
-    const queryMock = jest.fn<any>()
+    const queryMock = jest.fn<(...args: any[]) => any>()
       // Primary lookup (actual_frame_timeline_slice by frame token) misses.
       .mockResolvedValueOnce({ columns: [], rows: [] })
       // Legacy lookup (android_frames.frame_id) misses.
@@ -385,7 +385,7 @@ describe('DirectDrillDownExecutor', () => {
   });
 
   it('routes startup drill-down to startup_detail and enriches startup interval', async () => {
-    const queryMock = jest.fn<any>().mockResolvedValue({
+    const queryMock = jest.fn<(...args: any[]) => any>().mockResolvedValue({
       columns: ['startup_id', 'start_ts', 'end_ts', 'dur_ms', 'process_name', 'startup_type', 'ttid_ms', 'ttfd_ms'],
       rows: [[
         12,
