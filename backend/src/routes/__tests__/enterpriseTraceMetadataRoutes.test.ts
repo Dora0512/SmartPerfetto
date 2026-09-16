@@ -28,6 +28,7 @@ import {
   ensureTraceProcessorLeaseBackingMetadata,
 } from '../../services/traceMetadataStore';
 import { setTraceProcessorServiceForTests } from '../../services/traceProcessorService';
+import { persistAnalysisRunState, resetAnalysisRunStoreForTests } from '../../services/analysisRunStore';
 import { getTraceProcessorLeaseStore, setTraceProcessorLeaseStoreForTests } from '../../services/traceProcessorLeaseStore';
 import { TraceProcessorFactory } from '../../services/workingTraceProcessor';
 import {getPortPool} from '../../services/portPool';
@@ -438,6 +439,7 @@ afterEach(async () => {
     TRACE_PROCESSOR_CAPABILITY_SECRET_ENV,
     originalEnv.proxyCapabilitySecret,
   );
+  resetAnalysisRunStoreForTests();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -476,6 +478,23 @@ describe('enterprise trace metadata routes', () => {
     expect(() => ensureTraceProcessorLeaseBackingMetadata({...metadata, ...changed}, scope))
       .toThrow('Trace processor lease backing identity conflicts with the registered Trace');
     expect(readTraceAsset(metadata.id)).toEqual(before);
+  });
+
+  it.each([
+    {backing: 'local file', localPath: () => path.join(uploadDir, 'capture.trace'),
+      source: () => ({path: path.join(uploadDir, 'capture.trace')})},
+    {backing: 'external RPC', localPath: () => 'external-rpc:9100', source: () => ({externalRpc: true, port: 9100})},
+  ])('upgrades a metadata-only placeholder from an earlier run into the $backing lease backing', ({localPath, source}) => {
+    const scope = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
+    const metadata = {id: 'placeholder-backing', filename: 'capture.trace', size: 24,
+      uploadedAt: new Date(0).toISOString(), status: 'ready', ...source()};
+    persistAnalysisRunState({...scope, traceId: metadata.id, sessionId: 'conversation-1', runId: 'run-1'}, 'completed');
+    expect(readTraceAsset(metadata.id)).toMatchObject({status: 'metadata_only', size_bytes: 0});
+
+    ensureTraceProcessorLeaseBackingMetadata(metadata, scope);
+    expect(readTraceAsset(metadata.id)).toMatchObject({status: 'ready', size_bytes: 24, local_path: localPath()});
+    expect(() => ensureTraceProcessorLeaseBackingMetadata({...metadata, size: 25}, scope))
+      .toThrow('Trace processor lease backing identity conflicts with the registered Trace');
   });
 
   it('preserves external RPC backing identity without inventing a local Trace path', () => {

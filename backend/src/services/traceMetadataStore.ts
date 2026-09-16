@@ -309,7 +309,8 @@ function writeEnterpriseTraceMetadata(metadata: TraceMetadata, backingOnly = fal
       const repo = createEnterpriseWorkspaceRepository<TraceAssetRow>(db, 'trace_assets');
       const localPath = enterpriseLocalPathForMetadata(metadata);
       const existing = backingOnly ? repo.getById(scope, metadata.id) : null;
-      if (existing) {
+      // A metadata_only placeholder carries no backing identity; upgrade it in place.
+      if (existing && existing.status !== 'metadata_only') {
         const extra = parseMetadataJson(existing.metadata_json);
         const externalRpc = metadata.externalRpc === true;
         const sameIdentity = (extra.externalRpc === true) === externalRpc &&
