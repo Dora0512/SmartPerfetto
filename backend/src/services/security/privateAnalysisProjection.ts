@@ -464,6 +464,7 @@ export function projectPrivateClaimVerification(
     status: privateControl(verification.status, ['passed', 'failed', 'partial', 'not_checked'], 'not_checked'),
     policy: privateControl(verification.policy, ['block', 'retry', 'warn_only', 'record_only'], 'record_only'),
     ...(verification.notCheckedReason !== undefined ? {notCheckedReason: text(verification.notCheckedReason)} : {}),
+    ...(verification.notCheckedDetail !== undefined ? {notCheckedDetail: text(verification.notCheckedDetail)} : {}),
     passed: verification.status === 'passed' && verification.passed === true,
     checkedClaimCount: verification.checkedClaimCount,
     unsupportedClaimCount: verification.unsupportedClaimCount,

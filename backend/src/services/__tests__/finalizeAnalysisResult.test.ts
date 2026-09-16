@@ -504,7 +504,8 @@ describe('shared final analysis boundary', () => {
     const final = await target.run();
     expect(final.result.conclusionContract?.bindingEligibility).toBe('ineligible');
     expect(final.result.claimVerificationResult).toMatchObject({status: 'partial', passed: false,
-      checkedClaimCount: 0, unsupportedClaimCount: 0, notCheckedReason: 'invalid_declarations'});
+      checkedClaimCount: 0, unsupportedClaimCount: 0, notCheckedReason: 'invalid_declarations',
+      notCheckedDetail: 'untrusted_parser_metadata'});
     expect(final.result.claimVerificationResult?.issues.map(issue => [issue.severity, issue.code]))
       .toEqual([['warning', 'binding_ineligible']]);
     expect(final.result.deliveryAssurance?.claims).toBe('coverage_incomplete');

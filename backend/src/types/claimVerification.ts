@@ -103,6 +103,8 @@ export interface ClaimVerificationResult {
   status: ClaimVerificationStatus;
   policy: ClaimVerificationPolicy;
   notCheckedReason?: string;
+  /** Closed-vocabulary triage detail for `notCheckedReason` (issue codes, transport facts). */
+  notCheckedDetail?: string;
   /** Compatibility boolean. Must equal status === 'passed'. */
   passed: boolean;
   checkedClaimCount: number;

@@ -344,6 +344,28 @@ describe('final semantic assessment snapshot and transport', () => {
       expect(run.dispatch).not.toHaveBeenCalled();
     });
 
+  it('reports closed-vocabulary declaration issue codes for triage', async () => {
+    const sidecarRun = fixture();
+    sidecarRun.input.snapshot.declarationBindingEligibility = 'ineligible';
+    sidecarRun.reply.claims = [];
+    sidecarRun.input.snapshot.protocolDiagnostics = {sidecar: {status: 'invalid', bindingEligibility: 'ineligible',
+      issues: [{code: 'duplicate_marker', path: '$'}]}};
+    expect(await assessFinalSemantics(sidecarRun.input)).toMatchObject({status: 'not_checked', reason: 'invalid_declarations',
+      notCheckedDetail: 'duplicate_marker'});
+
+    // All raw-body channels absent: eligibility was inherited from a contract
+    // the runtime pre-parsed, so its parseIssues are the only triage source.
+    const contractRun = fixture();
+    contractRun.input.snapshot.declarationBindingEligibility = 'ineligible';
+    contractRun.reply.claims = [];
+    contractRun.input.snapshot.protocolDiagnostics = undefined;
+    contractRun.input.snapshot.conclusionContract = {...contractRun.input.snapshot.conclusionContract!,
+      bindingEligibility: 'ineligible',
+      parseIssues: [{code: 'invalid_semantics', path: 'claims[2].semantics'}, {code: 'invalid_claim', path: 'claims[3]'}]};
+    expect(await assessFinalSemantics(contractRun.input)).toMatchObject({status: 'not_checked', reason: 'invalid_declarations',
+      notCheckedDetail: 'invalid_semantics,invalid_claim'});
+  });
+
   it('binds explicit parser eligibility and never upgrades existing legacy claims', async () => {
     const run = fixture();
     run.input.snapshot.declarationBindingEligibility = 'legacy_unchecked';

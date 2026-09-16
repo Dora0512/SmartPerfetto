@@ -99,6 +99,12 @@ export interface FinalSemanticAssessment {
     'input_limit' | 'output_limit' | 'invalid_response' | 'missing_template' |
     'missing_transport' | 'timeout' | 'provider_error' | 'incomplete_output' |
     'invalid_configuration' | 'tool_use' | 'invalid_declarations';
+  /**
+   * Closed-vocabulary triage detail for the reason above: declaration parse
+   * issue codes, or transport facts (`http_429`, `attempts_2`). Never raw
+   * provider text, claim ids, or field values.
+   */
+  readonly notCheckedDetail?: string;
   /** Private parser receipt only; contains no provider text, claim IDs or field values. */
   readonly responseDiagnostic?: FinalSemanticResponseDiagnostic;
   /** Private capacity receipt only; contains byte counts and a closed failure stage. */
@@ -210,13 +216,74 @@ function fingerprint(value: unknown): string {
 function emptyAssessment(
   status: FinalSemanticAssessment['status'], reason: FinalSemanticAssessment['reason'],
   binding?: FinalSemanticAssessment['binding'], responseDiagnostic?: FinalSemanticResponseDiagnostic,
-  inputDiagnostic?: FinalSemanticInputDiagnostic,
+  inputDiagnostic?: FinalSemanticInputDiagnostic, notCheckedDetail?: string,
 ): FinalSemanticAssessment {
   return freezeJson({schemaVersion: 'final_semantic_assessment@1', ruleVersion: FINAL_SEMANTIC_RULE_VERSION,
     ...(binding ? {binding} : {}), ...(responseDiagnostic ? {responseDiagnostic} : {}),
-    ...(inputDiagnostic ? {inputDiagnostic} : {}), status, reason, consistency: 'unknown',
+    ...(inputDiagnostic ? {inputDiagnostic} : {}), status, reason,
+    ...(notCheckedDetail ? {notCheckedDetail} : {}), consistency: 'unknown',
     coverage: {body: 'incomplete', claims: 'incomplete', report: 'incomplete'},
     claims: [], omissions: [], requirements: []});
+}
+
+/**
+ * Fixed vocabulary only: declaration parse issue codes, never raw payloads.
+ * Channels cover the raw-body parsers; the contract covers the all-channels-
+ * absent case, where eligibility was inherited from a pre-parsed contract.
+ * When no parser recorded an issue, fall back to naming the eligibility
+ * source so an opaque `invalid_declarations` is still triageable.
+ */
+function declarationIssueCodes(diagnostics: unknown, contract: unknown): string[] {
+  const codes: string[] = [];
+  const pushCode = (value: unknown): void => {
+    if (typeof value === 'string' && value && !codes.includes(value)) codes.push(value);
+  };
+  let sawChannel = false;
+  if (diagnostics && typeof diagnostics === 'object') {
+    const channels = diagnostics as Record<string, unknown>;
+    for (const channelName of ['sidecar', 'typedJson', 'conversation']) {
+      const channel = channels[channelName];
+      if (!channel || typeof channel !== 'object') continue;
+      const status = (channel as {status?: unknown}).status;
+      if (typeof status === 'string' && status !== 'absent') sawChannel = true;
+      // Full parse results carry `issues`; the provider-input projection keeps
+      // only `issueCodes`. Both are closed vocabulary.
+      const issueLists = [(channel as {issues?: unknown}).issues, (channel as {issueCodes?: unknown}).issueCodes];
+      for (const issues of issueLists) {
+        if (!Array.isArray(issues)) continue;
+        for (const issue of issues) {
+          pushCode(typeof issue === 'string' ? issue
+            : issue && typeof issue === 'object' ? (issue as {code?: unknown}).code : undefined);
+          if (codes.length >= 3) return codes;
+        }
+      }
+    }
+  }
+  const record = contract && typeof contract === 'object' ? contract as Record<string, unknown> : undefined;
+  const parseIssues = record?.parseIssues;
+  if (Array.isArray(parseIssues)) {
+    for (const issue of parseIssues) {
+      pushCode(issue && typeof issue === 'object' ? (issue as {code?: unknown}).code : undefined);
+      if (codes.length >= 3) return codes;
+    }
+  }
+  if (codes.length === 0) {
+    // No parser recorded an issue; name where the verdict must have come from.
+    const eligibility = record?.bindingEligibility;
+    if (sawChannel) codes.push('invalid_channel_without_issues');
+    else if (eligibility === 'ineligible') codes.push('contract_ineligible_without_issues');
+    else if (eligibility === 'legacy_unchecked') codes.push('legacy_unchecked_ineligible_snapshot');
+  }
+  return codes;
+}
+
+/** Transport triage facts only; no provider text. */
+function transportFailureDetail(result: {httpStatus?: number; attempts?: number}): string | undefined {
+  const parts = [
+    ...(typeof result.httpStatus === 'number' ? [`http_${result.httpStatus}`] : []),
+    ...(typeof result.attempts === 'number' ? [`attempts_${result.attempts}`] : []),
+  ];
+  return parts.length ? parts.join(';') : undefined;
 }
 
 class SemanticResponseParseFailure extends Error {
@@ -660,19 +727,39 @@ export function assessFinalSemantics(input: FinalSemanticAssessmentInput): Promi
   // Reserve before any async work, including every failure path.
   const promise = Promise.resolve().then(async (): Promise<FinalSemanticAssessment> => {
     signal.throwIfAborted();
-    const fail = (status: FinalSemanticAssessment['status'], reason: FinalSemanticAssessment['reason']) =>
-      emptyAssessment(status, reason, binding);
+    const fail = (status: FinalSemanticAssessment['status'], reason: FinalSemanticAssessment['reason'],
+      notCheckedDetail?: string) =>
+      emptyAssessment(status, reason, binding, undefined, undefined, notCheckedDetail);
     if (captured.snapshot.inputCoverage === 'incomplete') return captured.snapshot.inputProjectionIssue === 'semantic_input_limit'
       ? emptyAssessment('coverage_incomplete', 'input_limit', binding, undefined,
         {stage: 'investigation_envelope', code: 'no_valid_envelope', limitBytes: FINAL_SEMANTIC_INPUT_BYTE_LIMIT})
       : fail('coverage_incomplete', captured.snapshot.inputProjectionIssue === 'structure_limit'
         ? 'input_projection_limit' : 'input_projection_incomplete');
-    if (captured.snapshot.declarationBindingEligibility === 'ineligible') return fail('not_checked', 'invalid_declarations');
+    if (captured.snapshot.declarationBindingEligibility === 'ineligible') {
+      const detailCodes = declarationIssueCodes(captured.snapshot.protocolDiagnostics, captured.snapshot.conclusionContract);
+      if (process.env.SMARTPERFETTO_DEBUG_ELIGIBILITY === '1') {
+        // Operator-only structural fingerprint; never provider text or claim values.
+        const pd = captured.snapshot.protocolDiagnostics as Record<string, unknown> | undefined;
+        const cc = captured.snapshot.conclusionContract as Record<string, unknown> | undefined;
+        console.error(`[eligibility:fail] codes=${JSON.stringify(detailCodes)} diagnostics=${pd ? JSON.stringify(
+          Object.fromEntries(Object.entries(pd).map(([name, channel]) => [name,
+            channel && typeof channel === 'object' ? {
+              status: (channel as {status?: unknown}).status,
+              issues: Array.isArray((channel as {issues?: unknown}).issues) ? (channel as {issues: unknown[]}).issues.length : 'none',
+            } : String(channel)]))) : 'undefined'} contract=${cc ? JSON.stringify({
+          eligibility: cc.bindingEligibility,
+          parseIssues: Array.isArray(cc.parseIssues) ? cc.parseIssues.length : 'absent',
+        }) : 'undefined'}`);
+      }
+      return fail('not_checked', 'invalid_declarations', detailCodes.join(',') || undefined);
+    }
     try { if (!inputIsBound(captured, context)) return fail('not_checked', 'invalid_snapshot'); }
     catch { return fail('not_checked', 'invalid_snapshot'); }
     const declarations = captured.snapshot.conclusionContract?.claims ?? [];
     if (!Array.isArray(declarations) || declarations.some(claim => !record(claim) || !nonempty(claim.id) || !nonempty(claim.text)) ||
-      new Set(declarations.map(claim => claim.id)).size !== declarations.length) return fail('not_checked', 'invalid_declarations');
+      new Set(declarations.map(claim => claim.id)).size !== declarations.length) {
+      return fail('not_checked', 'invalid_declarations', 'claims_invalid');
+    }
     const inputBytes = limits?.inputBytes ?? FINAL_SEMANTIC_INPUT_BYTE_LIMIT;
     const outputBytes = limits?.outputBytes ?? FINAL_SEMANTIC_OUTPUT_BYTE_LIMIT;
     if (!record(limits) || !keys(limits, [], ['inputBytes', 'outputBytes']) ||
@@ -698,15 +785,18 @@ export function assessFinalSemantics(input: FinalSemanticAssessmentInput): Promi
       signal.throwIfAborted();
       if (Date.now() >= deadlineMs) return fail('unavailable', 'timeout');
       if (response.status !== 'ok') {
+        const transportDetail = transportFailureDetail(response);
         if (response.status !== 'unavailable' || !member(response.reason, [
           'output_limit', 'incomplete_output', 'timeout', 'provider_error', 'invalid_configuration', 'invalid_response', 'tool_use',
-        ])) return fail('unavailable', 'invalid_response');
-        return fail(response.reason === 'output_limit' || response.reason === 'incomplete_output' ? 'coverage_incomplete' : 'unavailable', response.reason);
+        ])) return fail('unavailable', 'invalid_response', transportDetail);
+        return fail(response.reason === 'output_limit' || response.reason === 'incomplete_output' ? 'coverage_incomplete' : 'unavailable',
+          response.reason, transportDetail);
       }
       if (Buffer.byteLength(response.text, 'utf8') > outputBytes) return fail('coverage_incomplete', 'output_limit');
       const parsed = parseResponse(response.text, captured, binding, locationCatalog);
       return parsed.assessment ? freezeJson({...parsed.assessment, promptFingerprint}) :
-        emptyAssessment('unavailable', 'invalid_response', binding, parsed.diagnostic);
+        emptyAssessment('unavailable', 'invalid_response', binding, parsed.diagnostic,
+          undefined, parsed.diagnostic && `resp_${parsed.diagnostic.stage}_${parsed.diagnostic.code}`);
     } catch {
       signal.throwIfAborted();
       return fail('unavailable', Date.now() >= deadlineMs ? 'timeout' : 'provider_error');

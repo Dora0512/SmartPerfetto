@@ -61,6 +61,17 @@ describe('claim verification status line', () => {
     expect(claimVerificationStatusLine(summary('not_checked', []), 'en')).toBe('Claim verification: no structured claims');
     expect(claimVerificationStatusLine(undefined, 'en')).toBeUndefined();
   });
+
+  it('appends closed-vocabulary triage detail after the reason', () => {
+    expect(claimVerificationStatusLine(summary('partial', ['not_checked', 'not_checked'],
+      {notCheckedReason: 'invalid_declarations', notCheckedDetail: 'invalid_json,duplicate_marker'}), 'zh-CN'))
+      .toBe('断言核验: 未核验 0/2（结论声明格式无效，断言未进入核验：invalid_json,duplicate_marker）');
+    expect(claimVerificationStatusLine(summary('partial', ['not_checked'],
+      {notCheckedReason: 'provider_error', notCheckedDetail: 'http_429;attempts_2'}), 'en'))
+      .toBe('Claim verification: not verified 0/1 (the semantic review call failed: http_429;attempts_2)');
+    expect(claimVerificationStatusLine(summary('partial', ['not_checked'], {notCheckedReason: 'timeout'}), 'en'))
+      .toBe('Claim verification: not verified 0/1 (semantic review ran out of time)');
+  });
 });
 
 describe('grounded confidence', () => {

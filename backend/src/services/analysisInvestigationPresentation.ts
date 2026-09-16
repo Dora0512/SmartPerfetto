@@ -32,6 +32,7 @@ export interface ClaimVerificationStatusSummary {
   verifiedClaimCount?: number;
   unsupportedClaimCount?: number;
   notCheckedReason?: string;
+  notCheckedDetail?: string;
 }
 
 /**
@@ -60,7 +61,10 @@ export function claimVerificationStatusLine(
       default: return summary.notCheckedReason;
     }
   })();
-  const detail = reason ? localize(language, `（${reason}）`, ` (${reason})`) : '';
+  const detailInside = reason && summary.notCheckedDetail
+    ? localize(language, `：${summary.notCheckedDetail}`, `: ${summary.notCheckedDetail}`)
+    : '';
+  const detail = reason ? localize(language, `（${reason}${detailInside}）`, ` (${reason}${detailInside})`) : '';
   if (summary.status === 'failed') {
     return `${prefix}: ${localize(language, `未通过，${unsupported} 条断言与证据不符（已核验 ${verified}/${total}）`,
       `failed — ${unsupported} claim(s) contradict the evidence (verified ${verified}/${total})`)}`;
@@ -76,7 +80,7 @@ export function claimVerificationStatusLine(
 
 /** Display counts come from the claim results themselves, never from a stored count. */
 export function summarizeClaimVerification(verification: {
-  status: string; unsupportedClaimCount?: number; notCheckedReason?: string;
+  status: string; unsupportedClaimCount?: number; notCheckedReason?: string; notCheckedDetail?: string;
   claimResults?: readonly {status: string}[]; issues?: readonly unknown[];
 } | undefined): (ClaimVerificationStatusSummary & {issueCount: number}) | undefined {
   if (!verification) return undefined;
@@ -88,6 +92,7 @@ export function summarizeClaimVerification(verification: {
     verifiedClaimCount: claims.filter(claim => claim.status === 'verified').length,
     unsupportedClaimCount: claims.filter(claim => claim.status === 'unsupported').length,
     ...(verification.notCheckedReason ? {notCheckedReason: verification.notCheckedReason} : {}),
+    ...(verification.notCheckedDetail ? {notCheckedDetail: verification.notCheckedDetail} : {}),
     issueCount: verification.issues?.length ?? 0,
   };
 }

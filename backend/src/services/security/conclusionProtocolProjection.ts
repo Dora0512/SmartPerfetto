@@ -211,6 +211,36 @@ export function releaseConclusionProtocolProjection(token: IssuedConclusionProto
 }
 
 /** Preserve captured machine inputs and exact native declaration prose on their issued input roles. */
+/**
+ * Reduce protocol diagnostics to closed-vocabulary triage facts: channel
+ * statuses and issue codes, never raw payloads, parser paths or model values.
+ * The native path used to drop the whole field because of `rawPayload`; the
+ * codes are the only way an `invalid_declarations` verdict stays triageable.
+ */
+function protocolIssueCodesProjection(diagnostics: unknown): unknown {
+  if (!diagnostics || typeof diagnostics !== 'object') return undefined;
+  const channels = diagnostics as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  let kept = 0;
+  for (const channelName of ['sidecar', 'typedJson', 'conversation']) {
+    const channel = channels[channelName];
+    if (!channel || typeof channel !== 'object') continue;
+    const status = (channel as {status?: unknown}).status;
+    if (typeof status !== 'string') continue;
+    const issues = (channel as {issues?: unknown}).issues;
+    const codes: string[] = [];
+    if (Array.isArray(issues)) {
+      for (const issue of issues) {
+        const code = issue && typeof issue === 'object' ? (issue as {code?: unknown}).code : undefined;
+        if (typeof code === 'string' && code && codes.length < 3) codes.push(code);
+      }
+    }
+    projected[channelName] = {status, issueCodes: codes};
+    kept++;
+  }
+  return kept > 0 ? projected : undefined;
+}
+
 export function projectConclusionSemanticInput(input: {
   sessionId: string; snapshot: FinalSemanticSnapshot; prepared: PreparedClaimEvidence;
   providerQuery?: string; providerSelection?: FinalSemanticSnapshot['selectionScope'];
@@ -375,8 +405,9 @@ export function projectConclusionSemanticInput(input: {
   const base = projectInput<FinalSemanticSnapshot>(input.sessionId, {...withoutSelection,
     query: input.providerQuery === undefined ? input.snapshot.query : '',
     conclusionContract: undefined, evidenceSnapshot: evidence, sourceUse: undefined,
-    // Native raw payload is private diagnostic state, never semantic-provider input.
-    protocolDiagnostics: undefined});
+    // Native raw payload is private diagnostic state; closed-vocabulary issue
+    // codes survive so an ineligible declaration still names its parse failure.
+    protocolDiagnostics: protocolIssueCodesProjection(input.snapshot.protocolDiagnostics)});
   changed ||= base.changed;
   if (!base.value) return {value: base.value, changed: true, limited};
   base.value.conclusionContract = contractProjection.value;
