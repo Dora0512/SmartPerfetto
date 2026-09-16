@@ -290,52 +290,45 @@ describe('OpenAI native intent transport provider retry', () => {
   const okBody = () => new Response(JSON.stringify({model: 'm', choices: [
     {message: {role: 'assistant', content: 'fine'}, finish_reason: 'stop'},
   ]}), {status: 200});
+  const run = (fetchImpl: typeof fetch, budgetMs = 60_000) => runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
+    deadlineMs: Date.now() + budgetMs, outputByteLimit: 1024, config: retryConfig, fetchImpl});
 
-  it('retries once after a transient 5xx and reports the attempt count', async () => {
-    const calls: number[] = [];
-    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => {
-      calls.push(calls.length);
-      return calls.length === 1 ? new Response('{}', {status: 500}) : okBody();
-    });
-    const pending = runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
-      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl});
+  it.each<[string, () => Promise<Response>]>([
+    ['a 5xx', async () => new Response('{}', {status: 500})],
+    ['a rate limit', async () => new Response('{}', {status: 429})],
+    ['a thrown fetch error', async () => {throw new Error('socket hang up');}],
+  ])('retries %s once and reports the attempt count', async (_label, firstCall) => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementationOnce(firstCall).mockImplementation(async () => okBody());
+    const pending = run(fetchImpl);
     await jest.advanceTimersByTimeAsync(2_500);
     await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine', attempts: 2});
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it('retries a thrown fetch error the same as a 5xx', async () => {
-    const fetchImpl = jest.fn<typeof fetch>()
-      .mockRejectedValueOnce(new Error('socket hang up'))
-      .mockImplementation(async () => okBody());
-    const pending = runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
-      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl});
-    await jest.advanceTimersByTimeAsync(2_500);
-    await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine', attempts: 2});
-  });
-
   it('keeps the http status and attempt count when both calls fail', async () => {
-    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 502}));
-    const pending = runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
-      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl});
+    const pending = run(jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 502})));
     await jest.advanceTimersByTimeAsync(2_500);
     await expect(pending).resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: 502, attempts: 2});
   });
 
-  it('does not retry when the deadline is nearly exhausted', async () => {
-    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 500}));
-    await expect(runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
-      deadlineMs: Date.now() + 1_000, outputByteLimit: 1024, config: retryConfig, fetchImpl}))
-      .resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: 500});
+  it.each([400, 401, 403, 404, 422])('never retries a deterministic %i', async status => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status}));
+    await expect(run(fetchImpl)).resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: status});
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it('never retries protocol failures', async () => {
-    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () =>
-      new Response(JSON.stringify({model: 'm', choices: []}), {status: 200}));
-    await expect(runOpenAiIntentTransport({prompt: 'p', systemPrompt: '',
-      deadlineMs: Date.now() + 60_000, outputByteLimit: 1024, config: retryConfig, fetchImpl}))
-      .resolves.toEqual({status: 'unavailable', reason: 'invalid_response'});
+  it.each<[string, unknown, object]>([
+    ['an error body delivered with 200', {error: {message: 'bad model'}}, {status: 'unavailable', reason: 'provider_error'}],
+    ['a protocol failure', {model: 'm', choices: []}, {status: 'unavailable', reason: 'invalid_response'}],
+  ])('never retries %s', async (_label, body, expected) => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(body), {status: 200}));
+    await expect(run(fetchImpl)).resolves.toEqual(expected);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry when the deadline is nearly exhausted', async () => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 500}));
+    await expect(run(fetchImpl, 1_000)).resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: 500});
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

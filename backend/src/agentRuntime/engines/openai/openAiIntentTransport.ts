@@ -94,6 +94,17 @@ const PROVIDER_ERROR_RETRY_BACKOFF_MS = 2_000;
 /** Only retry while enough of the shared deadline remains for a full second call. */
 const PROVIDER_ERROR_RETRY_MIN_REMAINING_MS = 15_000;
 
+/**
+ * Only statuses that say "try again later" are transient. Auth, routing and
+ * request-shape errors (400/401/403/404/422) answer the same way on a second
+ * call, and a 200 carrying a parseable error body gives no evidence of
+ * transience. A body that fails to read or parse throws, and is retried like
+ * a dropped connection because the two cannot be told apart.
+ */
+function isTransientHttpStatus(status: number | undefined): boolean {
+  return status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500);
+}
+
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     const timer = setTimeout(() => {
@@ -119,8 +130,8 @@ type ValidatedIntentConfig = {
 
 /**
  * One request in the pinned native protocol; truncation never starts another
- * call. A transient provider failure (5xx, gateway reset, rate limit) is
- * retried once inside the same deadline, so the single semantic-review call
+ * call. A transient provider failure (5xx, 408/425/429, a thrown connection
+ * error) is retried once inside the same deadline, so the single semantic-review call
  * per captured context survives endpoint hiccups without ever extending the
  * run budget.
  */
@@ -145,13 +156,16 @@ export function runOpenAiIntentTransport(input: OpenAiIntentTransportInput) {
       // as a 5xx; runIntentTransport's outer catch would otherwise swallow it
       // without retry or diagnostics. Cancellation still propagates.
       let result: IntentTransportResult;
+      let transient: boolean;
       try {
         result = await dispatchOneRequest(input, validated, scope);
+        transient = result.status === 'unavailable' && result.reason === 'provider_error'
+          && isTransientHttpStatus(result.httpStatus);
       } catch (error) {
         if (scope.signal.aborted || input.signal?.aborted) throw error;
         result = {status: 'unavailable', reason: 'provider_error'};
+        transient = true;
       }
-      const transient = result.status === 'unavailable' && result.reason === 'provider_error';
       if (!transient || attempt > 1 || scope.remainingMs() < PROVIDER_ERROR_RETRY_MIN_REMAINING_MS) {
         // `attempts` is diagnostic only; attach it when a retry actually ran.
         return attempt > 1 ? {...result, attempts: attempt} : result;
