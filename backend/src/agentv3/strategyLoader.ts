@@ -386,6 +386,38 @@ export type InvestigationProfiles = ReadonlyMap<string, {
   requirements: readonly AnalysisInvestigationRequirement[];
 }>;
 
+/**
+ * Attach load context to strict parse failures. The error code prefix stays
+ * intact so substring matching (tests, `strategy_invalid_*` handling) keeps
+ * working; only files that were parseable before but lost context gain it.
+ */
+function withStrategyParseContext<T>(run: () => T, context: string): T {
+  try {
+    return run();
+  } catch (error) {
+    // Bare code, or a code already tagged with `#requirementId` but no file yet.
+    if (error instanceof Error && /^strategy_[a-z0-9_]+(#[^\s:]+)?$/.test(error.message)) {
+      throw new Error(`${error.message}:${context}`);
+    }
+    throw error;
+  }
+}
+
+/** Tag a requirement-level failure with the requirement id when it is readable. */
+function withRequirementTag<T>(run: () => T, raw: unknown): T {
+  const record = isRecord(raw) ? raw : undefined;
+  const id = typeof record?.id === 'string' && /^[a-z][a-z0-9_]*$/.test(record.id.trim())
+    ? record.id.trim() : undefined;
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof Error && id && /^strategy_[a-z0-9_]+$/.test(error.message)) {
+      throw new Error(`${error.message}#${id}`);
+    }
+    throw error;
+  }
+}
+
 function parseInvestigationRequirement(value: unknown): AnalysisInvestigationRequirement {
   if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'domain', 'description', 'required', 'condition', 'evidence_metrics'])
     || !nonEmptyString(value.id) || !/^[a-z][a-z0-9_]*$/.test(value.id)
@@ -446,7 +478,8 @@ export function parseInvestigationProfiles(value: unknown): InvestigationProfile
       || !Array.isArray(entry.requirements) || !entry.requirements.length) {
       throw new Error('strategy_invalid_investigation_profile');
     }
-    const requirements = entry.requirements.map(parseInvestigationRequirement);
+    const requirements = entry.requirements.map(requirement =>
+      withRequirementTag(() => parseInvestigationRequirement(requirement), requirement));
     if (new Set(requirements.map(requirement => requirement.id)).size !== requirements.length) {
       throw new Error('strategy_duplicate_investigation_requirement');
     }
@@ -489,7 +522,8 @@ export function parseInvestigationContract(value: unknown, profiles: Investigati
     profileRefs.push({id: ref.id, version: profile.version});
     profile.requirements.forEach(requirement => append({...requirement, profileId: ref.id as string, profileVersion: profile.version}));
   }
-  const localRequirements = ((value.requirements ?? []) as unknown[]).map(parseInvestigationRequirement);
+  const localRequirements = ((value.requirements ?? []) as unknown[]).map(requirement =>
+    withRequirementTag(() => parseInvestigationRequirement(requirement), requirement));
   if (new Set(localRequirements.map(requirement => requirement.id)).size !== localRequirements.length) {
     throw new Error('strategy_duplicate_investigation_requirement');
   }
@@ -518,7 +552,9 @@ function parseStrategyFile(filePath: string, investigationProfiles: Investigatio
     }
     investigationRequirements = rawInvestigationRequirements.map(requirement => requirement.trim());
   }
-  const investigationContract = parseInvestigationContract(frontmatter.investigation_contract, investigationProfiles);
+  const investigationContract = withStrategyParseContext(
+    () => parseInvestigationContract(frontmatter.investigation_contract, investigationProfiles),
+    filePath);
 
   const rawHints = (frontmatter.phase_hints as Array<Record<string, unknown>> | undefined) || [];
   const phaseHints: PhaseHint[] = rawHints.map(h => ({
@@ -728,9 +764,9 @@ function baseStrategies(): Map<string, StrategyDefinition> {
   if (baseCache && !DEV_MODE) return baseCache;
 
   const loaded = new Map<string, StrategyDefinition>();
-  const investigationProfiles = parseInvestigationProfiles(yaml.load(
+  const investigationProfiles = withStrategyParseContext(() => parseInvestigationProfiles(yaml.load(
     fs.readFileSync(path.join(STRATEGIES_DIR, 'investigation-profiles.yaml'), 'utf8'),
-  ));
+  )), path.join(STRATEGIES_DIR, 'investigation-profiles.yaml'));
   const files = fs.readdirSync(STRATEGIES_DIR)
     .filter(file => file.endsWith('.strategy.md'))
     .sort();

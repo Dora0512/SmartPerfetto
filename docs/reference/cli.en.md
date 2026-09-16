@@ -122,6 +122,7 @@ Set `SMARTPERFETTO_UPDATE_CHECK=off` to disable application update checks.
 ```bash
 smp doctor --format text
 smp doctor --format json
+smp probe
 smp config init
 smp config init --force
 smp provider list
@@ -129,6 +130,11 @@ smp provider list --format json
 smp provider test system
 smp provider test <providerId> --format json
 ```
+
+`smp probe` loads the strategy registry with the exact artifact being invoked
+(dist or tsx) and prints `strategies OK <N>`, or the parse error with file and
+requirement context on failure. A strategy-file/parser version skew kills every
+analysis session at startup; use it as a pre-batch gate on the same build.
 
 CLI configuration and Web UI configuration are separate by default. The CLI
 Provider store is `<CLI home>/runtime/data/providers.json`, normally

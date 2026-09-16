@@ -173,3 +173,18 @@ npm run test:scene-trace-regression
 For scene-critical Skills, also run the relevant Agent SSE e2e check from
 `.claude/rules/testing.md` and inspect both `backend/test-output/` and
 `backend/logs/sessions/`.
+
+## Strategy/Parser Co-Versioning
+
+Strategy frontmatter (`backend/strategies/*.strategy.md`,
+`investigation-profiles.yaml`) is read from the live directory by whichever
+artifact runs — `dist/` and `tsx` resolve the same path. A strategy schema
+change plus a stale parser build therefore kills every session at startup with
+a bare `strategy_invalid_*` code.
+
+- Strategy file changes and `strategyLoader.ts` parser changes must land in the
+  same commit, with `dist/` rebuilt before any dist-based run.
+- Before a batch of `smp analyze` runs, probe the exact artifact the batch will
+  use: `node dist/cli-user/bin.js probe` (or `npx tsx src/cli-user/bin.ts
+  probe`). A green source-tree `validate --strategies` does not clear a dist
+  run.

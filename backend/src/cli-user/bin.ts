@@ -25,6 +25,7 @@ import { runShowCommand } from './commands/show';
 import { runReportCommand, runReportExportCommand } from './commands/report';
 import { runRmCommand } from './commands/rm';
 import { runDoctorCommand } from './commands/doctor';
+import { runProbeCommand } from './commands/probe';
 import { runConfigInitCommand } from './commands/config';
 import { runProviderListCommand, runProviderTestCommand } from './commands/provider';
 import { runQueryCommand } from './commands/query';
@@ -268,6 +269,13 @@ function main(): void {
         sessionDir: g.sessionDir,
         format: textJsonFormat(opts.format),
       }));
+    });
+
+  program
+    .command('probe')
+    .description('verify this artifact can load the live strategy registry before a batch run')
+    .action(async () => {
+      await runAndExit(() => runProbeCommand());
     });
 
   const configCmd = program.command('config').description('manage SmartPerfetto CLI configuration');

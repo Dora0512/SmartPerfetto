@@ -107,6 +107,7 @@ smp update check --format json
 ```bash
 smp doctor --format text
 smp doctor --format json
+smp probe
 smp config init
 smp config init --force
 smp provider list
@@ -114,6 +115,10 @@ smp provider list --format json
 smp provider test system
 smp provider test <providerId> --format json
 ```
+
+`smp probe` 用当前被调用的构建（dist 或 tsx）加载策略注册表并打印
+`strategies OK <N>`，失败时输出带文件与需求定位的解析错误。策略文件与解析器
+版本错配会让每个分析会话在启动时崩溃；批量运行前用它对同一构建做门禁。
 
 CLI 配置与 Web UI 配置默认彼此独立。CLI Provider store 位于
 `<CLI home>/runtime/data/providers.json`，通常是
