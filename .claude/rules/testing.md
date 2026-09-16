@@ -79,6 +79,34 @@ deliberately accepted debt and must be justified in the commit that does it —
 a baselined suite is still untested, and the file records what is unguarded
 rather than blessing it.
 
+## Dead Code Must Not Keep A Green Suite
+
+`check:test-registration` asks which suites the gate cannot run.
+`check:orphaned-modules` asks the mirror question: which modules production no
+longer imports while a registered suite still tests them. Both failures look
+the same from `verify:pr` — everything green — and the second is worse, because
+a passing suite reads as proof the behaviour works.
+
+```bash
+npm run check:orphaned-modules
+```
+
+`phaseHintMatcher.ts` sat in that state with 17 passing tests after the commit
+that replaced prescribed plans removed its only call site. The strategy field it
+served kept accepting authored `critical_tools`, and Self-Evolution kept
+proposing patches to it, with no effect on any analysis.
+
+The check matches a module by its own source path, never by basename: the test
+path was itself registered in `package.json`, so a basename match would have
+cleared the very module that was dead. Re-export shims and script-invoked
+entrypoints are exempt.
+
+`scripts/orphaned-modules-baseline.json` records 36 modules already in this
+state. They are accepted debt, not blessed: each is behaviour the product does
+not run while a suite vouches for it. Shrink the list by restoring the call site
+or deleting the module with its suite; `--update-baseline` grows it only with a
+justification in the same commit.
+
 Suites that no focused tier owns live in `test:unit-sweep` (233 of them, ~39s).
 Prefer the tier that matches the change; the sweep is the home for everything
 else. Directory-scoped patterns are also supported by the check, but note two
@@ -93,6 +121,7 @@ contain at least one test".
 | Change type | Required verification |
 | --- | --- |
 | Docs-only, not runtime-read | `git diff --check` |
+| Removing a call site or a module | `npm run check:orphaned-modules` plus the owning `test:*` tier |
 | Docs that define commands, release/package workflow, or runtime-read paths | `git diff --check` plus the smallest command/path smoke that proves the doc did not drift |
 | Build/type fix | `cd backend && npm run typecheck` plus affected tests |
 | Contract/type-only change | `cd backend && npx tsc --noEmit` plus relevant contract tests |
