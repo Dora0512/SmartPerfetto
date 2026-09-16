@@ -14,7 +14,7 @@
  */
 
 import markdownit from 'markdown-it';
-import {investigationStatusLines} from './analysisInvestigationPresentation';
+import {claimVerificationNotCheckedExplanation, investigationStatusLines} from './analysisInvestigationPresentation';
 import {analysisConfidenceIsGrounded} from '../agentv3/analysisTermination';
 import {projectAnalysisEvidenceForDisplay} from './evidence/analysisEvidencePresentation';
 import {
@@ -5814,6 +5814,7 @@ export class HTMLReportGenerator {
       .map(([key, count]) => `${this.escapeHtml(key)}: ${count}`)
       .join(' · ');
     const status = verification?.status || 'not_checked';
+    const notCheckedExplanation = claimVerificationNotCheckedExplanation(verification, outputLanguage);
     const supportById = this.uniqueReportClaimEntries(claimSupport ?? [], claim => claim.claimId);
     const issueRows = (verification?.issues || []).map(issue => `
       <tr>
@@ -5860,8 +5861,8 @@ export class HTMLReportGenerator {
       <div class="claim-source-note">
         ${this.escapeHtml(localize(
           outputLanguage,
-          `Verifier 状态: ${status}；检查断言 ${verification?.checkedClaimCount ?? 0} 条；不支持 ${verification?.unsupportedClaimCount ?? 0} 条${supportSummary ? `；支持级别 ${supportSummary}` : ''}`,
-          `Verifier status: ${status}; checked ${verification?.checkedClaimCount ?? 0} claims; unsupported ${verification?.unsupportedClaimCount ?? 0}${supportSummary ? `; support levels ${supportSummary}` : ''}`,
+          `Verifier 状态: ${status}；检查断言 ${verification?.checkedClaimCount ?? 0} 条；不支持 ${verification?.unsupportedClaimCount ?? 0} 条${supportSummary ? `；支持级别 ${supportSummary}` : ''}${notCheckedExplanation ? `；未核验原因：${notCheckedExplanation}` : ''}`,
+          `Verifier status: ${status}; checked ${verification?.checkedClaimCount ?? 0} claims; unsupported ${verification?.unsupportedClaimCount ?? 0}${supportSummary ? `; support levels ${supportSummary}` : ''}${notCheckedExplanation ? `; not checked because ${notCheckedExplanation}` : ''}`,
         ))}
       </div>
       ${claimDetails ? `<div class="claim-source-note">${localize(outputLanguage,

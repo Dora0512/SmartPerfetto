@@ -50,21 +50,8 @@ export function claimVerificationStatusLine(
   const verified = summary.verifiedClaimCount ?? 0;
   const unsupported = summary.unsupportedClaimCount ?? 0;
   const prefix = localize(language, '断言核验', 'Claim verification');
-  const reason = (() => {
-    switch (summary.notCheckedReason) {
-      case undefined: return undefined;
-      case 'invalid_declarations': return localize(language, '结论声明格式无效，断言未进入核验', 'the conclusion declaration was invalid, so no claim was admitted');
-      case 'timeout': return localize(language, '语义复核超出时间预算', 'semantic review ran out of time');
-      case 'provider_error': return localize(language, '语义复核调用失败', 'the semantic review call failed');
-      case 'invalid_snapshot': return localize(language, '核验输入不完整', 'the verification input was incomplete');
-      case 'complete_proposition_review_unavailable': return localize(language, '完整命题复核不可用', 'complete proposition review was unavailable');
-      default: return summary.notCheckedReason;
-    }
-  })();
-  const detailInside = reason && summary.notCheckedDetail
-    ? localize(language, `：${summary.notCheckedDetail}`, `: ${summary.notCheckedDetail}`)
-    : '';
-  const detail = reason ? localize(language, `（${reason}${detailInside}）`, ` (${reason}${detailInside})`) : '';
+  const explanation = claimVerificationNotCheckedExplanation(summary, language);
+  const detail = explanation ? localize(language, `（${explanation}）`, ` (${explanation})`) : '';
   if (summary.status === 'failed') {
     return `${prefix}: ${localize(language, `未通过，${unsupported} 条断言与证据不符（已核验 ${verified}/${total}）`,
       `failed — ${unsupported} claim(s) contradict the evidence (verified ${verified}/${total})`)}`;
@@ -76,6 +63,32 @@ export function claimVerificationStatusLine(
   return `${prefix}: ${verified > 0
     ? localize(language, `部分核验 ${verified}/${total}`, `partially verified ${verified}/${total}`)
     : localize(language, `未核验 0/${total}`, `not verified 0/${total}`)}${detail}`;
+}
+
+/**
+ * Why claims were not checked, with the closed-vocabulary detail codes when
+ * present. Shared by the CLI status line and the HTML report so both name the
+ * same cause.
+ */
+export function claimVerificationNotCheckedExplanation(
+  verification: {notCheckedReason?: string; notCheckedDetail?: string} | undefined,
+  language: OutputLanguage,
+): string | undefined {
+  const notCheckedReason = verification?.notCheckedReason;
+  if (!notCheckedReason) return undefined;
+  const reason = (() => {
+    switch (notCheckedReason) {
+      case 'invalid_declarations': return localize(language, '结论声明格式无效，断言未进入核验', 'the conclusion declaration was invalid, so no claim was admitted');
+      case 'timeout': return localize(language, '语义复核超出时间预算', 'semantic review ran out of time');
+      case 'provider_error': return localize(language, '语义复核调用失败', 'the semantic review call failed');
+      case 'invalid_snapshot': return localize(language, '核验输入不完整', 'the verification input was incomplete');
+      case 'complete_proposition_review_unavailable': return localize(language, '完整命题复核不可用', 'complete proposition review was unavailable');
+      default: return notCheckedReason;
+    }
+  })();
+  return verification.notCheckedDetail
+    ? localize(language, `${reason}：${verification.notCheckedDetail}`, `${reason}: ${verification.notCheckedDetail}`)
+    : reason;
 }
 
 /** Display counts come from the claim results themselves, never from a stored count. */

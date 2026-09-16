@@ -576,6 +576,18 @@ describe('HTMLReportGenerator', () => {
     expect(data.result.conclusion).toBe('Keep the original conclusion.');
   });
 
+  test('names why claims were not checked, including closed triage detail codes', () => {
+    const data = claimDetailReport({claims: [{id: 'claim-0', text: 'Unchecked claim', references: []}]});
+    data.result.claimVerificationResult = {
+      schemaVersion: 'claim_verifier@2', status: 'not_checked', policy: 'record_only', passed: false,
+      checkedClaimCount: 0, unsupportedClaimCount: 0, claimResults: [], issues: [],
+      notCheckedReason: 'invalid_declarations', notCheckedDetail: 'invalid_relation_proposal:invalid_kind,invalid_semantics',
+    } as any;
+
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+    expect(html).toContain('未核验原因：结论声明格式无效，断言未进入核验：invalid_relation_proposal:invalid_kind,invalid_semantics');
+  });
+
   test('keeps formal reference roles and complete values visible without raw diagnostic bundles', () => {
     const longValue = 'value-'.repeat(40) + 'TAIL_MARKER';
     const data = claimDetailReport({claims: [{id: 'all-roles', text: 'Source and Trace references',

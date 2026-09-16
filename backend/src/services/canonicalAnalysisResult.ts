@@ -9,7 +9,7 @@ import {parseConclusionContractSidecar, parseTypedConclusionContractJson, parseD
   parseDeclaredRelationProposals, declaredFields, declaredContractForResult, type ConclusionContract, type ConclusionBindingEligibility,
   type ConclusionContractDeclarationParseResult, type ConclusionContractSidecarParseResult,
   MAX_CONCLUSION_STRUCTURE_DETAILS, isConclusionContractStructureDetail,
-  MAX_RELATION_PROPOSAL_DIAGNOSTICS, isConclusionRelationProposalDiagnostic,
+  MAX_RELATION_PROPOSAL_DIAGNOSTICS, isConclusionRelationProposalDiagnostic, CONCLUSION_PARSE_ISSUE_CODES,
   type ConclusionContractStructureDetail, type ConclusionContractParseIssue,
   type ConclusionRelationProposalDiagnostic} from '../agent/core/conclusionContract';
 import {parseConversationResponseWithProjection, type ConversationEvidenceRef,
@@ -91,11 +91,6 @@ export interface CandidateProtocolDiagnostic {
   sourceBindingCount?: number;
 }
 
-const CANDIDATE_PROTOCOL_ISSUE_CODES: readonly ConclusionContractParseIssue['code'][] = [
-  'invalid_framing', 'duplicate_marker', 'invalid_json', 'invalid_contract', 'invalid_claim',
-  'invalid_reference', 'invalid_semantics', 'duplicate_claim_id', 'invalid_relation_proposal',
-  'duplicate_proposal_id', 'untrusted_parser_metadata',
-];
 const CANDIDATE_PROTOCOL_DIAGNOSTIC_KEYS = [
   'schemaVersion', 'stage', 'candidateIndex', 'status', 'sidecarStatus', 'typedJsonStatus',
   'issueCodes', 'issueCount', 'rawChars', 'canonicalChars', 'projectionKind',
@@ -114,8 +109,8 @@ export function sanitizeCandidateProtocolDiagnostic(value: unknown): CandidatePr
       !['not_checked', ...statuses].includes(data.typedJsonStatus) ||
       !['preserved', 'protocol_projection', 'redacted', 'replaced'].includes(data.projectionKind) ||
       ![data.issueCount, data.rawChars, data.canonicalChars].every(count => Number.isSafeInteger(count) && count >= 0) ||
-      !Array.isArray(data.issueCodes) || data.issueCodes.length > CANDIDATE_PROTOCOL_ISSUE_CODES.length ||
-      data.issueCodes.some(code => !CANDIDATE_PROTOCOL_ISSUE_CODES.includes(code)) ||
+      !Array.isArray(data.issueCodes) || data.issueCodes.length > CONCLUSION_PARSE_ISSUE_CODES.length ||
+      data.issueCodes.some(code => !CONCLUSION_PARSE_ISSUE_CODES.includes(code)) ||
       new Set(data.issueCodes).size !== data.issueCodes.length || data.issueCount < data.issueCodes.length) return undefined;
   const counts = [data.claimCount, data.semanticClaimCount, data.sourceBindingCount];
   if (counts.some(count => count !== undefined) &&

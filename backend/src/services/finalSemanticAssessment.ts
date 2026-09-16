@@ -3,7 +3,8 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import {createHash} from 'node:crypto';
-import {parseClaimSemanticsDeclaration, type ConclusionContract, type ConclusionBindingEligibility} from '../agent/core/conclusionContract';
+import {conclusionParseIssueTriageCodes, parseClaimSemanticsDeclaration, type ConclusionContract,
+  type ConclusionBindingEligibility} from '../agent/core/conclusionContract';
 import type {RuntimeFinalizationContext} from '../agentRuntime/analysisFinalizationContext';
 import type {AnalysisRunSelection} from '../agentRuntime/analysisRunSpec';
 import {loadPromptTemplate} from '../agentv3/strategyLoader';
@@ -234,47 +235,26 @@ function emptyAssessment(
  * source so an opaque `invalid_declarations` is still triageable.
  */
 function declarationIssueCodes(diagnostics: unknown, contract: unknown): string[] {
-  const codes: string[] = [];
-  const pushCode = (value: unknown): void => {
-    if (typeof value === 'string' && value && !codes.includes(value)) codes.push(value);
-  };
+  const issues: unknown[] = [];
   let sawChannel = false;
-  if (diagnostics && typeof diagnostics === 'object') {
-    const channels = diagnostics as Record<string, unknown>;
-    for (const channelName of ['sidecar', 'typedJson', 'conversation']) {
-      const channel = channels[channelName];
-      if (!channel || typeof channel !== 'object') continue;
-      const status = (channel as {status?: unknown}).status;
-      if (typeof status === 'string' && status !== 'absent') sawChannel = true;
-      // Full parse results carry `issues`; the provider-input projection keeps
-      // only `issueCodes`. Both are closed vocabulary.
-      const issueLists = [(channel as {issues?: unknown}).issues, (channel as {issueCodes?: unknown}).issueCodes];
-      for (const issues of issueLists) {
-        if (!Array.isArray(issues)) continue;
-        for (const issue of issues) {
-          pushCode(typeof issue === 'string' ? issue
-            : issue && typeof issue === 'object' ? (issue as {code?: unknown}).code : undefined);
-          if (codes.length >= 3) return codes;
-        }
-      }
-    }
+  const channels = record(diagnostics) ? diagnostics : {};
+  for (const channel of [channels.sidecar, channels.typedJson, channels.conversation]) {
+    if (!record(channel)) continue;
+    if (typeof channel.status === 'string' && channel.status !== 'absent') sawChannel = true;
+    // Full parse results carry `issues`; the provider-input projection keeps only `triageCodes`.
+    for (const list of [channel.issues, channel.triageCodes]) if (Array.isArray(list)) issues.push(...list);
   }
-  const record = contract && typeof contract === 'object' ? contract as Record<string, unknown> : undefined;
-  const parseIssues = record?.parseIssues;
-  if (Array.isArray(parseIssues)) {
-    for (const issue of parseIssues) {
-      pushCode(issue && typeof issue === 'object' ? (issue as {code?: unknown}).code : undefined);
-      if (codes.length >= 3) return codes;
-    }
-  }
-  if (codes.length === 0) {
-    // No parser recorded an issue; name where the verdict must have come from.
-    const eligibility = record?.bindingEligibility;
-    if (sawChannel) codes.push('invalid_channel_without_issues');
-    else if (eligibility === 'ineligible') codes.push('contract_ineligible_without_issues');
-    else if (eligibility === 'legacy_unchecked') codes.push('legacy_unchecked_ineligible_snapshot');
-  }
-  return codes;
+  const contractRecord = record(contract) ? contract : undefined;
+  if (Array.isArray(contractRecord?.parseIssues)) issues.push(...contractRecord.parseIssues);
+  const codes = conclusionParseIssueTriageCodes(issues);
+  if (codes.length > 0) return codes;
+  // Issues were recorded but none is in the fixed vocabulary; never echo them.
+  if (issues.length > 0) return ['unrecognized_issue_codes'];
+  // No parser recorded an issue; name where the verdict must have come from.
+  if (sawChannel) return ['invalid_channel_without_issues'];
+  if (contractRecord?.bindingEligibility === 'ineligible') return ['contract_ineligible_without_issues'];
+  if (contractRecord?.bindingEligibility === 'legacy_unchecked') return ['legacy_unchecked_ineligible_snapshot'];
+  return [];
 }
 
 /** Transport triage facts only; no provider text. */

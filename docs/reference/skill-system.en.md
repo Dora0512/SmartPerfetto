@@ -261,6 +261,8 @@ context support.
 
 A scene Strategy references versioned profiles from `backend/strategies/investigation-profiles.yaml` through `investigation_contract`. `evidence_metrics` uses producer-declared metric IDs; display column names cannot confer semantic authority. Ordinary-answer investigation obligations are separate from `final_report_contract`.
 
+A requirement's `condition` decides when the obligation applies. `kind: semantic` is judged by the final semantic review. `kind: evidence` carries `metric_id`, `operator` (`gt`/`gte`/`lt`/`lte`) and a numeric `value`, and is resolved from the producer-bound evidence ledger without the model, so a `ledgerAcquisition` row is still produced when the semantic review is unavailable. Only `observed` records are compared; a metric absent from the ledger stays unknown rather than reading as a condition that did not hold.
+
 System SQL intersects requested windows, scheduling spans and frequency samples, preserving original and clipped timestamps, UTID/UPID, CPU/ucpu and topology provenance. Thread states distinguish Running, R/R+, S/I, D/DK and unknown coverage. Placement retains medium and unknown clusters. An exact same-ucpu next-task handoff establishes an observed switch, not its motive or all attributable waiting. Observed priority does not establish FIFO/RR/OTHER policy.
 
 `display.columns` projection must preserve identity, scope and provenance fields needed by downstream evidence reads. Composite Skills, artifact save/restore and fetch retain these facts. Formatted missing values cannot replace original typed nulls.

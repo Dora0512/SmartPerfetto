@@ -44,6 +44,17 @@ describe('analysis evidence presentation', () => {
     expect(Object.isFrozen(projected)).toBe(true);
   });
 
+  test('keeps not-checked triage detail through the writer and the strict reader', () => {
+    const input = fixture();
+    Object.assign(input.result.claimVerificationResult!, {
+      notCheckedReason: 'invalid_declarations', notCheckedDetail: 'invalid_relation_proposal:invalid_kind',
+    });
+    const projected = projectAnalysisEvidenceForDisplay(input);
+    expect(projected?.claimVerificationResult).toMatchObject({notCheckedDetail: 'invalid_relation_proposal:invalid_kind'});
+    expect(parseClosedAnalysisEvidencePresentation(JSON.parse(JSON.stringify(projected)))?.claimVerificationResult)
+      .toMatchObject({notCheckedReason: 'invalid_declarations', notCheckedDetail: 'invalid_relation_proposal:invalid_kind'});
+  });
+
   test('strict reader rejects unknown fields in every major nested family', () => {
     const valid = projectAnalysisEvidenceForDisplay(fixture());
     expect(valid).toBeDefined();

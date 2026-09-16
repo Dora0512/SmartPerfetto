@@ -3,7 +3,8 @@
 
 import {isDeepStrictEqual} from 'node:util';
 import {
-  CONCLUSION_PROTOCOL_VALUES, CONCLUSION_CONTRACT_SIDECAR_MARKER, declaredContractForResult, parseConclusionContractSidecar,
+  CONCLUSION_PROTOCOL_VALUES, CONCLUSION_CONTRACT_SIDECAR_MARKER, conclusionParseIssueTriageCodes, declaredContractForResult,
+  parseConclusionContractSidecar,
   parseTypedConclusionContractJson, renderConclusionContractSidecar,
   type ConclusionContract,
   type ConclusionContractClaimReference,
@@ -228,14 +229,7 @@ function protocolIssueCodesProjection(diagnostics: unknown): unknown {
     const status = (channel as {status?: unknown}).status;
     if (typeof status !== 'string') continue;
     const issues = (channel as {issues?: unknown}).issues;
-    const codes: string[] = [];
-    if (Array.isArray(issues)) {
-      for (const issue of issues) {
-        const code = issue && typeof issue === 'object' ? (issue as {code?: unknown}).code : undefined;
-        if (typeof code === 'string' && code && codes.length < 3) codes.push(code);
-      }
-    }
-    projected[channelName] = {status, issueCodes: codes};
+    projected[channelName] = {status, triageCodes: Array.isArray(issues) ? conclusionParseIssueTriageCodes(issues) : []};
     kept++;
   }
   return kept > 0 ? projected : undefined;

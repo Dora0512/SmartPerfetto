@@ -148,6 +148,55 @@ const RELATION_PROPOSAL_ITEM_REASONS: readonly ConclusionRelationProposalItemRea
   'invalid_unit', 'invalid_metric_column', 'invalid_delta_direction', 'invalid_proof_bindings',
 ];
 
+/** Keyed by the union so a new parse issue code cannot be left out. */
+const PARSE_ISSUE_CODE_SET: Readonly<Record<ConclusionContractParseIssue['code'], true>> = {
+  invalid_framing: true, duplicate_marker: true, invalid_json: true, invalid_contract: true, invalid_claim: true,
+  invalid_reference: true, invalid_semantics: true, duplicate_claim_id: true, invalid_relation_proposal: true,
+  duplicate_proposal_id: true, untrusted_parser_metadata: true,
+};
+
+export const CONCLUSION_PARSE_ISSUE_CODES = Object.freeze(
+  Object.keys(PARSE_ISSUE_CODE_SET) as ConclusionContractParseIssue['code'][]);
+
+const MAX_TRIAGE_CODES = 3;
+const MAX_TRIAGE_QUALIFIERS = 3;
+
+/** One issue, or one already-projected `code[:reason+reason]` string, in the fixed vocabulary. */
+function triageEntry(value: unknown): {code: string; qualifiers: string[]} | undefined {
+  if (typeof value === 'string') {
+    const [code, qualifier, ...rest] = value.split(':');
+    if (!hasOwn(PARSE_ISSUE_CODE_SET, code) || rest.length) return undefined;
+    if (qualifier === undefined) return {code, qualifiers: []};
+    const qualifiers = qualifier.split('+');
+    return code === 'invalid_relation_proposal' && qualifiers.every(reason =>
+      reason === 'collection_not_array' || oneOf(reason, RELATION_PROPOSAL_ITEM_REASONS)) ? {code, qualifiers} : undefined;
+  }
+  if (!record(value) || typeof value.code !== 'string' || !hasOwn(PARSE_ISSUE_CODE_SET, value.code)) return undefined;
+  return {code: value.code, qualifiers: value.code === 'invalid_relation_proposal' &&
+    isConclusionRelationProposalDiagnostic(value.relationProposalDiagnostic) ? [value.relationProposalDiagnostic.reason] : []};
+}
+
+/**
+ * Closed-vocabulary triage codes for declaration parse issues; never raw
+ * values, paths or ordinals. Each base code takes one slot, and relation
+ * proposal reasons qualify it (`invalid_relation_proposal:invalid_kind+unknown_field`)
+ * so several failing proposals cannot crowd out another code. Accepts parse
+ * issues or codes already in this form; anything outside the vocabulary is
+ * dropped rather than echoed.
+ */
+export function conclusionParseIssueTriageCodes(values: readonly unknown[]): string[] {
+  const qualifiersByCode = new Map<string, string[]>();
+  for (const entry of values.map(triageEntry)) {
+    if (!entry || (!qualifiersByCode.has(entry.code) && qualifiersByCode.size >= MAX_TRIAGE_CODES)) continue;
+    const known = qualifiersByCode.get(entry.code) ?? [];
+    qualifiersByCode.set(entry.code, known);
+    for (const qualifier of entry.qualifiers) {
+      if (!known.includes(qualifier) && known.length < MAX_TRIAGE_QUALIFIERS) known.push(qualifier);
+    }
+  }
+  return [...qualifiersByCode].map(([code, qualifiers]) => qualifiers.length ? `${code}:${qualifiers.join('+')}` : code);
+}
+
 export function isConclusionRelationProposalDiagnostic(value: unknown): value is ConclusionRelationProposalDiagnostic {
   if (!record(value) || !keysWithin(value, value.scope === 'collection' ? ['scope', 'reason'] : ['scope', 'ordinal', 'reason'])) {
     return false;

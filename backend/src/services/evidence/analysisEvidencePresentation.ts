@@ -175,14 +175,16 @@ function schemas(strict: boolean) {
     propositionCoverage: object({status: z.enum(['complete', 'partial', 'none']), covered: z.array(z.string()),
       uncovered: z.array(z.string()), reason: z.string()}).optional(),
   });
+  // Keyed by the result type: a field missing here would be stripped on write and rejected on read.
   const claimVerification = object({
     schemaVersion: z.enum(['claim_verifier@1', 'claim_verifier@2']),
     status: z.enum(['passed', 'failed', 'partial', 'not_checked']), policy: z.enum(['block', 'retry', 'warn_only', 'record_only']),
-    notCheckedReason: z.string().optional(), passed: z.boolean(), checkedClaimCount: z.number().int().nonnegative(),
+    notCheckedReason: z.string().optional(), notCheckedDetail: z.string().optional(),
+    passed: z.boolean(), checkedClaimCount: z.number().int().nonnegative(),
     unsupportedClaimCount: z.number().int().nonnegative(), claimResults: z.array(verificationClaim),
     issues: z.array(object({claimId: z.string(), severity: z.enum(['error', 'warning']), code: z.string(),
       message: z.string(), evidenceRefId: z.string().optional()})),
-  });
+  } satisfies Record<keyof ClaimVerificationResult, z.ZodType>);
 
   const identityTarget = object({
     traceId: z.string(), traceSide: z.enum(['current', 'reference', 'unknown']).optional(), packageName: z.string().optional(),

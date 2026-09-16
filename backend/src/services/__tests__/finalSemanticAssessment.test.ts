@@ -345,25 +345,39 @@ describe('final semantic assessment snapshot and transport', () => {
     });
 
   it('reports closed-vocabulary declaration issue codes for triage', async () => {
-    const sidecarRun = fixture();
-    sidecarRun.input.snapshot.declarationBindingEligibility = 'ineligible';
-    sidecarRun.reply.claims = [];
-    sidecarRun.input.snapshot.protocolDiagnostics = {sidecar: {status: 'invalid', bindingEligibility: 'ineligible',
-      issues: [{code: 'duplicate_marker', path: '$'}]}};
-    expect(await assessFinalSemantics(sidecarRun.input)).toMatchObject({status: 'not_checked', reason: 'invalid_declarations',
-      notCheckedDetail: 'duplicate_marker'});
+    const detailFor = async (protocolDiagnostics: unknown, parseIssues?: unknown[]) => {
+      const run = fixture();
+      run.input.snapshot.declarationBindingEligibility = 'ineligible';
+      run.reply.claims = [];
+      run.input.snapshot.protocolDiagnostics = protocolDiagnostics as any;
+      if (parseIssues) {
+        run.input.snapshot.conclusionContract = {...run.input.snapshot.conclusionContract!,
+          bindingEligibility: 'ineligible', parseIssues: parseIssues as any};
+      }
+      const assessment = await assessFinalSemantics(run.input);
+      expect(assessment).toMatchObject({status: 'not_checked', reason: 'invalid_declarations'});
+      return assessment.notCheckedDetail;
+    };
+
+    expect(await detailFor({sidecar: {status: 'invalid', bindingEligibility: 'ineligible',
+      issues: [{code: 'duplicate_marker', path: '$'}]}})).toBe('duplicate_marker');
 
     // All raw-body channels absent: eligibility was inherited from a contract
     // the runtime pre-parsed, so its parseIssues are the only triage source.
-    const contractRun = fixture();
-    contractRun.input.snapshot.declarationBindingEligibility = 'ineligible';
-    contractRun.reply.claims = [];
-    contractRun.input.snapshot.protocolDiagnostics = undefined;
-    contractRun.input.snapshot.conclusionContract = {...contractRun.input.snapshot.conclusionContract!,
-      bindingEligibility: 'ineligible',
-      parseIssues: [{code: 'invalid_semantics', path: 'claims[2].semantics'}, {code: 'invalid_claim', path: 'claims[3]'}]};
-    expect(await assessFinalSemantics(contractRun.input)).toMatchObject({status: 'not_checked', reason: 'invalid_declarations',
-      notCheckedDetail: 'invalid_semantics,invalid_claim'});
+    expect(await detailFor(undefined, [{code: 'invalid_semantics', path: 'claims[2].semantics'},
+      {code: 'invalid_claim', path: 'claims[3]'}])).toBe('invalid_semantics,invalid_claim');
+
+    // Relation proposal reasons survive both the full parse issue and the
+    // provider-input projection that keeps only closed `triageCodes`.
+    expect(await detailFor({
+      sidecar: {status: 'invalid', bindingEligibility: 'ineligible', issues: [{code: 'invalid_relation_proposal',
+        path: 'relationProposals[0]', relationProposalDiagnostic: {scope: 'item', ordinal: 1, reason: 'unknown_field'}}]},
+      typedJson: {status: 'invalid', triageCodes: ['invalid_relation_proposal:invalid_kind', 'invalid_semantics']},
+    })).toBe('invalid_relation_proposal:unknown_field+invalid_kind,invalid_semantics');
+
+    // Recorded issues outside the vocabulary are named as such, never echoed.
+    expect(await detailFor({sidecar: {status: 'invalid', bindingEligibility: 'ineligible',
+      issues: [{code: 'PRIVATE_CODE_CANARY', path: '$'}]}})).toBe('unrecognized_issue_codes');
   });
 
   it('binds explicit parser eligibility and never upgrades existing legacy claims', async () => {

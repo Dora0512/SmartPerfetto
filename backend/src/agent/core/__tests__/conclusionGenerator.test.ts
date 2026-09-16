@@ -17,8 +17,8 @@ import type { SharedAgentContext } from '../../types/agentProtocol';
 import type { ProgressEmitter } from '../orchestratorTypes';
 import type { ModelRouter } from '../modelRouter';
 import {parseConclusionContractSidecar, parseTypedConclusionContractJson, parseConclusionContractDeclaration,
-  parseDeclaredRelationProposals, renderConclusionContractSidecar,
-  type ConclusionContract, type ClaimSemanticsV1,
+  parseDeclaredRelationProposals, renderConclusionContractSidecar, conclusionParseIssueTriageCodes,
+  CONCLUSION_PARSE_ISSUE_CODES, type ConclusionContract, type ClaimSemanticsV1,
 } from '../conclusionContract';
 
 describe('complete generated conclusion collections', () => {
@@ -1605,6 +1605,40 @@ describe('versioned conclusion declaration sidecar', () => {
       {scope: 'item', ordinal: 1, reason: 'invalid_kind'},
       {scope: 'item', ordinal: 24, reason: 'invalid_kind'},
       undefined,
+    ]);
+  });
+
+  it('projects parse issues into closed triage codes with one slot per base code', () => {
+    const proposals = Array.from({length: 26}, (_, index) => ({...structuredClone(contract().relationProposals![0]),
+      id: `proposal:item_${index + 1}`})) as any[];
+    proposals[0].kind = 'invalid';
+    proposals[1].direction = 'sideways';
+    proposals[2].kind = 'invalid';
+    proposals[25].kind = 'invalid';
+    const relationIssues = parseDeclaredRelationProposals(proposals).issues;
+    expect(conclusionParseIssueTriageCodes([
+      ...relationIssues,
+      {code: 'invalid_semantics', path: 'claims[0].semantics'},
+    ])).toEqual(['invalid_relation_proposal:invalid_kind+invalid_direction', 'invalid_semantics']);
+
+    // Items past the diagnostic cap keep the bare code; the collection reason is closed too.
+    expect(conclusionParseIssueTriageCodes([relationIssues[3]])).toEqual(['invalid_relation_proposal']);
+    expect(conclusionParseIssueTriageCodes(parseDeclaredRelationProposals({x: 1}).issues))
+      .toEqual(['invalid_relation_proposal:collection_not_array']);
+
+    // Already-projected strings round-trip; anything outside the vocabulary is never echoed.
+    expect(conclusionParseIssueTriageCodes([
+      'invalid_relation_proposal:invalid_kind+invalid_direction', 'invalid_json',
+      'PRIVATE_CODE_CANARY', 'invalid_json:invalid_kind', 'invalid_relation_proposal:PRIVATE_REASON_CANARY',
+      'invalid_relation_proposal:invalid_kind:extra', {code: 'PRIVATE_OBJECT_CANARY'}, null,
+    ])).toEqual(['invalid_relation_proposal:invalid_kind+invalid_direction', 'invalid_json']);
+
+    expect(conclusionParseIssueTriageCodes(['invalid_json', 'invalid_claim', 'invalid_semantics', 'duplicate_marker']))
+      .toEqual(['invalid_json', 'invalid_claim', 'invalid_semantics']);
+    expect([...CONCLUSION_PARSE_ISSUE_CODES].sort()).toEqual([
+      'duplicate_claim_id', 'duplicate_marker', 'duplicate_proposal_id', 'invalid_claim', 'invalid_contract',
+      'invalid_framing', 'invalid_json', 'invalid_reference', 'invalid_relation_proposal', 'invalid_semantics',
+      'untrusted_parser_metadata',
     ]);
   });
 
