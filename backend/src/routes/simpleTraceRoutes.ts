@@ -155,9 +155,21 @@ function checkUploadDiskSpace(req: Request, res: Response, next: NextFunction): 
       }
       const required = contentLength * DISK_SAFETY_MULTIPLIER;
       if (available < required) {
+        const formatBytes = (bytes: number): string => {
+          const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+          let value = bytes;
+          let unit = 0;
+          while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+          }
+          return `${unit === 0 ? value : value.toFixed(2)} ${units[unit]}`;
+        };
         res.status(507).json({
           error: 'Insufficient disk space',
-          details: `Need ${required} bytes (declared ${contentLength}, ${DISK_SAFETY_MULTIPLIER}x safety), only ${available} bytes free on trace volume`,
+          details:
+            `Need ${formatBytes(required)} (declared ${formatBytes(contentLength)} x ${DISK_SAFETY_MULTIPLIER} safety), ` +
+            `only ${formatBytes(available)} free on ${tracesDir}`,
         });
         return;
       }
