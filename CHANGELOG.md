@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Commit prefixes follow [Conventional Commits](https://www.conventionalcommits.org/).
 Detailed commit-level history is available via `git log`.
 
+## [1.12.0] - 2026-09-17
+
+### Added
+- Evidence conditions for investigation requirements: `condition: {kind: evidence}`
+  resolves from the producer-bound evidence ledger instead of the answer text,
+  so a scrolling conclusion cannot exclude the render/GPU/buffer mechanism
+  without measuring it. The obligation attaches only when buffer stuffing
+  actually dominates (`render.frame.buffer_stuffing.rate`,
+  `render.buffer.dequeue.wait.duration`) and is satisfied only by a run that
+  observed the producer/consumer boundary; an absent metric stays unknown
+  rather than reading as cleared.
+- `smp probe`: loads the strategy registry from the exact artifact a batch
+  will run and prints `OK N` or the failure, so a dist parser meeting a new
+  strategy schema fails the batch gate at startup instead of killing every
+  session mid-run. `strategy_invalid_*` codes now carry the `#requirementId`
+  and the source file.
+
+### Fixed
+- Switching a Trace from a conversation-mode answer to a fast or full analysis
+  no longer fails with HTTP 409 "Trace processor lease backing identity
+  conflicts with the registered Trace". The conversation run records its Trace
+  as a metadata-only placeholder, and the first real registration now upgrades
+  that placeholder in place; two real registrations that disagree still
+  conflict.
+- Claim verification states why a claim was not checked on every surface —
+  CLI status line, HTML reports, persisted CLI evidence, and the AI Assistant
+  panel — with closed-vocabulary cause codes (declaration issues, transport
+  status and attempts) instead of silently stripping the detail. Relation
+  proposal failures name the exact field a provider got wrong instead of a
+  bare `invalid_relation_proposal`.
+- The OpenAI runtime's semantic-review transport retries only transient
+  provider failures (connection errors, 408/425/429/5xx). Deterministic 4xx
+  and 200 error bodies no longer pay a doomed retry, and results report
+  `httpStatus` and attempt counts for triage.
+
+### Removed
+- `phase_hints` no longer reaches any runtime path. The dead keyword matcher
+  was removed and the strategy field is documented as authoring-only.
+
 ## [1.11.0] - 2026-09-16
 
 ### Added
