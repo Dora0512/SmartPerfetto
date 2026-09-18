@@ -947,11 +947,13 @@
             "required_steps": [
               "thread_state_distribution",
               "waker_chain",
+              "wakeup_chain_trace",
               "blocked_function_summary"
             ],
             "required_sql_steps": [
               "thread_state_distribution",
               "waker_chain",
+              "wakeup_chain_trace",
               "blocked_function_summary"
             ],
             "forced_sql_steps": [],

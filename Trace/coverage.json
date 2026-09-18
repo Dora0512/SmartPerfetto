@@ -1457,7 +1457,7 @@
         "steps": [
           {
             "id": "thread_state_distribution",
-            "sha256": "3787adc5427ebb0e4266fc38718399bdf49b9ef7e86d2f2d6e5d11fa41f28052",
+            "sha256": "632c8f72fd4f3ebb9af3ebc7211ad53cfc00f15dcf195800b2a586cffa05d9ef",
             "required_columns": [
               "state",
               "state_display",
@@ -1469,7 +1469,7 @@
           },
           {
             "id": "waker_chain",
-            "sha256": "22c1d8ee9fdeacc729529c08e0937bd5868a6bea813d9ef3ca2af828dda30f80",
+            "sha256": "db8ceb0d24b1231f920c5e7a5d045b195c1d58ddd3e63a92160847bc54ed268f",
             "required_columns": [
               "ts",
               "waker_thread_name",
@@ -1481,8 +1481,23 @@
             ]
           },
           {
+            "id": "wakeup_chain_trace",
+            "sha256": "893a1bbcda578667830d3b3045a96cfeb281217d18e9adbdce64082d2ef6f20c",
+            "required_columns": [
+              "wait_start_ts",
+              "wait_ms",
+              "hop",
+              "waker_thread_name",
+              "waker_process_name",
+              "waker_runnable_ts",
+              "waker_wait_before_ms",
+              "run_ms_in_wait",
+              "chain_status"
+            ]
+          },
+          {
             "id": "blocked_function_summary",
-            "sha256": "6adfb639ef72ef481e4a23bd065f5fee868f08020aaa5a8f200e91ac2a38f179",
+            "sha256": "0b7432c23ec989c566e3c9e3d1c734fc44a7ebf5d00f30c7e204752a5cabe28f",
             "required_columns": [
               "blocked_function",
               "total_dur_ms",

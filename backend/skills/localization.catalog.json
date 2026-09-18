@@ -10,8 +10,8 @@
     "skillCount": 240,
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
-    "stepCount": 1268,
-    "explicitColumnCount": 4334
+    "stepCount": 1269,
+    "explicitColumnCount": 4343
   },
   "skills": {
     "ams_module": {
@@ -5736,6 +5736,69 @@
               "label": {
                 "zh-CN": "唤醒次数",
                 "en": "Wakeup Count"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "wakeup_chain_trace": {
+          "title": {
+            "zh-CN": "主线程长等待的多跳唤醒链（谁最终唤醒了主线程）",
+            "en": "Wakeup Chain Trace"
+          },
+          "columns": {
+            "wait_start_ts": {
+              "label": {
+                "zh-CN": "等待开始",
+                "en": "Wait Start Ts"
+              }
+            },
+            "wait_ms": {
+              "label": {
+                "zh-CN": "总等待(ms)",
+                "en": "Wait ms"
+              }
+            },
+            "hop": {
+              "label": {
+                "zh-CN": "跳数",
+                "en": "Hop"
+              }
+            },
+            "waker_thread_name": {
+              "label": {
+                "zh-CN": "该跳线程",
+                "en": "Waker Thread Name"
+              }
+            },
+            "waker_process_name": {
+              "label": {
+                "zh-CN": "所属进程",
+                "en": "Waker Process Name"
+              }
+            },
+            "waker_runnable_ts": {
+              "label": {
+                "zh-CN": "该跳被唤醒时刻",
+                "en": "Waker Runnable Ts"
+              }
+            },
+            "waker_wait_before_ms": {
+              "label": {
+                "zh-CN": "该跳此前等待(ms)",
+                "en": "Waker Wait Before ms"
+              }
+            },
+            "run_ms_in_wait": {
+              "label": {
+                "zh-CN": "等待窗口内运行(ms)",
+                "en": "Run ms In Wait"
+              }
+            },
+            "chain_status": {
+              "label": {
+                "zh-CN": "链状态",
+                "en": "Chain Status"
               }
             }
           },
