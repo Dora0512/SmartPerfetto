@@ -639,6 +639,17 @@ export interface FailedApproach {
 /** Status of a hypothesis in the hypothesis-verify cycle. */
 export type HypothesisStatus = 'formed' | 'confirmed' | 'rejected';
 
+/**
+ * A resolution that a later resolve_hypothesis call superseded. Records are
+ * append-only; the hypothesis's own status/evidence/resolvedAt always hold the
+ * latest authoritative resolution.
+ */
+export interface HypothesisResolutionRecord {
+  status: Exclude<HypothesisStatus, 'formed'>;
+  evidence: string;
+  resolvedAt: number;
+}
+
 /** A structured hypothesis formed during analysis that must be resolved before concluding. */
 export interface Hypothesis {
   readonly id: string;
@@ -651,6 +662,8 @@ export interface Hypothesis {
   evidence?: string;
   readonly formedAt: number;
   resolvedAt?: number;
+  /** Superseded resolutions in call order; omitted until the first re-resolution. */
+  history?: HypothesisResolutionRecord[];
 }
 
 // =============================================================================
