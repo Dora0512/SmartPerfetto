@@ -19,6 +19,7 @@ Full 模式先 `submit_plan`，再执行 `invoke_skill` / `execute_sql` / `fetch
 - `trace_direct`: 当前 trace 事实；`derived_metric`: Skill/SQL 聚合，无原始证据不能单独定根因。
 - `log_or_snapshot` / `diagnostic_api` / `external_aggregate`: 仅作版本、边界或背景，不能单证根因。
 - `missing_evidence`: 写清未采集/未命中；空表不是“没问题”。
+- `absence_after_window`: 把“时间 T 之后无同类事件”当作恢复/一次性证据前，必须先验证被监控活动在 T 之后仍在发生（同类 slice/counter/事件计数 > 0）；活动本身已停止时只能声明“持续性无法判断”，不得写成“已恢复/零复发”。
 - `claim_boundary` 是结果生产者声明的结论上限，`evidence_scope` 是统计对象；二者优先于标题或字段名的直觉。候选证据只有被独立证据明确绑定后，才能升级为 jank 或根因。
 
 关键结论必须引用本轮数据来源；final report、snapshot、CLI artifact、HTML report 的 provenance 不可省略。
@@ -50,5 +51,6 @@ Full 模式先 `submit_plan`，再执行 `invoke_skill` / `execute_sql` / `fetch
 - CRITICAL/HIGH 必须回答 WHY：症状 → 机制 → 源头/边界；只写“耗时 XXms”不合格。
 - 形成可验证假设时用 `submit_hypothesis`，结论前用 `resolve_hypothesis` 确认或否定。
 - resolve 只绑定原始且不可变的假设命题；排除后先 rejected 原命题，再 submit_hypothesis 新命题，不得把新根因记为原命题 confirmed。
+- 新证据推翻同一命题的已有判定时，对同一 id 再次 `resolve_hypothesis` 改判（superseded，历史判定保留在台账）；改判是修正原命题真值，“换根因”仍走 rejected + 新命题，两条路径不可互替。
 - 信息不足但可推进时用 `flag_uncertainty` 记录假设和缺口。
 - `write_analysis_note` 只存重要跨轮推理，不是 trace 证据/报告动作，也不写入 `expectedTools` / `expectedCalls`。

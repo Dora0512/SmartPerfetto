@@ -53,8 +53,15 @@ export function estimatePromptTokens(text: string): number {
   return Math.ceil(tokens);
 }
 
-/** M2 hard gate: full-mode system prompt target after core/detail split. */
-export const MAX_PROMPT_TOKENS = 12_000;
+/**
+ * M2 hard gate: full-mode system prompt target after core/detail split.
+ * Local discipline budget (input cost per turn), not a provider context
+ * limit — every supported runtime ships ≥128k contexts. Must stay above the
+ * adversarial worst-case fixture so the drop-only path suffices and the
+ * truncation safety net never fires: truncation silently removes analysis
+ * instructions and is treated as an accuracy defect, not a sizing tool.
+ */
+export const MAX_PROMPT_TOKENS = 13_000;
 /** M2 hard gate: always-injected scene strategy core budget. */
 export const MAX_SCENE_CORE_TOKENS = 4_000;
 
