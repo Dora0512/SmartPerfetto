@@ -231,6 +231,9 @@ describe('sqlIncludeInjector - completeness gate', () => {
     'cpu_freq_clusters_json',
     'device_peak_freq_mhz',
     'page_fault',
+    // Strategy/skill vocabulary that is intentionally not stdlib: slice-name
+    // anchors used by the startup fallback, and wakeup-chain output columns.
+    'inflate', 'wait_ms', 'run_ms_in_wait',
   ]);
 
   const extractSqlDisciplineSection = () => {

@@ -6415,6 +6415,100 @@ describe('createClaudeMcpServer', () => {
       ]));
 
     });
+
+    it('supersedes a confirmed resolution when later evidence rejects it', async () => {
+      const { tools, hypotheses } = createTestServer();
+      await callTool(tools, 'submit_hypothesis', {
+        id: 'h1',
+        statement: 'Binder blocking delays the main thread',
+      });
+      await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'confirmed',
+        evidence: 'Two binder slices over 30ms overlap the jank window',
+      });
+
+      const superseded = await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'rejected',
+        evidence: 'Re-check shows both binder slices end before the frame starts; waker chain points to scheduler delay',
+      });
+
+      expect(superseded).toMatchObject({
+        success: true,
+        hypothesisId: 'h1',
+        status: 'rejected',
+        superseded: true,
+        priorStatus: 'confirmed',
+        historyDepth: 1,
+      });
+      expect(hypotheses[0].status).toBe('rejected');
+      expect(hypotheses[0].evidence).toBe(
+        'Re-check shows both binder slices end before the frame starts; waker chain points to scheduler delay',
+      );
+      expect(hypotheses[0].history).toEqual([
+        expect.objectContaining({
+          status: 'confirmed',
+          evidence: 'Two binder slices over 30ms overlap the jank window',
+        }),
+      ]);
+    });
+
+    it('appends every superseded resolution to history in call order', async () => {
+      const { tools, hypotheses } = createTestServer();
+      await callTool(tools, 'submit_hypothesis', {
+        id: 'h1',
+        statement: 'GPU frequency throttling causes the missed frames',
+      });
+      await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'confirmed',
+        evidence: 'gpufreq drops before the first miss',
+      });
+      await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'rejected',
+        evidence: 'gpufreq stays constant across the remaining misses',
+      });
+      const last = await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'confirmed',
+        evidence: 'A later window shows the same misses only while gpufreq is throttled',
+      });
+
+      expect(last).toMatchObject({ success: true, status: 'confirmed', historyDepth: 2 });
+      expect(hypotheses[0].status).toBe('confirmed');
+      expect(hypotheses[0].history).toHaveLength(2);
+      expect(hypotheses[0].history!.map(record => record.status)).toEqual(['confirmed', 'rejected']);
+    });
+
+    it('keeps the prior resolution untouched when the scrolling guard blocks a re-resolution confirm', async () => {
+      const { tools, hypotheses } = createTestServer({ sceneType: 'scrolling' });
+      await callTool(tools, 'submit_hypothesis', {
+        id: 'h1',
+        statement: '49 帧 App Deadline Missed 是本 trace 唯一的真实用户可感知掉帧',
+      });
+      const rejected = await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'rejected',
+        evidence: 'FrameTimeline cannot certify user-perceivability for the whole trace',
+      });
+      expect(rejected.success).toBe(true);
+
+      const blockedReconfirm = await callTool(tools, 'resolve_hypothesis', {
+        hypothesisId: 'h1',
+        status: 'confirmed',
+        evidence: 'FrameTimeline summary and representative frame evidence',
+      });
+
+      expect(blockedReconfirm).toMatchObject({
+        success: false,
+        hypothesisId: 'h1',
+        action_required: 'reject_hypothesis_and_submit_bounded_replacement',
+      });
+      expect(hypotheses[0].status).toBe('rejected');
+      expect(hypotheses[0].history).toBeUndefined();
+    });
   });
 
   describe('write_analysis_note', () => {

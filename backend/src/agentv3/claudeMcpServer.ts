@@ -55,7 +55,7 @@ import type { IdentityResolutionV1 } from '../types/identityContract';
 import type { StreamingUpdate } from '../agent/types';
 import type { ArchitectureInfo } from '../agent/detectors/types';
 import { isEvidenceCapableToolName, isInformationalToolName } from './types';
-import type { SqlSchemaEntry, SqlSchemaIndex, AnalysisNote, AnalysisPlanV3, PlanAspectWaiver, PlanPhase, PlanRevision, Hypothesis, ToolCallRecord, UncertaintyFlag } from './types';
+import type { SqlSchemaEntry, SqlSchemaIndex, AnalysisNote, AnalysisPlanV3, PlanAspectWaiver, PlanPhase, PlanRevision, Hypothesis, HypothesisResolutionRecord, ToolCallRecord, UncertaintyFlag } from './types';
 import type { SceneType } from './sceneClassifier';
 import { summarizeSqlResult, type SqlSummary } from './sqlSummarizer';
 import { matchPatterns, matchNegativePatterns, extractTraceFeatures } from './analysisPatternMemory';
@@ -6361,9 +6361,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
   const resolveHypothesis = hypothesesRef ? tool(
     'resolve_hypothesis',
     'Resolve a submitted hypothesis\'s exact immutable statement. ' +
-    'confirmed supports that same causal claim; rejected contradicts or replaces it. ' +
+    'confirmed supports it; rejected contradicts it. ' +
     'For a different cause, reject the original, then submit a new hypothesis. ' +
-    'Resolve all before the final conclusion.',
+    'New evidence may overturn a prior resolution; re-resolving supersedes (history kept).',
     {
       hypothesisId: z.string().optional().describe('Hypothesis ID to resolve (e.g., "h1"). Alias: id.'),
       id: z.string().optional().describe('Alias for hypothesisId, accepted for Claude SDK argument compatibility.'),
@@ -6424,18 +6424,12 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           isError: true,
         };
       }
-      if (hypothesis.status !== 'formed') {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({
-            success: false,
-            error: `Hypothesis "${effectiveHypothesisId}" already resolved as ${hypothesis.status}`,
-            hypothesisId: effectiveHypothesisId,
-            statement: hypothesis.statement,
-            status: hypothesis.status,
-          }) }],
-          isError: true,
-        };
-      }
+      // A re-resolution supersedes the prior verdict after every guard below
+      // has passed; until then the ledger must stay untouched.
+      const priorResolution: HypothesisResolutionRecord | null =
+        hypothesis.status !== 'formed' && hypothesis.resolvedAt !== undefined
+          ? { status: hypothesis.status, evidence: hypothesis.evidence ?? '', resolvedAt: hypothesis.resolvedAt }
+          : null;
 
       if (effectiveStatus === 'confirmed' && options.sceneType === 'scrolling') {
         const claimBoundaryIssue = assessScrollingJankClaimBoundary(hypothesis.statement);
@@ -6464,6 +6458,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         }
       }
 
+      if (priorResolution) {
+        (hypothesis.history ??= []).push(priorResolution);
+      }
       hypothesis.status = effectiveStatus;
       hypothesis.evidence = evidence;
       hypothesis.resolvedAt = Date.now();
@@ -6477,6 +6474,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             hypothesisId: effectiveHypothesisId,
             statement: hypothesis.statement,
             status: effectiveStatus,
+            ...(priorResolution
+              ? { superseded: true, priorStatus: priorResolution.status, historyDepth: hypothesis.history!.length }
+              : {}),
             unresolvedCount,
           }),
         }],
