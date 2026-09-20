@@ -6,6 +6,7 @@ import {describe, expect, it} from '@jest/globals';
 import {
   assertProviderEndpointPolicy,
   PROVIDER_PRIVATE_ENDPOINT_ALLOWLIST_ENV,
+  requestProviderEndpoint,
 } from '../providerManager/providerEndpointRequest';
 
 describe('enterprise provider endpoint policy', () => {
@@ -52,5 +53,17 @@ describe('enterprise provider endpoint policy', () => {
       ['127.0.0.1'],
       {} as NodeJS.ProcessEnv,
     )).not.toThrow();
+  });
+
+  it('rejects an already-aborted request before DNS or socket creation', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      requestProviderEndpoint(
+        'https://provider.invalid/v1/models',
+        {method: 'GET', headers: {}, signal: controller.signal},
+        100,
+      ),
+    ).rejects.toMatchObject({name: 'AbortError'});
   });
 });

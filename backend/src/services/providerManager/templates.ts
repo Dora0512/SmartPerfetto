@@ -70,13 +70,12 @@ export const officialTemplates: ProviderTemplate[] = [
     type: 'deepseek',
     displayName: 'DeepSeek',
     requiredFields: ['connection.apiKey'],
-    defaultModels: { primary: 'deepseek-v4-pro', light: 'deepseek-v4-flash' },
+    defaultModels: { primary: 'deepseek-v4-pro', light: 'deepseek-flash' },
     availableModels: [
-      // https://api-docs.deepseek.com/quick_start/pricing
-      { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (Experimental)', tier: 'light' },
+      // https://api-docs.deepseek.com/api/list-models/
+      // https://api-docs.deepseek.com/updates/#date-2026-09-10
+      { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', tier: 'light' },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', tier: 'primary' },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', tier: 'light' },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', tier: 'primary' },
     ],
     defaultConnection: {
       agentRuntime: 'claude-agent-sdk',

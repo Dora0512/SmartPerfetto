@@ -158,7 +158,7 @@ export function createDeepSeekLLMClient(config?: Partial<LLMAdapterConfig>): LLM
   const baseUrl = String(
     config?.baseUrl || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
   ).replace(/\/+$/, '');
-  const model = config?.model || process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+  const model = config?.model || process.env.DEEPSEEK_MODEL || 'deepseek-flash';
   const temperature = config?.temperature ?? 0.3;
   const maxTokens = config?.maxTokens ?? 4000;
   const retryPolicy = resolveRetryPolicy(config);

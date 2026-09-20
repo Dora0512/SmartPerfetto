@@ -3,6 +3,7 @@
 import { jest } from '@jest/globals';
 import request from 'supertest';
 import express from 'express';
+import {createServer} from 'http';
 import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -117,6 +118,72 @@ describe('Provider Routes', () => {
       availableModels: [],
       defaultConnection: { agentRuntime: 'claude-agent-sdk' },
     });
+  });
+
+  it('keeps live model suggestions isolated to the saved provider ID', async () => {
+    const server = createServer((req, res) => {
+      if (req.url !== '/v1/models') {
+        res.writeHead(404).end();
+        return;
+      }
+      const model = req.headers.authorization === 'Bearer secret-a'
+        ? 'gpt-live-model-a'
+        : req.headers.authorization === 'Bearer secret-b'
+          ? 'gpt-live-model-b'
+          : undefined;
+      if (!model) {
+        res.writeHead(401).end();
+        return;
+      }
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({data: [{id: model}]}));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing test server address');
+      const createProvider = (name: string, apiKey: string) =>
+        request(app).post('/api/v1/providers').send({
+        name,
+        category: 'official',
+        type: 'openai',
+        models: {primary: 'gpt-5.6-terra', light: 'gpt-5.6-luna'},
+        connection: {
+          openaiApiKey: apiKey,
+          openaiBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+          openaiProtocol: 'responses',
+        },
+      });
+      const providerA = await createProvider('Catalog A', 'secret-a');
+      const providerB = await createProvider('Catalog B', 'secret-b');
+      expect(providerA.status).toBe(201);
+      expect(providerB.status).toBe(201);
+
+      const [modelsA, modelsB] = await Promise.all([
+        request(app).get(`/api/v1/providers/${providerA.body.provider.id}/models`),
+        request(app).get(`/api/v1/providers/${providerB.body.provider.id}/models`),
+      ]);
+      expect(modelsA.status).toBe(200);
+      expect(modelsB.status).toBe(200);
+      expect(modelsA.body.models).toContainEqual({
+        id: 'gpt-live-model-a',
+        name: 'gpt-live-model-a',
+        tier: 'primary',
+      });
+      expect(modelsA.body.models).not.toContainEqual(
+        expect.objectContaining({id: 'gpt-live-model-b'}),
+      );
+      expect(modelsB.body.models).toContainEqual(
+        expect.objectContaining({id: 'gpt-live-model-b'}),
+      );
+      expect(modelsB.body.models).not.toContainEqual(
+        expect.objectContaining({id: 'gpt-live-model-a'}),
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close(error => (error ? reject(error) : resolve())),
+      );
+    }
   });
 
   it('requires provider management permission for provider access in enterprise SSO', async () => {

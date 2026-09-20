@@ -105,7 +105,9 @@ provider, save it, test it, and activate it. Local source runs may instead confi
 runtime for the first launch; choose one provider path and follow the
 [Configuration Guide](docs/getting-started/configuration.en.md). Advanced
 Qoder users can also route models through the documented BYOK policy while
-keeping Qoder PAT or `qodercli` authentication separate.
+keeping Qoder PAT or `qodercli` authentication separate. Saved providers also
+refresh their model suggestions from supported provider catalogs with a bounded
+cache; unsupported or unavailable catalogs keep the curated preset list.
 
 ### 3. Run Your First Analysis
 

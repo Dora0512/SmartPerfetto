@@ -77,14 +77,59 @@ export function assertProviderEndpointPolicy(
 async function resolvePinnedEndpoint(
   url: URL,
   env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<{address: string; family: 4 | 6}> {
+  throwIfAborted(signal);
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   const literalFamily = net.isIP(hostname);
   const addresses = literalFamily
     ? [{address: hostname, family: literalFamily as 4 | 6}]
-    : await lookup(hostname, {all: true, verbatim: true});
+    : await withEndpointDeadline(
+      lookup(hostname, {all: true, verbatim: true}),
+      timeoutMs,
+      signal,
+      'Provider endpoint DNS resolution timed out',
+    );
+  throwIfAborted(signal);
   assertProviderEndpointPolicy(url, addresses.map(item => item.address), env);
   return addresses[0] as {address: string; family: 4 | 6};
+}
+
+function abortError(message = 'Provider endpoint request aborted'): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError();
+}
+
+async function withEndpointDeadline<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  timeoutMessage: string,
+): Promise<T> {
+  throwIfAborted(signal);
+  let timer: NodeJS.Timeout | undefined;
+  let abort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(abortError(timeoutMessage)), timeoutMs);
+        if (signal) {
+          abort = () => reject(abortError());
+          signal.addEventListener('abort', abort, {once: true});
+        }
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal && abort) signal.removeEventListener('abort', abort);
+  }
 }
 
 function requestPinned(
@@ -94,6 +139,10 @@ function requestPinned(
   timeoutMs: number,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
+    if (init.signal?.aborted) {
+      reject(abortError());
+      return;
+    }
     const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
     const createConnection = (
       _options: unknown,
@@ -113,7 +162,7 @@ function requestPinned(
       agent: false,
       createConnection,
     } as any, resolve);
-    const abort = () => request.destroy(new Error('Provider endpoint request aborted'));
+    const abort = () => request.destroy(abortError());
     init.signal?.addEventListener('abort', abort, {once: true});
     request.setTimeout(timeoutMs, () => request.destroy(new Error('Provider endpoint request timed out')));
     request.once('error', reject);
@@ -163,8 +212,15 @@ export async function requestProviderEndpoint(
   for (let redirectCount = 0; redirectCount <= MAX_PROVIDER_REDIRECTS; redirectCount += 1) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error('Provider endpoint request timed out');
-    const pinned = await resolvePinnedEndpoint(current, env);
-    const response = await requestPinned(current, pinned.address, init, remaining);
+    const pinned = await resolvePinnedEndpoint(current, env, remaining, init.signal);
+    const requestRemaining = deadline - Date.now();
+    if (requestRemaining <= 0) throw abortError('Provider endpoint request timed out');
+    const response = await requestPinned(
+      current,
+      pinned.address,
+      init,
+      requestRemaining,
+    );
     const status = response.statusCode ?? 502;
     if (status >= 300 && status < 400) {
       const location = response.headers.location;

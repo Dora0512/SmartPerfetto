@@ -60,6 +60,14 @@ Custom、Bedrock、Vertex 等需要额外配置的入口仍显示其必要字段
 不会改变。选择新模型后保存配置，再测试连接。建议项来自公开目录，实际权限
 仍由账号、套餐和地区决定；标记为 Experimental 或 Preview 的型号属于实验或预览版本。
 
+编辑或克隆已保存的 **Provider** 时，后端会使用该 provider 自己的凭据，尝试读取其
+OpenAI-compatible `/models`、Anthropic `/v1/models` 或 Ollama `/api/tags` 目录。
+结果按 workspace、provider ID、端点、协议和凭据指纹隔离缓存 6 小时，只合并到该
+provider 的模型建议；目录不支持、超时或认证失败时静默回退静态预置，不影响连接健康状态。
+未保存的新配置没有可安全复用的后端凭据，首次创建仍使用静态预置或手动 ID；保存后
+重新编辑即可看到该配置实际返回的新型号。Bedrock 和 Vertex 没有走上述通用 HTTP 目录，
+继续使用经官方文档核对的静态选项。
+
 不同入口的模型 ID 不能互换。例如 Kimi 平台使用 `kimi-k3`，Kimi Code 使用 `k3` /
 `k3-256k`；国际 Qwen Coding Plan 只提供其套餐清单内的型号，不能直接使用通用 API 的
 Qwen 3.8 系列。参考 [Kimi Code 模型配置](https://www.kimi.com/code/docs/en/kimi-code/models.html)
@@ -78,7 +86,10 @@ Qwen 3.8 系列。参考 [Kimi Code 模型配置](https://www.kimi.com/code/docs
 按每个模板的 endpoint、地区和套餐核对官方 API ID，并在对应条目旁保留来源链接。
 这里只列适用于文本分析和工具调用的型号；图像生成、语音、Embedding 等专用接口不属于
 分析模型选项。默认值调整只影响新建配置，通过模板和 Provider API 测试验证；新增选项
-不等于完成了真实供应商的完整 Agent 调用验收。
+不等于完成了真实供应商的完整 Agent 调用验收。`Provider Model Catalog` GitHub Actions
+每周使用仓库已配置的 provider secrets 查找目录中新出现的候选型号；缺少凭据的供应商
+明确跳过，发现候选只创建或更新 issue，不会把外部返回自动写入 `main`。当前凭据看不到
+某个预置只记录为账号、套餐、地区或网关可见性，不据此判定模型退役。
 
 预置的 Base URL 来自 provider 公开信息和公开文档，不保证对所有账号、套餐、地区长期正确。很多 provider 的入口会按地区、申请国家、套餐或专属控制台域名变化，例如新加坡区、国内区、国际区可能不同。如果连接、流式输出或 tool/function calling 出错，先到 provider 控制台核对 Base URL、模型 ID 和协议类型；确认是公开 preset 错误后，建议提交 issue 或 PR 修正。
 
@@ -195,7 +206,7 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 ANTHROPIC_AUTH_TOKEN=sk-your-deepseek-key
 CLAUDE_MODEL=deepseek-v4-pro
-CLAUDE_LIGHT_MODEL=deepseek-v4-flash
+CLAUDE_LIGHT_MODEL=deepseek-flash
 ```
 
 小米 MiMo Token Plan 示例。下面两段是二选一，不要同时复制到同一个 env 文件里。
@@ -224,7 +235,7 @@ OPENAI_LIGHT_MODEL=mimo-v2.5
 
 | Provider | Claude / Anthropic-compatible Base URL | OpenAI-compatible Base URL | 推荐主模型 | 推荐轻模型 |
 |---|---|---|---|---|
-| DeepSeek | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com/v1` | `deepseek-v4-pro` | `deepseek-v4-flash` |
+| DeepSeek | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com/v1` | `deepseek-v4-pro` | `deepseek-flash` |
 | GLM / 智谱 | `https://open.bigmodel.cn/api/anthropic` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5-turbo` | `glm-4.7-flashx` |
 | Qwen / 百炼按量 | `https://dashscope.aliyuncs.com/apps/anthropic` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-plus` | `qwen3.6-flash` |
 | Qwen Coding Plan | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | `https://coding-intl.dashscope.aliyuncs.com/v1` | `qwen3-coder-plus` | `qwen3-coder-plus` |
@@ -370,8 +381,8 @@ SMARTPERFETTO_AGENT_RUNTIME=qoder-agent-sdk
 # SMARTPERFETTO_QODER_SDK_MODULE_PATH=/absolute/path/to/qoder-sdk/dist/index.js
 # 可选 BYOK：三项必须一起配置；base URL、style 和 light model 可省略。
 # BYOK 只配置模型 provider，不替代上面的 Qoder PAT/qodercli 认证。
-# QODER_MODEL=deepseek-chat
-# QODER_LIGHT_MODEL=deepseek-chat
+# QODER_MODEL=deepseek-flash
+# QODER_LIGHT_MODEL=deepseek-flash
 # QODER_BYOK_API_KEY=your_model_provider_api_key
 # QODER_BYOK_PROVIDER=deepseek
 # QODER_BYOK_BASE_URL=https://api.deepseek.com/v1

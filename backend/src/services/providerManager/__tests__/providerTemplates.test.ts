@@ -65,8 +65,11 @@ describe('Provider Manager templates', () => {
     const deepseek = templateFor('deepseek');
     expect(deepseek.defaultModels).toEqual({
       primary: 'deepseek-v4-pro',
-      light: 'deepseek-v4-flash',
+      light: 'deepseek-flash',
     });
+    expect(availableModelIds(deepseek)).toEqual(
+      new Set(['deepseek-flash', 'deepseek-v4-pro']),
+    );
 
     const huawei = templateFor('huawei');
     expect(huawei.defaultModels).toEqual({

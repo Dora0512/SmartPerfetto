@@ -555,7 +555,7 @@ verification request ignores active Provider Manager profiles, and pins:
 - `OPENAI_BASE_URL=https://api.deepseek.com/v1`
 - `OPENAI_AGENTS_PROTOCOL=chat_completions`
 - `OPENAI_MODEL=deepseek-v4-pro`
-- `OPENAI_LIGHT_MODEL=deepseek-v4-flash`
+- `OPENAI_LIGHT_MODEL=deepseek-flash`
 - No implicit OpenAI main-answer output cap; an explicit
   `OPENAI_MAX_OUTPUT_TOKENS` must be a positive safe integer. Prompt guidance
   controls normal answer length; provider limits remain authoritative.

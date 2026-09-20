@@ -1,0 +1,96 @@
+name: Provider Model Catalog
+
+on:
+  schedule:
+    - cron: '20 3 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Compare configured provider catalogs
+        id: catalog
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_CODING_API_KEY: ${{ secrets.DASHSCOPE_CODING_API_KEY }}
+          KIMI_CODE_API_KEY: ${{ secrets.KIMI_CODE_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          XIAOMI_MIMO_API_KEY: ${{ secrets.XIAOMI_MIMO_API_KEY }}
+          TENCENT_TOKEN_PLAN_API_KEY: ${{ secrets.TENCENT_TOKEN_PLAN_API_KEY }}
+          TENCENT_CODING_PLAN_API_KEY: ${{ secrets.TENCENT_CODING_PLAN_API_KEY }}
+          HUNYUAN_API_KEY: ${{ secrets.HUNYUAN_API_KEY }}
+          QIANFAN_API_KEY: ${{ secrets.QIANFAN_API_KEY }}
+          STEPFUN_API_KEY: ${{ secrets.STEPFUN_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          HUAWEI_MODELARTS_API_KEY: ${{ secrets.HUAWEI_MODELARTS_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set +e
+          ./backend/node_modules/.bin/tsx \
+            backend/src/scripts/checkProviderModelCatalog.ts \
+            --output provider-model-catalog-report.md
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat provider-model-catalog-report.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Create or update candidate issue
+        if: steps.catalog.outputs.exit_code == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title='Provider model catalog candidates'
+          issue_number="$(gh issue list --state open --search "$title in:title" \
+            --json number,title --jq ".[] | select(.title == \"$title\") | .number" \
+            | head -n 1)"
+          printf '\nWorkflow: %s/actions/runs/%s\n' \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            >> provider-model-catalog-report.md
+          if [ -n "$issue_number" ]; then
+            gh issue comment "$issue_number" --body-file provider-model-catalog-report.md
+          else
+            gh issue create --title "$title" --label enhancement \
+              --body-file provider-model-catalog-report.md
+          fi
+
+      - name: Close resolved candidate issue
+        if: steps.catalog.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title='Provider model catalog candidates'
+          issue_number="$(gh issue list --state open --search "$title in:title" \
+            --json number,title --jq ".[] | select(.title == \"$title\") | .number" \
+            | head -n 1)"
+          if [ -n "$issue_number" ]; then
+            gh issue close "$issue_number" \
+              --comment 'The scheduled provider model catalog check has no new candidates.'
+          fi
+
+      - name: Fail unavailable catalog checks
+        if: steps.catalog.outputs.exit_code == '1'
+        run: exit 1

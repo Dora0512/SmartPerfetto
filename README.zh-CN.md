@@ -93,7 +93,8 @@ Web UI 启动后，打开 **AI Assistant 设置 → Providers**，添加一个 P
 测试并激活。本地源码运行也可在 `backend/.env` 配置凭据；Claude Code 登录态不能作为 SDK 已配置的依据。
 第一次启动不需要配置所有 Runtime；只选一条 Provider 路径，按
 [配置指南](docs/getting-started/configuration.md)操作即可。Qoder 高级用户也可以按文档
-配置 BYOK 模型路由；Qoder PAT 或 `qodercli` 认证仍是独立且必需的。
+配置 BYOK 模型路由；Qoder PAT 或 `qodercli` 认证仍是独立且必需的。已保存 Provider
+会通过受控缓存刷新供应商支持的模型建议；目录不支持或不可用时继续使用内置预置。
 
 ### 3. 完成第一次分析
 

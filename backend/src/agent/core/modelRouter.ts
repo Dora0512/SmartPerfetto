@@ -27,8 +27,11 @@ import {
   EnsembleResult,
 } from '../types';
 
-const DEFAULT_DEEPSEEK_CHAT_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
-const DEFAULT_DEEPSEEK_REASONING_MODEL = process.env.DEEPSEEK_REASONING_MODEL || 'deepseek-reasoner';
+const DEFAULT_DEEPSEEK_CHAT_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
+const DEFAULT_DEEPSEEK_REASONING_MODEL =
+  process.env.DEEPSEEK_REASONING_MODEL ||
+  process.env.DEEPSEEK_MODEL ||
+  'deepseek-flash';
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 
 
@@ -80,7 +83,7 @@ function createDefaultModels(): ModelProfile[] {
     {
       id: 'deepseek-coder',
       provider: 'deepseek',
-      model: 'deepseek-coder',
+      model: DEFAULT_DEEPSEEK_CHAT_MODEL,
       strengths: ['coding', 'cost'],
       costPerInputToken: 0.00014,
       costPerOutputToken: 0.00028,

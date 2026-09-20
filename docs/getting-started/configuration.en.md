@@ -68,6 +68,17 @@ change session pins. Save your selection and test the connection. Suggestions
 come from public catalogs; access depends on your account, plan, and region. Experimental and
 Preview labels identify experimental or preview releases.
 
+When you edit or clone a saved **Provider**, the backend uses that provider's own
+credential to try its OpenAI-compatible `/models`, Anthropic `/v1/models`, or
+Ollama `/api/tags` catalog. Results are isolated by workspace, provider ID,
+endpoint, protocol, and credential fingerprint, cached for six hours, and merged
+only into that provider's suggestions. Unsupported catalogs, timeouts, and
+authentication failures fall back silently without changing provider health. A
+new, unsaved profile has no backend credential that can be reused safely, so its
+first save still uses the static preset or a manually entered ID; edit it after
+saving to receive live options. Bedrock and Vertex continue to use documented
+static choices because they do not expose these common HTTP catalog contracts.
+
 Model IDs differ across endpoints. Kimi Platform uses `kimi-k3`, while Kimi Code
 uses `k3` / `k3-256k`. International Qwen Coding Plan has its own allowlist and
 does not inherit the general API's Qwen 3.8 models. See the official
@@ -91,7 +102,13 @@ endpoint, region, and plan against official API IDs and keeping source links by
 the corresponding entries. Options cover text analysis and tool calling; image
 generation, speech, and embedding APIs are separate products. Default changes
 apply only to new profiles; run template and Provider API tests. Catalog
-verification does not establish a successful real-provider Agent run.
+verification does not establish a successful real-provider Agent run. The weekly
+`Provider Model Catalog` GitHub Actions workflow uses configured provider secrets
+to find newly visible catalog candidates. Providers without a repository secret
+are reported as skipped; candidates create or update an issue and never write
+external catalog data directly to `main`. A preset that is not visible to the
+current credential is recorded as account, plan, region, or gateway visibility,
+not treated as evidence that the model was retired.
 
 The preset Base URLs come from public provider information and public documentation. They are not guaranteed to be correct for every account, plan, region, or future provider change. If connection, streaming, or tool/function calling fails, first verify the Base URL, model ID, and protocol in your provider console.
 
@@ -224,7 +241,7 @@ For third-party models that expose Claude Code / Anthropic-compatible endpoints,
 ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 ANTHROPIC_AUTH_TOKEN=sk-your-deepseek-key
 CLAUDE_MODEL=deepseek-v4-pro
-CLAUDE_LIGHT_MODEL=deepseek-v4-flash
+CLAUDE_LIGHT_MODEL=deepseek-flash
 ```
 
 Xiaomi MiMo Token Plan example. The two blocks below are alternatives; do not paste both into the same env file.
@@ -253,7 +270,7 @@ The table below is a manual-env and troubleshooting reference, not a checklist y
 
 | Provider | Claude / Anthropic-compatible Base URL | OpenAI-compatible Base URL | Recommended main model | Recommended light model |
 |---|---|---|---|---|
-| DeepSeek | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com/v1` | `deepseek-v4-pro` | `deepseek-v4-flash` |
+| DeepSeek | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com/v1` | `deepseek-v4-pro` | `deepseek-flash` |
 | GLM / Zhipu | `https://open.bigmodel.cn/api/anthropic` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5-turbo` | `glm-4.7-flashx` |
 | Qwen / Bailian pay-as-you-go | `https://dashscope.aliyuncs.com/apps/anthropic` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-plus` | `qwen3.6-flash` |
 | Qwen Coding Plan | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | `https://coding-intl.dashscope.aliyuncs.com/v1` | `qwen3-coder-plus` | `qwen3-coder-plus` |
@@ -408,8 +425,8 @@ SMARTPERFETTO_AGENT_RUNTIME=qoder-agent-sdk
 # SMARTPERFETTO_QODER_SDK_MODULE_PATH=/absolute/path/to/qoder-sdk/dist/index.js
 # Optional BYOK: set all three required values together; base URL, style, and
 # light model are optional. BYOK does not replace Qoder PAT/qodercli auth.
-# QODER_MODEL=deepseek-chat
-# QODER_LIGHT_MODEL=deepseek-chat
+# QODER_MODEL=deepseek-flash
+# QODER_LIGHT_MODEL=deepseek-flash
 # QODER_BYOK_API_KEY=your_model_provider_api_key
 # QODER_BYOK_PROVIDER=deepseek
 # QODER_BYOK_BASE_URL=https://api.deepseek.com/v1

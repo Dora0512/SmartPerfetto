@@ -52,7 +52,7 @@ describe('Qoder BYOK tooling', () => {
         SMARTPERFETTO_AGENT_RUNTIME: 'qoder-agent-sdk',
         QODER_PERSONAL_ACCESS_TOKEN: 'qoder-auth-secret',
         QODER_MODEL: 'deepseek-v4-pro',
-        QODER_LIGHT_MODEL: 'deepseek-v4-flash',
+        QODER_LIGHT_MODEL: 'deepseek-flash',
         QODER_BYOK_API_KEY: 'deepseek-provider-secret',
         QODER_BYOK_PROVIDER: 'deepseek',
         QODER_BYOK_BASE_URL: 'https://api.deepseek.com/v1',

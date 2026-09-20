@@ -94,7 +94,7 @@ export class ModelGrader implements Grader {
         apiKey,
         baseURL: options.baseUrl || 'https://api.deepseek.com/v1',
       });
-      this.model = options.model || 'deepseek-chat';
+      this.model = options.model || 'deepseek-flash';
       this.backend = 'deepseek';
     } else {
       throw new Error('ANTHROPIC_API_KEY or DEEPSEEK_API_KEY is required for ModelGrader');

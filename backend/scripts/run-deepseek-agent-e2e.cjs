@@ -1246,7 +1246,7 @@ function buildChildEnv(apiKey, runtimeKind, isolatedRoot) {
   }
   const deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1';
   const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
-  const deepseekLightModel = process.env.DEEPSEEK_LIGHT_MODEL || 'deepseek-v4-flash';
+  const deepseekLightModel = process.env.DEEPSEEK_LIGHT_MODEL || 'deepseek-flash';
   const baseEnv = {
     ...process.env,
     DEEPSEEK_API_KEY: apiKey,

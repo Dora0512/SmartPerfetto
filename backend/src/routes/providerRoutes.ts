@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import express from 'express';
-import { getProviderService, isAgentRuntimeKind, officialTemplates } from '../services/providerManager';
+import {
+  getProviderModelCatalogService,
+  getProviderService,
+  isAgentRuntimeKind,
+  mergeModelOptions,
+  officialTemplates,
+} from '../services/providerManager';
 import type { AgentRuntimeKind, ProviderCreateInput, ProviderScope, ProviderUpdateInput } from '../services/providerManager';
 import { testProviderConnection } from '../services/providerManager/connectionTester';
 import { authenticate, requireRequestContext, type RequestContext } from '../middleware/auth';
@@ -68,6 +74,43 @@ router.get('/', (req, res) => {
 
 router.get('/templates', (_req, res) => {
   res.json({ success: true, templates: officialTemplates });
+});
+
+router.get('/:id/models', async (req, res) => {
+  const svc = getProviderService();
+  const scope = providerScopeForRequest(req);
+  const provider = svc.getRaw(req.params.id, scope);
+  if (!provider) {
+    return res.status(404).json({success: false, error: 'Provider not found'});
+  }
+  const template = officialTemplates.find(item => item.type === provider.type);
+  if (!template) {
+    return res.json({success: true, providerId: provider.id, models: []});
+  }
+
+  let catalog;
+  try {
+    catalog = await getProviderModelCatalogService().discover(
+      provider,
+      template,
+      scope,
+    );
+  } catch {
+    // Live discovery is only a convenience. Keep this read surface usable
+    // when a provider omits /models or the endpoint is temporarily unavailable.
+  }
+  res.json({
+    success: true,
+    providerId: provider.id,
+    models: mergeModelOptions(
+      template.availableModels,
+      catalog?.models ?? [],
+    ),
+    source: catalog ? 'curated+live' : 'curated',
+    ...(catalog
+      ? {fetchedAt: catalog.fetchedAt, cached: catalog.cached}
+      : {}),
+  });
 });
 
 router.get('/effective', (req, res) => {

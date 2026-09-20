@@ -4,6 +4,7 @@
 import { ProviderService } from './providerService';
 import { officialTemplates } from './templates';
 import {providerDataPath} from './providerPaths';
+import {resetProviderModelCatalogService} from './providerModelCatalog';
 
 export type {
   AgentRuntimeKind,
@@ -21,6 +22,11 @@ export type {
 export { ProviderService } from './providerService';
 export { ProviderStore } from './providerStore';
 export { officialTemplates } from './templates';
+export {
+  getProviderModelCatalogService,
+  mergeModelOptions,
+  ProviderModelCatalogService,
+} from './providerModelCatalog';
 export {
   DUAL_SURFACE_PROVIDER_TYPES,
   isAgentRuntimeKind,
@@ -49,4 +55,5 @@ export function getProviderService(): ProviderService {
 /** Reset the singleton — for tests only. */
 export function resetProviderService(): void {
   instance = null;
+  resetProviderModelCatalogService();
 }
