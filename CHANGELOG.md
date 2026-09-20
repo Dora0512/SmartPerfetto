@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Commit prefixes follow [Conventional Commits](https://www.conventionalcommits.org/).
 Detailed commit-level history is available via `git log`.
 
+## [1.12.1] - 2026-09-21
+
+### Added
+- Saved Providers can load a bounded, cached model catalog from their own
+  OpenAI-compatible, Anthropic-compatible, or Ollama endpoint. Suggestions stay
+  isolated by workspace and provider ID, keep curated presets and manual model
+  entry, and exclude known embedding, reranking, media, moderation, and other
+  non-analysis products.
+- A weekly, read-only Provider Model Catalog workflow reports newly visible
+  model candidates for every configured provider credential. It never edits
+  `main`, and treats models hidden by an account, plan, region, or gateway as a
+  visibility observation rather than retirement evidence.
+
+### Changed
+- The direct DeepSeek preset and runtime fallbacks now use the current
+  `deepseek-flash` light-model ID alongside `deepseek-v4-pro`; gateway-specific
+  model IDs remain unchanged.
+
+### Fixed
+- Large SQL/DataEnvelope results no longer duplicate complete tables through
+  chat SSE, replay, statistics, charts, and redraws. Chat previews are bounded
+  by row and byte budgets while reports, snapshots, evidence, and claim
+  verification retain the complete result. Streaming Mermaid updates also
+  coalesce obsolete renders instead of accumulating detached DOM work.
+- Round 69 thermal, ANR, high-refresh presentation, and delivery-verification
+  fixes now preserve unavailable evidence and corrected classifications instead
+  of weakening detector or claim semantics.
+- Startup wakeup-chain attribution, hypothesis re-resolution, and prompt budget
+  handling retain methodology context without carrying superseded conclusions.
+- Trace upload disk-precheck failures and server-verification details are
+  actionable without expanding noisy diagnostic blocks by default.
+
 ## [1.12.0] - 2026-09-17
 
 ### Added
