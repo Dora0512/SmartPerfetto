@@ -31,6 +31,7 @@ Output:
 - The UI streams progress, SQL/Skill evidence, tables, and the final conclusion.
 - Each round places its analysis process and steps above its final conclusion, keeping each round together.
 - Conclusions should trace back to concrete time ranges, threads, slices, SQL rows, or Skill results.
+- Server verification details are collapsed by default; expand them for the full evidence and source references. Verification warnings remain visible.
 
 ### Browser Trace Tools And Local WASM
 

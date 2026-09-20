@@ -117,6 +117,8 @@ keeping Qoder PAT or `qodercli` authentication separate.
 4. Ask a question such as `Analyze scrolling jank`, `Why is startup slow?`, or
    `Analyze the ANR in this trace`.
 
+Server verification details are collapsed by default; expand them to read the full record. Verification warnings remain visible.
+
 Each round shows its analysis process and steps above its final conclusion,
 which stays before the next round's question.
 
