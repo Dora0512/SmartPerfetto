@@ -1148,7 +1148,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
           sourceUse: sourceUse?.getSourceUseDecision(),
           sourceScope: sourceUse?.getSourceExecutionScope?.(),
           evidenceReadView: this.artifactStores.get(sessionId)?.createEvidenceReadView({
-            allowedTraces, ownerKey: evidenceOwnerKey,
+            allowedTraces, ownerKey: evidenceOwnerKey, currentRunId: runId,
           }),
           // No SDK/session state survives this closure. The shared context supplies
           // the finalization caller's signal and clamps the original absolute deadline.

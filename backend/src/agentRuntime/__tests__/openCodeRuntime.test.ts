@@ -676,6 +676,7 @@ describe('OpenCode native turn intent and delivery', () => {
       expect(context?.traceIdentity).toEqual({currentTraceId: 'trace-opencode', referenceTraceId: 'trace-reference'});
       expect(context?.deliveryContext).toMatchObject({acceptedCandidate: result.completion});
       expect(readView).toHaveBeenCalledTimes(1);
+      expect(readView.mock.calls[0][0].currentRunId).toBe(context!.runId);
       expect(readView.mock.calls[0][0]).toMatchObject({allowedTraces: [
         {traceId: 'trace-opencode', traceSide: 'current'},
         {traceId: 'trace-reference', traceSide: 'reference'},

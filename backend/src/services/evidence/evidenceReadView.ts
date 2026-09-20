@@ -6,7 +6,7 @@ import type {DataEnvelope} from '../../types/dataContract';
 import {buildInvestigationEvidenceSnapshot, type InvestigationEvidenceSnapshot,
   type InvestigationToolObservation} from './investigationEvidenceLedger';
 import {bindCapturedAnchorFacts, capturedEvidenceTable, capturedNativeRow, capturedRawSqlContext, freezeEvidenceValue,
-  type CapturedFieldSemantics, type EvidenceScalar, type EvidenceTableWitness} from './evidenceCapture';
+  getCapturedAnchorFacts, type CapturedFieldSemantics, type EvidenceScalar, type EvidenceTableWitness} from './evidenceCapture';
 
 export interface EvidenceReadRequest {
   readonly key: string;
@@ -81,8 +81,25 @@ export interface EvidenceReadViewOptions {
 }
 export interface EvidenceReadRecord {record: CapturedEvidenceRecord; witness: EvidenceTableWitness}
 const resolutions = new WeakMap<object, {witness: EvidenceTableWitness; rowIndex?: number; fields: readonly string[]}>();
+// These capabilities are never serialized. A reason string or a restored read
+// result cannot turn a bad reference into a current-run advisory diagnostic.
+// "Current" describes the authorized lookup, not the capture's origin run:
+// session continuity may admit older captures for a fresh run to read.
+const currentReads = new WeakSet<object>();
+const currentAnchorReads = new WeakMap<object, EvidenceReadResolution>();
+const ADVISORY_LOCATOR_FAILURES = new Set([
+  'evidence_not_retained', 'row_index_out_of_range', 'required_column_missing', 'invalid_row_index',
+]);
+
+export function referenceBindingFailureIsAdvisory(anchor: object, status: string): boolean {
+  const resolution = currentAnchorReads.get(anchor);
+  if (!resolution) return false;
+  if (status === 'value_mismatch') return resolution.status === 'resolved' && Boolean(getCapturedAnchorFacts(anchor));
+  return status === 'missing' && resolution.status === 'missing' && ADVISORY_LOCATOR_FAILURES.has(resolution.reason);
+}
 
 export function bindReadResolutionToAnchor(anchor: object, resolution: EvidenceReadResolution): void {
+  if (currentReads.has(resolution)) currentAnchorReads.set(anchor, resolution);
   const captured = resolutions.get(resolution);
   if (captured?.rowIndex !== undefined) {
     const context = (anchor as {context?: {captureId?: string}}).context;
@@ -213,6 +230,7 @@ export function createEvidenceReadView(records: () => readonly EvidenceReadRecor
       resolutions.set(resolution, {witness, rowIndex, fields: [...needed]});
       out.push(resolution);
     }
+    if (options.currentRunId?.trim()) out.forEach(resolution => currentReads.add(resolution));
     return Object.freeze(out);
   }});
 }

@@ -1172,6 +1172,7 @@ describe('QoderRuntime', () => {
       expect(context.deadlineMs).toBeGreaterThanOrEqual(startedAt + 2000);
       expect(context.deadlineMs).toBeLessThanOrEqual(Date.now() + 2000);
       expect(readerSpy).toHaveBeenCalledWith({
+        currentRunId: context.runId,
         allowedTraces: [{traceId: 'trace-1', traceSide: 'current'}, {traceId: 'trace-2', traceSide: 'reference'}],
         ownerKey: analysisDeliveryFingerprint({runId: 'final-context-run', sessionId: 'final-context',
           runtime: 'qoder-agent-sdk', tenantId: 'tenant-1', workspaceId: 'workspace-1', userId: 'user-1',

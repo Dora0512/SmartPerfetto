@@ -4,6 +4,9 @@ import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 import yaml from 'js-yaml';
+import { SkillExecutor } from '../skillExecutor';
+import { normalizeSkillDefinition } from '../skillLoader';
+import { validateSkillInputs } from '../skillValidator';
 
 function load(name: string, id: string): any {
   const skill = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills', name.startsWith('atomic/') ? '' : 'composite', `${name}.skill.yaml`), 'utf8')) as any;
@@ -173,18 +176,71 @@ describe('cross-scene canonical system consumers', () => {
     } finally { db.close(); }
   });
 
+  it.each([{}, {process_name:''}])('admits anchorless ANR discovery through the production identity gate: %j', async params => {
+    const file = path.join(process.cwd(),'skills/atomic/anr_main_thread_blocking.skill.yaml');
+    const skill = normalizeSkillDefinition(yaml.load(fs.readFileSync(file,'utf8')),file)!;
+    const query = jest.fn();
+    const executor = new SkillExecutor({query});
+    executor.registerSkills([skill]);
+    const validated = validateSkillInputs(skill.name,skill.inputs,params);
+    expect(validated.errors).toEqual([]);
+    expect(validated.params.process_name).toBe('');
+    const admission = await executor.prepareInvocation(skill.name,'trace',validated.params);
+    expect(admission.allowed).toBe(true);
+    expect(admission.processScope?.mode).toBe('unscoped');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('discovers anchorless app waits without declaring idle sleep a freeze', () => {
+    const db = fixture();
+    try {
+      db.exec(`ALTER TABLE process ADD COLUMN uid INTEGER;
+        UPDATE process SET uid=10123;
+        UPDATE trace_bounds SET end_ts=40000000000;
+        INSERT INTO process VALUES(44,103,'kernel.worker',1000),(45,104,'com.example.app',10123);
+        INSERT INTO thread VALUES(4,44,103,'worker',0),(5,45,104,'main',0);
+        DELETE FROM thread_state;
+        INSERT INTO thread_state(id,utid,ts,dur,state,blocked_function) VALUES
+          (80,1,1000000000,13600000000,'S',NULL),
+          (81,1,16000000000,5000000000,'S','futex_wait'),
+          (82,3,2000000000,4000000000,'D','io_schedule'),
+          (83,4,0,39000000000,'S',NULL),
+          (84,5,35000000000,-1,'DK',NULL),
+          (85,1,25000000000,-1,'S',NULL);`);
+      const params = {process_name:'',upid:'NULL',start_ts:'NULL',end_ts:'NULL',anr_ts:'NULL'};
+      const rows = query(db,'atomic/anr_main_thread_blocking','wakeup_chain',params);
+      expect(rows.map(row=>row.thread_state_id)).toEqual([85,80,84,82]);
+      expect(rows[1]).toMatchObject({upid:42,utid:1,sleep_dur_ms:13600,blocked_function:null,
+        candidate_status:'observed_wait_not_proven_unresponsiveness',waker_utid:null,
+        raw_start_ts:'1000000000',raw_end_ts:'14600000000'});
+      expect(rows[2]).toMatchObject({upid:45,is_unfinished:1,right_censored:1,raw_end_ts:null});
+      expect(query(db,'atomic/anr_main_thread_blocking','wakeup_chain',{...params,top_n:'1',offset:'2'})[0].upid).toBe(45);
+      expect(query(db,'atomic/anr_main_thread_blocking','wakeup_chain',{...params,upid:'42',
+        process_name:'com.example.app',start_ts:'2000000000',end_ts:'15000000000'})[0])
+        .toMatchObject({upid:42,start_ts:'2000000000',end_ts:'14600000000',sleep_dur_ms:12600,left_censored:1});
+      expect(query(db,'atomic/anr_main_thread_blocking','wakeup_chain',{...params,min_wait_ms:'20000'})).toEqual([]);
+      const input = (yaml.load(fs.readFileSync(path.join(process.cwd(),'skills/atomic/anr_main_thread_blocking.skill.yaml'),'utf8')) as any)
+        .inputs.find((entry: any)=>entry.name==='process_name');
+      expect(input).toMatchObject({required:false,default:''});
+      // Empty target must not select an arbitrary process in the legacy detail.
+      db.exec('ALTER TABLE thread ADD COLUMN is_main_thread INTEGER');
+      expect(query(db,'atomic/anr_main_thread_blocking','main_thread_state',params)).toEqual([]);
+    } finally { db.close(); }
+  });
+
   it.each([
     ['atomic/startup_thread_blocking_graph', 'root'],
     ['atomic/anr_main_thread_blocking', 'wakeup_chain'],
   ])('%s keeps native wait/wakeup identity and clipping without inventing blockers', (name, step) => {
     const db = fixture();
     try {
-      db.exec(`CREATE TABLE thread_track(id INTEGER PRIMARY KEY,utid INTEGER);
+      db.exec(`ALTER TABLE process ADD COLUMN uid INTEGER;
+        CREATE TABLE thread_track(id INTEGER PRIMARY KEY,utid INTEGER);
         CREATE TABLE slice(id INTEGER PRIMARY KEY,track_id INTEGER,ts INTEGER,dur INTEGER,depth INTEGER,name TEXT);
         INSERT INTO thread_track VALUES(1,3);
         INSERT INTO slice VALUES(1,1,10000000,15000000,0,'outer'),(2,1,20000000,2000000,1,'actual_task'),
           (3,1,18000000,2000000,2,'ends_at_wakeup');
-        INSERT INTO process VALUES(44,103,'com.example.app:remote');
+        INSERT INTO process VALUES(44,103,'com.example.app:remote',10123);
         INSERT INTO thread VALUES(4,44,103,'remote',0),(5,42,104,'same_name',0),(6,42,105,'same_name',0);
         DELETE FROM thread_state;
         INSERT INTO thread_state(id,utid,ts,dur,state,blocked_function,waker_utid,irq_context) VALUES

@@ -474,6 +474,7 @@
           "avg_end_freq_mhz",
           "avg_drop_pct",
           "throttled_core_ratio_pct",
+          "frequency_trend_risk",
           "thermal_risk",
           "prediction"
         ],
@@ -538,6 +539,8 @@
         "semantic_step": "thermal_overview",
         "required_columns": [
           "sensor_name",
+          "sample_quality",
+          "unit_basis",
           "sample_count",
           "min_temp_c",
           "max_temp_c",

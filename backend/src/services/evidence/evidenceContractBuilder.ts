@@ -851,6 +851,9 @@ function buildAnchor(
     if (match.unreadableReason && !invalidScope && !unavailableScope) {
       markUnreadableEvidenceAnchor(unavailable, match.unreadableReason);
     }
+    if (match.readResolution && !invalidScope && !unavailableScope) {
+      bindReadResolutionToAnchor(unavailable, match.readResolution);
+    }
     return unavailable;
   }
   const identity = deriveIdentity(envelope, row, scopeProvenance);

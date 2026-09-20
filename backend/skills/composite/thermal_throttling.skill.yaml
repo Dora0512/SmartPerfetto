@@ -214,11 +214,14 @@ steps:
           type: percentage
           format: percentage
         - name: throttled_core_ratio_pct
-          label: "疑似限频核心占比"
+          label: "频率变化核心占比"
           type: percentage
           format: percentage
+        - name: frequency_trend_risk
+          label: "频率变化信号"
+          type: string
         - name: thermal_risk
-          label: "热风险"
+          label: "热原因证据"
           type: string
         - name: prediction
           label: "预测"
@@ -246,7 +249,7 @@ steps:
           label: 温度评级
       insights:
         - condition: "max_temp_c > 80"
-          template: "传感器 {{sensor_name}} 峰值 {{max_temp_c}}C，存在严重过热"
+          template: "传感器 {{sensor_name}} 峰值 {{max_temp_c}}C，需核对传感器位置和热阈值"
         - condition: "max_temp_c > 60 && max_temp_c <= 80"
           template: "传感器 {{sensor_name}} 峰值 {{max_temp_c}}C，温度偏高"
         - condition: "temp_range_c > 20"
@@ -258,6 +261,12 @@ steps:
       columns:
         - name: sensor_name
           label: "传感器"
+          type: string
+        - name: sample_quality
+          label: "样本质量"
+          type: string
+        - name: unit_basis
+          label: "单位依据"
           type: string
         - name: sample_count
           label: "采样数"
@@ -282,36 +291,19 @@ steps:
         - name: temp_severity
           label: "评级"
           type: string
+    sql_fragments: [fragments/thermal_sample_quality.sql]
     sql: |
-      SELECT
-        ct.name as sensor_name,
-        COUNT(*) as sample_count,
-        -- 归一化：millidegrees (>1000) → Celsius
-        ROUND(MIN(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END), 1) as min_temp_c,
-        ROUND(MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END), 1) as max_temp_c,
-        ROUND(AVG(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END), 1) as avg_temp_c,
-        ROUND(
-          MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END)
-          - MIN(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END), 1
-        ) as temp_range_c,
-        CASE
-          WHEN MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) > 80 THEN '严重过热'
-          WHEN MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) > 60 THEN '温度偏高'
-          WHEN MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) > 45 THEN '温度正常'
-          ELSE '温度良好'
-        END as temp_severity
-      FROM counter c
-      JOIN counter_track ct ON c.track_id = ct.id
-      WHERE (
-          ct.name LIKE '%thermal%'
-          OR ct.name LIKE '%temp%'
-          OR ct.name LIKE '%temperature%'
-          OR ct.name LIKE '%tsens%'
-        )
-        AND (${start_ts} IS NULL OR c.ts >= ${start_ts})
-        AND (${end_ts} IS NULL OR c.ts < ${end_ts})
-      GROUP BY ct.name
-      ORDER BY max_temp_c DESC
+      SELECT sensor_track_id, sensor_name, source_unit, unit_basis, sample_count,
+        sample_quality, ROUND(raw_min_temp_c, 1) AS raw_min_temp_c,
+        ROUND(raw_max_temp_c, 1) AS raw_max_temp_c,
+        ROUND(CASE WHEN sample_quality = 'accepted' THEN raw_min_temp_c END, 1) AS min_temp_c,
+        ROUND(CASE WHEN sample_quality = 'accepted' THEN raw_max_temp_c END, 1) AS max_temp_c,
+        ROUND(CASE WHEN sample_quality = 'accepted' THEN raw_avg_temp_c END, 1) AS avg_temp_c,
+        ROUND(CASE WHEN sample_quality = 'accepted' THEN raw_max_temp_c - raw_min_temp_c END, 1) AS temp_range_c,
+        CASE WHEN sample_quality != 'accepted' THEN '温度数据可疑'
+          WHEN raw_max_temp_c > 60 THEN '观测到高温，需结合传感器位置判断'
+          ELSE '有效温度观测，不代表 CPU 结温' END AS temp_severity
+      FROM thermal_track_stats ORDER BY max_temp_c DESC
     save_as: thermal_overview
     optional: true
     condition: "data_check.data[0]?.has_thermal_data === 1"
@@ -332,12 +324,12 @@ steps:
           label: 最高频率
           format: "{{value}} MHz"
         - key: throttle_ratio
-          label: 节流比例
+          label: 观测频率跨度
       insights:
         - condition: "throttle_ratio > 50"
-          template: "CPU{{cpu_id}} 频率下降超过最大频率 50%，存在显著节流"
+          template: "CPU{{cpu_id}} 频率下降超过最大频率 50%，仅说明 DVFS 频率变化，不能确定热节流"
         - condition: "throttle_ratio > 30"
-          template: "CPU{{cpu_id}} 频率下降超过最大频率 30%，存在中度节流"
+          template: "CPU{{cpu_id}} 频率下降超过最大频率 30%，需结合负载和直接限频证据判断原因"
     display:
       level: summary
       layer: overview
@@ -363,7 +355,7 @@ steps:
           type: number
           format: compact
         - name: throttle_ratio
-          label: "节流比例(%)"
+          label: "观测频率跨度(%)"
           type: percentage
           format: percentage
         - name: throttling_status
@@ -379,9 +371,9 @@ steps:
         -- 相对节流比例：(max - min) / max * 100
         ROUND((MAX(c.value) - MIN(c.value)) * 100.0 / NULLIF(MAX(c.value), 0), 1) as throttle_ratio,
         CASE
-          WHEN MIN(c.value) < MAX(c.value) * 0.3 THEN '严重节流'
-          WHEN MIN(c.value) < MAX(c.value) * 0.5 THEN '显著节流'
-          WHEN MIN(c.value) < MAX(c.value) * 0.7 THEN '中度节流'
+          WHEN MIN(c.value) < MAX(c.value) * 0.3 THEN '大幅 DVFS 变化，原因未核验'
+          WHEN MIN(c.value) < MAX(c.value) * 0.5 THEN 'DVFS 变化，原因未核验'
+          WHEN MIN(c.value) < MAX(c.value) * 0.7 THEN 'DVFS 变化，原因未核验'
           ELSE '正常'
         END as throttling_status
       FROM counter c
@@ -462,45 +454,20 @@ steps:
         - name: severity
           label: "状态"
           type: string
+    sql_fragments: [fragments/thermal_sample_quality.sql]
     sql: |
-      WITH thermal_samples AS (
-        SELECT
-          c.ts,
-          ct.name as sensor_name,
-          CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END as temp_c,
-          LAG(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END)
-            OVER (PARTITION BY ct.name ORDER BY c.ts) as prev_temp_c,
-          ROW_NUMBER() OVER (PARTITION BY ct.name ORDER BY c.ts) as rn,
-          COUNT(*) OVER (PARTITION BY ct.name) as total_samples
-        FROM counter c
-        JOIN counter_track ct ON c.track_id = ct.id
-        WHERE (
-            ct.name LIKE '%thermal%'
-            OR ct.name LIKE '%temp%'
-            OR ct.name LIKE '%temperature%'
-            OR ct.name LIKE '%tsens%'
-          )
-          AND (${start_ts} IS NULL OR c.ts >= ${start_ts})
-          AND (${end_ts} IS NULL OR c.ts < ${end_ts})
+      WITH sampled AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY sensor_track_id ORDER BY ts, id) AS rn,
+          COUNT(*) OVER (PARTITION BY sensor_track_id) AS total_samples
+        FROM thermal_valid_samples
       )
-      SELECT
-        printf('%d', ts) as ts,
-        sensor_name,
-        ROUND(temp_c, 1) as temp_c,
-        ROUND(temp_c - COALESCE(prev_temp_c, temp_c), 1) as delta_c,
-        CASE
-          WHEN temp_c > 80 THEN 'critical'
-          WHEN temp_c > 60 THEN 'warning'
-          WHEN temp_c > 45 THEN 'normal'
-          ELSE 'cool'
-        END as severity
-      FROM thermal_samples
-      -- 采样：取每个传感器的均匀分布样本，最多 100 条
-      WHERE rn % MAX(1, total_samples / 100) = 0
-         OR temp_c > 60
-         OR ABS(temp_c - COALESCE(prev_temp_c, temp_c)) > 3
-      ORDER BY ts
-      LIMIT 200
+      SELECT printf('%d', ts) AS ts, sensor_track_id, sensor_name,
+        ROUND(temp_c, 1) AS temp_c, ROUND(temp_c - COALESCE(prev_temp_c, temp_c), 1) AS delta_c,
+        CASE WHEN temp_c > 60 THEN 'high_temperature_observed' ELSE 'temperature_observed' END AS severity
+      FROM sampled
+      WHERE rn % MAX(1, total_samples / 100) = 0 OR temp_c > 60
+        OR ABS(temp_c - COALESCE(prev_temp_c, temp_c)) > 3
+      ORDER BY ts LIMIT 200
     save_as: thermal_timeline
     optional: true
     condition: "data_check.data[0]?.has_thermal_data === 1"
@@ -526,7 +493,7 @@ steps:
     display:
       level: detail
       layer: list
-      title: "CPU 频率骤降事件（可能因热节流）"
+      title: "CPU 频率骤降事件（需核对负载）"
       columns:
         - name: ts
           label: "时间"
@@ -571,8 +538,8 @@ steps:
         ROUND(freq_mhz, 0) as new_freq_mhz,
         ROUND((prev_freq_mhz - freq_mhz) * 100.0 / prev_freq_mhz, 1) as drop_pct,
         CASE
-          WHEN freq_mhz < cpu_max_freq_mhz * 0.3 THEN 'critical'
-          WHEN freq_mhz < cpu_max_freq_mhz * 0.5 THEN 'warning'
+          WHEN freq_mhz < cpu_max_freq_mhz * 0.3 THEN 'large_frequency_change'
+          WHEN freq_mhz < cpu_max_freq_mhz * 0.5 THEN 'frequency_change'
           ELSE 'notice'
         END as severity
       FROM freq_with_max
@@ -602,8 +569,8 @@ steps:
         - key: status
           label: 状态
       insights:
-        - condition: "status === 'thermal_throttled'"
-          template: "在 {{second}}s 检测到高温伴随低频，存在热节流"
+        - condition: "status === 'high_temperature_with_low_frequency'"
+          template: "在 {{second}}s 检测到高温伴随低频，不能据此确定热节流"
     display:
       level: detail
       layer: list
@@ -627,21 +594,16 @@ steps:
         - name: status
           label: "状态"
           type: string
+    sql_fragments: [fragments/thermal_sample_quality.sql]
     sql: |
       WITH
       time_range AS (
         SELECT MIN(ts) as base_ts FROM counter
       ),
       thermal_by_sec AS (
-        SELECT
-          CAST((c.ts - (SELECT base_ts FROM time_range)) / 1e9 AS INT) as second,
-          MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) as max_temp_c
-        FROM counter c
-        JOIN counter_track ct ON c.track_id = ct.id
-        WHERE (ct.name LIKE '%thermal%' OR ct.name LIKE '%temp%' OR ct.name LIKE '%tsens%')
-          AND (${start_ts} IS NULL OR c.ts >= ${start_ts})
-          AND (${end_ts} IS NULL OR c.ts < ${end_ts})
-        GROUP BY CAST((c.ts - (SELECT base_ts FROM time_range)) / 1e9 AS INT)
+        SELECT CAST((ts - (SELECT base_ts FROM time_range)) / 1e9 AS INT) AS second,
+          MAX(temp_c) AS max_temp_c
+        FROM thermal_valid_samples GROUP BY second
       ),
       freq_by_sec AS (
         SELECT
@@ -668,9 +630,9 @@ steps:
         ROUND(f.avg_freq_mhz * 100.0 / NULLIF((SELECT global_max_mhz FROM global_max_freq), 0), 1) as freq_ratio_pct,
         CASE
           WHEN t.max_temp_c > 70 AND f.avg_freq_mhz < (SELECT global_max_mhz FROM global_max_freq) * 0.5
-            THEN 'thermal_throttled'
+            THEN 'high_temperature_with_low_frequency'
           WHEN t.max_temp_c > 60 AND f.avg_freq_mhz < (SELECT global_max_mhz FROM global_max_freq) * 0.7
-            THEN 'moderate_throttle'
+            THEN 'high_temperature_with_low_frequency'
           WHEN t.max_temp_c > 60 THEN 'high_temp'
           ELSE 'normal'
         END as status
@@ -714,33 +676,18 @@ steps:
           label: "采样数"
           type: number
           format: compact
+    sql_fragments: [fragments/thermal_sample_quality.sql]
     sql: |
-      WITH high_temp_samples AS (
-        SELECT
-          c.ts,
-          ct.name as sensor_name,
-          CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END as temp_c
-        FROM counter c
-        JOIN counter_track ct ON c.track_id = ct.id
-        WHERE (
-            ct.name LIKE '%thermal%'
-            OR ct.name LIKE '%temp%'
-            OR ct.name LIKE '%tsens%'
-          )
-          AND (CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) > 60
-          AND (${start_ts} IS NULL OR c.ts >= ${start_ts})
-          AND (${end_ts} IS NULL OR c.ts < ${end_ts})
+      WITH classified AS (
+        SELECT *, SUM(CASE WHEN temp_c <= 60 OR prev_ts IS NULL OR ts - prev_ts > 5000000000
+          THEN 1 ELSE 0 END) OVER (PARTITION BY sensor_track_id ORDER BY ts, id) AS period_id
+        FROM thermal_valid_samples
       )
-      SELECT
-        sensor_name,
-        printf('%d', MIN(ts)) as start_ts,
-        printf('%d', MAX(ts)) as end_ts,
-        ROUND((MAX(ts) - MIN(ts)) / 1e9, 2) as duration_sec,
-        ROUND(MAX(temp_c), 1) as peak_temp_c,
-        COUNT(*) as sample_count
-      FROM high_temp_samples
-      GROUP BY sensor_name
-      HAVING COUNT(*) > 1
+      SELECT sensor_track_id, sensor_name, printf('%d', MIN(ts)) AS start_ts,
+        printf('%d', MAX(ts)) AS end_ts, ROUND((MAX(ts)-MIN(ts))/1e9, 2) AS duration_sec,
+        ROUND(MAX(temp_c), 1) AS peak_temp_c, COUNT(*) AS sample_count
+      FROM classified WHERE temp_c > 60 GROUP BY sensor_track_id, sensor_name, period_id
+      HAVING COUNT(*) >= 5 AND MAX(ts)-MIN(ts) >= 3000000000
       ORDER BY peak_temp_c DESC
     save_as: high_temp_periods
     optional: true
@@ -759,12 +706,12 @@ steps:
           label: 峰值温度
           format: "{{value}} C"
         - key: throttled_cpu_count
-          label: 受影响CPU数
+          label: 已核验热限频CPU数
       insights:
-        - condition: "classification === 'THERMAL_THROTTLING'"
-          template: "热节流严重：峰值 {{peak_temp_c}}C，{{throttled_cpu_count}} 核受影响"
-        - condition: "classification === 'SUSTAINED_HIGH_TEMP'"
-          template: "持续高温 {{peak_temp_c}}C，存在热节流风险"
+        - condition: "classification === 'DATA_SUSPECT'"
+          template: "温度数据需复核，峰值 {{peak_temp_c}}C 仅来自通过质量筛选的传感器"
+        - condition: "classification === 'HIGH_TEMP_OBSERVED'"
+          template: "观测到高温 {{peak_temp_c}}C，热节流原因未核验"
     display:
       level: summary
       layer: overview
@@ -778,7 +725,7 @@ steps:
           type: number
           format: compact
         - name: throttled_cpu_count
-          label: "受影响CPU数"
+          label: "已核验热限频CPU数"
           type: number
         - name: severe_drop_count
           label: "严重降频次数"
@@ -787,17 +734,18 @@ steps:
         - name: description
           label: "描述"
           type: string
+    sql_fragments: [fragments/thermal_sample_quality.sql]
     sql: |
       WITH
       thermal_peak AS (
-        SELECT
-          MAX(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) as peak_temp_c,
-          AVG(CASE WHEN c.value > 1000 THEN c.value / 1000.0 ELSE c.value END) as avg_temp_c
-        FROM counter c
-        JOIN counter_track ct ON c.track_id = ct.id
-        WHERE (ct.name LIKE '%thermal%' OR ct.name LIKE '%temp%' OR ct.name LIKE '%tsens%')
-          AND (${start_ts} IS NULL OR c.ts >= ${start_ts})
-          AND (${end_ts} IS NULL OR c.ts < ${end_ts})
+        SELECT MAX(temp_c) AS peak_temp_c FROM thermal_valid_samples
+      ),
+      thermal_quality AS (
+        SELECT COUNT(*) AS track_count,
+          SUM(CASE WHEN sample_quality != 'accepted' THEN 1 ELSE 0 END) AS rejected_tracks,
+          MAX(CASE WHEN sample_quality = 'accepted' THEN raw_max_temp_c END)
+          - MIN(CASE WHEN sample_quality = 'accepted' THEN raw_max_temp_c END) AS sensor_spread_c
+        FROM thermal_track_stats
       ),
       cpu_freq_stats AS (
         SELECT
@@ -832,36 +780,27 @@ steps:
         WHERE prev_freq IS NOT NULL AND freq_mhz < prev_freq * 0.7
       )
       SELECT
-        CASE
-          WHEN (SELECT cnt FROM throttled_cpus) > 4
-               AND COALESCE((SELECT peak_temp_c FROM thermal_peak), 0) > 70
-            THEN 'THERMAL_THROTTLING'
-          WHEN COALESCE((SELECT peak_temp_c FROM thermal_peak), 0) > 60
-               AND COALESCE((SELECT avg_temp_c FROM thermal_peak), 0) > 55
-            THEN 'SUSTAINED_HIGH_TEMP'
-          WHEN (SELECT cnt FROM freq_drops) > 20
-               AND COALESCE((SELECT peak_temp_c FROM thermal_peak), 0) > 50
-            THEN 'THERMAL_THROTTLING'
-          WHEN (SELECT cnt FROM freq_drops) > 10
-            THEN 'FREQ_INSTABILITY'
-          ELSE 'THERMAL_NORMAL'
-        END as classification,
-        ROUND(COALESCE((SELECT peak_temp_c FROM thermal_peak), 0), 1) as peak_temp_c,
-        (SELECT cnt FROM throttled_cpus) as throttled_cpu_count,
-        (SELECT cnt FROM freq_drops) as severe_drop_count,
-        CASE
-          WHEN (SELECT cnt FROM throttled_cpus) > 4
-               AND COALESCE((SELECT peak_temp_c FROM thermal_peak), 0) > 70
-            THEN '多核严重降频，热节流显著影响性能，建议降低负载或优化散热'
-          WHEN COALESCE((SELECT peak_temp_c FROM thermal_peak), 0) > 60
-               AND COALESCE((SELECT avg_temp_c FROM thermal_peak), 0) > 55
-            THEN '持续高温，存在热节流风险，建议减少后台任务和 CPU 密集操作'
-          WHEN (SELECT cnt FROM freq_drops) > 20
-            THEN '频繁触发热节流降频，建议添加冷却间隔或优化计算密度'
-          WHEN (SELECT cnt FROM freq_drops) > 10
-            THEN '频率不稳定，可能受温度影响，建议监控散热'
-          ELSE '温度正常，无明显热节流'
-        END as description
+        CASE WHEN (SELECT rejected_tracks FROM thermal_quality) > 0
+            OR (SELECT sensor_spread_c FROM thermal_quality) > 30 THEN 'DATA_SUSPECT'
+          WHEN (SELECT peak_temp_c FROM thermal_peak) IS NULL THEN 'THERMAL_DATA_UNAVAILABLE'
+          WHEN (SELECT peak_temp_c FROM thermal_peak) > 60 THEN 'HIGH_TEMP_OBSERVED'
+          WHEN (SELECT cnt FROM freq_drops) > 10 THEN 'FREQ_INSTABILITY'
+          ELSE 'THERMAL_NORMAL' END AS classification,
+        ROUND((SELECT peak_temp_c FROM thermal_peak), 1) AS peak_temp_c,
+        NULL AS throttled_cpu_count,
+        (SELECT cnt FROM throttled_cpus) AS frequency_variation_cpu_count,
+        (SELECT cnt FROM freq_drops) AS severe_drop_count,
+        (SELECT rejected_tracks FROM thermal_quality) AS rejected_temperature_tracks,
+        ROUND((SELECT sensor_spread_c FROM thermal_quality), 1) AS sensor_spread_c,
+        'not_established' AS thermal_throttling_evidence,
+        CASE WHEN (SELECT rejected_tracks FROM thermal_quality) > 0
+          THEN '温度数据可疑：已排除低质量轨道；峰值仅代表有效传感器，不代表 CPU 结温。'
+          WHEN (SELECT sensor_spread_c FROM thermal_quality) > 30
+          THEN '传感器温差较大：皮肤和结温不可直接比较，需核对位置、单位及时间覆盖。'
+          WHEN (SELECT peak_temp_c FROM thermal_peak) IS NULL THEN '温度数据不可用，不能判断热状态。'
+          WHEN (SELECT peak_temp_c FROM thermal_peak) > 60 THEN '有效传感器观测到高温，不代表持续高温或热节流。'
+          ELSE '有效传感器未见高温；频率变化可由负载或空闲 DVFS 引起，不能据此确定热节流。'
+        END AS description
     save_as: root_cause
     condition: "data_check.data[0]?.has_thermal_data === 1 || data_check.data[0]?.has_freq_data === 1"
 
@@ -886,61 +825,28 @@ steps:
       title: "问题诊断"
     inputs: [thermal_overview, cpu_freq_overview, thermal_prediction, gpu_power_probe, frequency_drops, high_temp_periods, root_cause]
     rules:
-      # 严重热节流
-      - condition: "root_cause.data[0]?.classification === 'THERMAL_THROTTLING'"
-        severity: critical
-        diagnosis: "检测到热节流：峰值 ${root_cause.data[0].peak_temp_c}C，${root_cause.data[0].throttled_cpu_count} 核受影响"
-        confidence: high
-        suggestions:
-          - "减少后台 CPU 密集任务"
-          - "优化计算密集操作，添加冷却间隔"
-          - "检查设备散热条件"
-
-      # 持续高温
-      - condition: "root_cause.data[0]?.classification === 'SUSTAINED_HIGH_TEMP'"
+      - condition: "root_cause.data[0]?.classification === 'DATA_SUSPECT'"
         severity: warning
-        diagnosis: "持续高温 ${root_cause.data[0].peak_temp_c}C，存在热节流风险"
-        confidence: high
+        diagnosis: "温度数据可疑或传感器不可直接比较；峰值仅来自通过质量筛选的轨道，不能确定热节流"
+        confidence: low
         suggestions:
-          - "降低持续 CPU 负载"
-          - "避免长时间高强度计算"
-          - "监控温度变化趋势"
-
-      # 专家预测：短时间内热风险
-      - condition: "(thermal_prediction?.data?.[0]?.thermal_risk || '') === 'high'"
-        severity: critical
-        diagnosis: "热风险预测为高：频率平均降幅 ${thermal_prediction.data[0].avg_drop_pct}%"
-        confidence: high
-        suggestions:
-          - "立即降低持续计算密度，增加任务分批与冷却间隔"
-          - "优先优化后台并发，避免长时间满载"
-          - "结合温度传感器与 FPS 继续观测 1-3 分钟趋势"
-
-      # GPU 侧降频抖动
-      - condition: "(gpu_power_probe?.data?.[0]?.downshift_ratio_pct || 0) >= (gpu_downshift_warning_pct || 25)"
+          - "检查各轨道 sample_quality、unit_basis 和传感器位置，勿将皮肤温度视为 CPU 结温"
+      - condition: "root_cause.data[0]?.classification === 'THERMAL_DATA_UNAVAILABLE'"
+        severity: info
+        diagnosis: "没有足够可靠的温度数据，热状态不可判定"
+        confidence: low
+      - condition: "root_cause.data[0]?.classification === 'HIGH_TEMP_OBSERVED'"
         severity: warning
-        diagnosis: "GPU 降频占比 ${gpu_power_probe.data[0].downshift_ratio_pct}% ，存在图形侧热压或功耗抖动"
+        diagnosis: "观测到高温 ${root_cause.data[0].peak_temp_c}C；需要持续时间和直接限频证据才能判断热节流"
         confidence: medium
-        suggestions:
-          - "降低高峰渲染负载，减少过度绘制和昂贵 shader"
-          - "平滑 GPU 突发任务，避免频繁升降频震荡"
-
-      # 频率不稳定
       - condition: "root_cause.data[0]?.classification === 'FREQ_INSTABILITY'"
-        severity: warning
-        diagnosis: "CPU 频率不稳定 (${root_cause.data[0].severe_drop_count} 次骤降)，可能受温度影响"
+        severity: info
+        diagnosis: "观测到 ${root_cause.data[0].severe_drop_count} 次频率下降，负载或空闲 DVFS 均可解释，热原因未核验"
         confidence: medium
-        suggestions:
-          - "检查散热条件"
-          - "优化任务调度避免突发负载"
-
-      # 正常
       - condition: "root_cause.data[0]?.classification === 'THERMAL_NORMAL'"
         severity: info
-        diagnosis: "温度正常，无明显热节流"
-        confidence: high
-        suggestions:
-          - "当前热状态良好"
+        diagnosis: "有效传感器未见高温；不代表所有 CPU 结温均可观测"
+        confidence: medium
 
   # ========== 无数据回退 ==========
   - id: no_data_fallback

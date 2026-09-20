@@ -514,6 +514,7 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
             sourceUse: sessionState.sourceUse?.getSourceUseDecision(),
             sourceScope: sessionState.sourceUse?.getSourceExecutionScope?.(),
             evidenceReadView: sessionState.artifactStore?.createEvidenceReadView({
+              currentRunId: executionLease.key.runId!,
               allowedTraces: [{traceId, traceSide: 'current'},
                 ...(normalizedOptions.referenceTraceId
                   ? [{traceId: normalizedOptions.referenceTraceId, traceSide: 'reference' as const}] : [])],

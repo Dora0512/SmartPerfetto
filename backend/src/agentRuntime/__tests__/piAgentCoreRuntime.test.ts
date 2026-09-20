@@ -3720,6 +3720,7 @@ describe('experimental Pi agent-core runtime contract', () => {
       expect(context.deliveryContext).toEqual(projected.deliveryContext);
       expect(context.traceIdentity).toEqual({currentTraceId: 'trace-current', referenceTraceId: 'trace-reference'});
       expect(readView).toHaveBeenCalledTimes(1);
+      expect(readView.mock.calls[0][0].currentRunId).toBe(context.runId);
       expect(readView.mock.calls[0][0].allowedTraces).toEqual([
         {traceId: 'trace-current', traceSide: 'current'}, {traceId: 'trace-reference', traceSide: 'reference'},
       ]);

@@ -251,12 +251,14 @@
         "parameters": {},
         "required_steps": [
           "vsync_config",
+          "presentation_cadence_audit",
           "consumer_jank_frames",
           "consumer_jank_summary",
           "jank_severity_distribution"
         ],
         "required_sql_steps": [
           "vsync_config",
+          "presentation_cadence_audit",
           "consumer_jank_frames",
           "consumer_jank_summary",
           "jank_severity_distribution"

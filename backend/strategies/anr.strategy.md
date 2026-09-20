@@ -11,7 +11,7 @@ investigation_contract:
   requirements:
     - id: anr_critical_path
       domain: critical_path
-      description: "Confirm ANR type, target UPID and timeout window. Identify blocked task, main-thread work and relevant owner/peer tasks rather than equating the longest wait with the full timeout."
+      description: "Check recorded ANR type, target UPID and timeout window when available. If no ANR is recorded but the user asks about unresponsiveness, discover long main-thread waits with anr_main_thread_blocking without process_name/anr_ts, then correlate candidate UPID and exact wait window with target input dispatch and FINISHED acknowledgements; absence of an ANR anchor must not stop this investigation. Identify blocked task, main-thread work and relevant owner/peer tasks rather than equating the longest wait with the full timeout."
     - id: anr_dependencies
       domain: dependency_chain
       description: "Trace Binder transactions, lock ownership, IO and wakeup dependencies where available; distinguish observed waiting from an established blocking chain and from ANR trigger attribution."
@@ -60,7 +60,7 @@ final_report_contract:
 phase_hints:
   - id: freeze_verdict
     keywords: ['verdict', '判定', 'freeze', 'diagnosis', '诊断', '原因', 'anr_analysis', '系统', 'system']
-    constraints: 'freeze_verdict 是第一优先级门控。system freeze → 系统原因排查；app_specific → 进入 App 根因决策树（5 步子流程）。禁止在未确认 freeze_verdict 前直接分析 App 代码。'
+    constraints: '有 ANR 窗口时先读 freeze_verdict：system freeze → 系统原因排查；app_specific → App 根因决策树。无 ANR 窗口或 verdict 不可得时继续无锚点主线程调查，并保留系统健康证据缺口。'
     critical_tools: ['anr_analysis']
     critical: true
   - id: anr_diagnostic_api_boundary
@@ -94,8 +94,13 @@ plan_template:
 - anr_root_cause: ANR 场景建议包含 ANR 原因定位阶段 (anr_analysis) (required: invoke_skill(anr_analysis))
 
 **Phase reminders**
-- freeze_verdict: freeze_verdict 是第一优先级门控。system freeze → 系统原因排查；app_specific → 进入 App 根因决策树（5 步子流程）。禁止在未确认 freeze_verdict 前直接分析 App 代码。 工具: anr_analysis
+- freeze_verdict: 有 ANR 窗口时先读 freeze_verdict：system freeze → 系统原因排查；app_specific → App 根因决策树。无 ANR 窗口或 verdict 不可得时继续无锚点主线程调查，并保留系统健康证据缺口。 工具: anr_analysis
 - anr_diagnostic_api_boundary: ApplicationExitInfo、ProfilingTrigger 产物、Play/Android Vitals、客户端 watchdog 都只能补充 ANR 证据。必须说明 API/Android 版本、reason/trigger type、record/artifact 时间、事件窗口对齐；根因仍需 Perfetto ANR window、direct_blocker、logcat、Binder/lock/IO/GC/scheduler 证据闭环。 工具: anr_analysis, lookup_knowledge
+
+**无 ANR 锚点仍须调查无响应**
+- 用户询问主线程无响应而未记录 ANR 时，调用 `anr_main_thread_blocking`，省略 `process_name` / `anr_ts`，读取 `wakeup_chain` 的应用主线程最长 S/D 等待候选（默认 ≥3s，每进程分别保留最长已结束/未结束等待，支持 `top_n` / `offset` 分页）。无结果只代表该阈值/UID 覆盖内未命中，不能证明没有无响应。
+- 用输入目标/前台活动核对候选 UPID，再以观测到的 `process_name` 和窗口调用该 Skill。同名多实例或重启时改用带明确 UPID/UTID 等值条件的 SQL 核查，不能依赖旧详情中的首个同名进程。按原始 ns 对齐目标 channel 的 DOWN/UP、receive 与 FINISHED，窗口应覆盖等待结束后的响应；只描述实际重叠，不把派发自动等同超时。
+- 保留“未记录系统 ANR 声明”。长 S 可能正常 Looper 空闲；及时 FINISHED 是反证。没有 blocked_function/锁/Binder/输入处理证据时，报告等待及原因未知，不断言冻结、静默 kill 或 ANR。
 
 **Final report contract summary**
 - ANR 诊断 API/外部聚合边界
@@ -109,7 +114,7 @@ plan_template:
 #### ANR 分析（用户提到 ANR、无响应、not responding、死锁、冻屏）
 
 **⚠️ 核心原则：**
-1. **先判系统还是应用**：先读取 `system_freeze_check` step 保存的 `freeze_check.freeze_verdict`。系统冻屏导致的 ANR 不是 App Bug
+1. **有 ANR 窗口时先判系统还是应用**：读取 `system_freeze_check` step 保存的 `freeze_check.freeze_verdict`。没有 ANR 窗口则走 Core 的无锚点长等待发现与输入时间线调查，不以缺少 freeze_verdict 为停止条件。
 2. **分清四层语义**：`trigger_type` 是触发机制，`direct_blocker` 是 ANR 窗口内的直接阻塞形态，`root_cause_pattern_hints` 只是候选提示，最终根因必须由多源证据闭环
 3. **按 ANR 类型差异化分析**：INPUT_DISPATCHING / NO_FOCUS / BROADCAST / SERVICE / JOB / WATCHDOG / CONTENT_PROVIDER 的分析路径不同
 4. **四象限 + blocked_functions 交叉定位根因**：与启动分析相同的诊断方法论
@@ -192,7 +197,7 @@ fetch_artifact(artifactId, detail="rows", offset=0, limit=50)
 
 | 四象限 | 占比 | 含义 | 下一步 |
 |--------|------|------|--------|
-| Q4 Sleeping 极高 | >80% | **主线程被阻塞**（ANR 最常见原因） | → 第二步：用 blocked_functions 定位 |
+| Q4 Sleeping 极高 | >80% | 等待占比高，可能正常空闲；单独不能证明阻塞或无响应 | → 第二步：结合 blocked_functions、输入处理/ACK 与调用链判断 |
 | Q3 Runnable 高 | >30% | CPU 饥饿——可运行但得不到 CPU | → 检查 `sched_latency`、`cpu_health`、后台进程抢占 |
 | Q1+Q2 Running 高 | >70% | CPU-bound——主线程在执行重计算 | → 检查 `main_slices`（from `main_thread_slices`），并调用 `invoke_skill("process_slice_cpu_hotspots", { process_name, start_ts, end_ts, thread_scope: "main" })` 定位主线程热点函数/slice 的 Running CPU time |
 | 混合 | 无明显主导 | 多因素共同导致 | → 依次排查 Q4→Q3→Q1 |

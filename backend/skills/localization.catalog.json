@@ -10,8 +10,8 @@
     "skillCount": 240,
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
-    "stepCount": 1269,
-    "explicitColumnCount": 4343
+    "stepCount": 1270,
+    "explicitColumnCount": 4373
   },
   "skills": {
     "ams_module": {
@@ -2900,7 +2900,7 @@
         "en": "ANR Main Thread Blocking"
       },
       "description": {
-        "zh-CN": "深度分析 ANR 事件中主线程的阻塞原因：线程状态、阻塞函数、唤醒链、Binder、锁竞争",
+        "zh-CN": "分析主线程等待；无 ANR 时间戳或目标进程时发现应用主线程长等待候选，再结合输入时间线判断是否无响应",
         "en": "Analyzes ANR Main Thread Blocking using trace metrics and supporting evidence."
       },
       "type": "composite",
@@ -3104,10 +3104,22 @@
         },
         "wakeup_chain": {
           "title": {
-            "zh-CN": "主线程唤醒链（谁唤醒了主线程）",
+            "zh-CN": "主线程等待候选与唤醒证据（长睡眠不等于无响应）",
             "en": "Wakeup Chain"
           },
           "columns": {
+            "process_name": {
+              "label": {
+                "zh-CN": "进程名",
+                "en": "Process Name"
+              }
+            },
+            "candidate_status": {
+              "label": {
+                "zh-CN": "候选证据边界",
+                "en": "Candidate Status"
+              }
+            },
             "upid": {
               "label": {
                 "zh-CN": "UPID",
@@ -9030,7 +9042,7 @@
         },
         "consumer_jank_frames": {
           "title": {
-            "zh-CN": "真正的掉帧帧（SF 消费端视角）",
+            "zh-CN": "消费端异常及待核验帧",
             "en": "Consumer Jank Frames"
           },
           "columns": {
@@ -9123,7 +9135,7 @@
         },
         "consumer_jank_summary": {
           "title": {
-            "zh-CN": "消费端掉帧统计",
+            "zh-CN": "消费端混合呈现异常（不等同可见卡顿）",
             "en": "Consumer Jank Summary"
           },
           "columns": {
@@ -9135,19 +9147,25 @@
             },
             "consumer_jank_frames": {
               "label": {
-                "zh-CN": "掉帧数",
+                "zh-CN": "混合呈现异常帧",
                 "en": "Consumer Jank Frames"
+              }
+            },
+            "unassessed_frames": {
+              "label": {
+                "zh-CN": "呈现间隔待核验帧",
+                "en": "Unassessed Frames"
               }
             },
             "smooth_frames": {
               "label": {
-                "zh-CN": "流畅帧",
+                "zh-CN": "未命中消费异常帧",
                 "en": "Smooth Frames"
               }
             },
             "consumer_jank_rate": {
               "label": {
-                "zh-CN": "掉帧率",
+                "zh-CN": "混合呈现异常率",
                 "en": "Consumer Jank Rate"
               }
             },
@@ -9155,6 +9173,18 @@
               "label": {
                 "zh-CN": "最大跳帧",
                 "en": "Max Vsync Missed"
+              }
+            },
+            "raw_buffer_stuffing_frames": {
+              "label": {
+                "zh-CN": "含 Stuffing 原始标签帧",
+                "en": "Raw Buffer Stuffing Frames"
+              }
+            },
+            "manual_review_required": {
+              "label": {
+                "zh-CN": "需呈现节奏与机制复核",
+                "en": "Manual Review Required"
               }
             },
             "rating": {
@@ -9205,12 +9235,129 @@
           },
           "synthesizeLabels": {}
         },
+        "presentation_cadence_audit": {
+          "title": {
+            "zh-CN": "Buffer Stuffing 标签与实际呈现节奏（不等同反压诊断）",
+            "en": "Presentation Cadence Audit"
+          },
+          "columns": {
+            "layer_name": {
+              "label": {
+                "zh-CN": "图层",
+                "en": "Layer Name"
+              }
+            },
+            "burst_id": {
+              "label": {
+                "zh-CN": "连续片段",
+                "en": "Burst Id"
+              }
+            },
+            "total_frames": {
+              "label": {
+                "zh-CN": "有效呈现帧数",
+                "en": "Total Frames"
+              }
+            },
+            "raw_buffer_stuffing_frames": {
+              "label": {
+                "zh-CN": "原始 Stuffing 标签",
+                "en": "Raw Buffer Stuffing Frames"
+              }
+            },
+            "buffer_stuffing_label_pct": {
+              "label": {
+                "zh-CN": "标签占比",
+                "en": "Buffer Stuffing Label Pct"
+              }
+            },
+            "steady_late_frames": {
+              "label": {
+                "zh-CN": "匀速晚拍帧（信息性）",
+                "en": "Steady Late Frames"
+              }
+            },
+            "vsync_period_ns": {
+              "label": {
+                "zh-CN": "观测 VSync 周期(ns)",
+                "en": "Vsync Period ns"
+              }
+            },
+            "cadence_status": {
+              "label": {
+                "zh-CN": "呈现节奏",
+                "en": "Cadence Status"
+              }
+            },
+            "cadence_gap_frames": {
+              "label": {
+                "zh-CN": "超过 1.5 VSync 的间隔",
+                "en": "Cadence Gap Frames"
+              }
+            },
+            "dropped_frames": {
+              "label": {
+                "zh-CN": "丢弃帧",
+                "en": "Dropped Frames"
+              }
+            },
+            "missed_frame_type_frames": {
+              "label": {
+                "zh-CN": "原始 Missed Frame 标签",
+                "en": "Missed Frame Type Frames"
+              }
+            },
+            "late_present_frames": {
+              "label": {
+                "zh-CN": "Late Present 标签",
+                "en": "Late Present Frames"
+              }
+            },
+            "avg_present_interval_ms": {
+              "label": {
+                "zh-CN": "平均呈现间隔(ms)",
+                "en": "Avg Present Interval ms"
+              }
+            },
+            "min_late_vsyncs": {
+              "label": {
+                "zh-CN": "正向晚拍最小 VSync",
+                "en": "Min Late Vsyncs"
+              }
+            },
+            "max_late_vsyncs": {
+              "label": {
+                "zh-CN": "正向晚拍最大 VSync",
+                "en": "Max Late Vsyncs"
+              }
+            },
+            "manual_review_required": {
+              "label": {
+                "zh-CN": "需要机制复核",
+                "en": "Manual Review Required"
+              }
+            },
+            "claim_boundary": {
+              "label": {
+                "zh-CN": "结论边界",
+                "en": "Claim Boundary"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
         "root": {
           "title": {
             "zh-CN": "Consumer Jank 检测",
             "en": "Consumer Jank Detection"
           },
           "columns": {
+            "presentation_cadence_audit": {
+              "label": {
+                "zh-CN": "PresentationCadenceAudit",
+                "en": "Presentation Cadence Audit"
+              }
+            },
             "consumer_jank_frames": {
               "label": {
                 "zh-CN": "ConsumerJank帧",
@@ -11471,7 +11618,7 @@
         "en": "CPU Throttling In Range"
       },
       "description": {
-        "zh-CN": "检测 CPU 热控限频情况（动态拓扑检测）",
+        "zh-CN": "观测 CPU 频率变化；频率跨度不能独立证明热控限频",
         "en": "Analyzes CPU Throttling In Range using trace metrics and supporting evidence."
       },
       "type": "composite",
@@ -11542,9 +11689,27 @@
                 "en": "Freq Drop Pct"
               }
             },
+            "frequency_variation_detected": {
+              "label": {
+                "zh-CN": "观测到频率变化",
+                "en": "Frequency Variation Detected"
+              }
+            },
+            "evidence_status": {
+              "label": {
+                "zh-CN": "热原因证据",
+                "en": "Evidence Status"
+              }
+            },
+            "interpretation": {
+              "label": {
+                "zh-CN": "解释",
+                "en": "Interpretation"
+              }
+            },
             "throttle_detected": {
               "label": {
-                "zh-CN": "检测到限频",
+                "zh-CN": "已核验热控限频",
                 "en": "Throttle Detected"
               }
             }
@@ -38582,7 +38747,7 @@
         "en": "Thermal Predictor"
       },
       "description": {
-        "zh-CN": "基于 CPU 频率趋势预测热限频风险",
+        "zh-CN": "CPU 频率趋势观察；未提供温度或限频证据时不预测热机制",
         "en": "Analyzes Thermal Predictor using trace metrics and supporting evidence."
       },
       "type": "atomic",
@@ -38621,13 +38786,19 @@
             },
             "throttled_core_ratio_pct": {
               "label": {
-                "zh-CN": "疑似限频核心占比",
+                "zh-CN": "频率变化核心占比",
                 "en": "Throttled Core Ratio Pct"
+              }
+            },
+            "frequency_trend_risk": {
+              "label": {
+                "zh-CN": "频率变化信号",
+                "en": "Frequency Trend Risk"
               }
             },
             "thermal_risk": {
               "label": {
-                "zh-CN": "热控风险",
+                "zh-CN": "热原因证据",
                 "en": "Thermal Risk"
               }
             },
@@ -38699,7 +38870,7 @@
             },
             "throttle_ratio": {
               "label": {
-                "zh-CN": "节流比例(%)",
+                "zh-CN": "观测频率跨度(%)",
                 "en": "Throttle Ratio"
               }
             },
@@ -38724,7 +38895,7 @@
               "en": "Max Freq MHz"
             },
             "field:throttle_ratio": {
-              "zh-CN": "节流比例",
+              "zh-CN": "观测频率跨度",
               "en": "Throttle Ratio"
             }
           }
@@ -38747,7 +38918,7 @@
         },
         "frequency_drop_events": {
           "title": {
-            "zh-CN": "CPU 频率骤降事件（可能因热节流）",
+            "zh-CN": "CPU 频率骤降事件（需核对负载）",
             "en": "Frequency Drop Events"
           },
           "columns": {
@@ -38946,7 +39117,7 @@
             },
             "throttled_cpu_count": {
               "label": {
-                "zh-CN": "受影响CPU数",
+                "zh-CN": "已核验热限频CPU数",
                 "en": "Throttled CPU Count"
               }
             },
@@ -38973,7 +39144,7 @@
               "en": "Peak Temp C"
             },
             "field:throttled_cpu_count": {
-              "zh-CN": "受影响CPU数",
+              "zh-CN": "已核验热限频CPU数",
               "en": "Throttled CPU Count"
             }
           }
@@ -39067,6 +39238,18 @@
                 "en": "Sensor Name"
               }
             },
+            "sample_quality": {
+              "label": {
+                "zh-CN": "样本质量",
+                "en": "Sample Quality"
+              }
+            },
+            "unit_basis": {
+              "label": {
+                "zh-CN": "单位依据",
+                "en": "Unit Basis"
+              }
+            },
             "sample_count": {
               "label": {
                 "zh-CN": "采样数",
@@ -39149,13 +39332,19 @@
             },
             "throttled_core_ratio_pct": {
               "label": {
-                "zh-CN": "疑似限频核心占比",
+                "zh-CN": "频率变化核心占比",
                 "en": "Throttled Core Ratio Pct"
+              }
+            },
+            "frequency_trend_risk": {
+              "label": {
+                "zh-CN": "频率变化信号",
+                "en": "Frequency Trend Risk"
               }
             },
             "thermal_risk": {
               "label": {
-                "zh-CN": "热风险",
+                "zh-CN": "热原因证据",
                 "en": "Thermal Risk"
               }
             },

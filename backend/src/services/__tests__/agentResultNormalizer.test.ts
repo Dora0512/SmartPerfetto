@@ -156,7 +156,7 @@ describe('deriveEvidenceBackedConclusionContractForNarrative', () => {
       expect(verified.claimVerificationResult.claimResults[0].claimId).toBe('wrong-ttid');
       expect(verified.claimVerificationResult.claimResults[0]).toMatchObject({status: 'unsupported',
         referenceCells: [{status: 'value_mismatch'}],
-        deterministicProof: {status: 'candidate', reason: 'reference_cells_unresolved'}});
+        deterministicProof: {status: 'rejected', reason: 'numeric_operator_rejected'}});
     });
 
     test('preserves mixed supported, contradicted and unreferenced claims through repeated normalization', async () => {

@@ -1312,6 +1312,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       expect(context!.runId).toBe('actual-run');
       expect(context!.traceIdentity).toEqual({currentTraceId: 'current-trace', referenceTraceId: 'reference-trace'});
       expect(readView).toHaveBeenCalledTimes(1);
+      expect(readView.mock.calls[0][0].currentRunId).toBe(context!.runId);
       expect(readView.mock.contexts[0]).toBe((runtime as any).artifactStores.get(sessionId));
       expect(readView.mock.calls[0][0]).toMatchObject({allowedTraces: [
         {traceId: 'current-trace', traceSide: 'current'}, {traceId: 'reference-trace', traceSide: 'reference'},

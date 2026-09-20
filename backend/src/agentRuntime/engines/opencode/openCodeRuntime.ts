@@ -3137,6 +3137,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       sourceUse: prep.sourceUse?.getSourceUseDecision(),
       sourceScope: prep.sourceUse?.getSourceExecutionScope?.(),
       ...(artifactStore ? {evidenceReadView: artifactStore.createEvidenceReadView({
+        currentRunId: runId,
         allowedTraces: [
           {traceId, traceSide: 'current'},
           ...(options.referenceTraceId ? [{traceId: options.referenceTraceId, traceSide: 'reference' as const}] : []),

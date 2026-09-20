@@ -815,7 +815,8 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         ...finalizationSetup.input, deliveryContext, protocolProjection,
         sourceUse: sourceUse?.getSourceUseDecision(),
         sourceScope: sourceUse?.getSourceExecutionScope?.(),
-        evidenceReadView: store?.createEvidenceReadView({allowedTraces, ownerKey: finalizationSetup.ownerKey}),
+        evidenceReadView: store?.createEvidenceReadView({allowedTraces, ownerKey: finalizationSetup.ownerKey,
+          currentRunId: finalizationSetup.input.runId}),
         dispatchText: allowSemantic && result.completion?.status === 'completed' &&
           result.outputOrigin === 'sdk_final' && result.conclusion.trim().length > 0
           ? finalizationSetup.input.dispatchText : undefined,

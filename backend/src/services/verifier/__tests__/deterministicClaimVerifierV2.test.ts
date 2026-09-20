@@ -623,19 +623,24 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     denied?: boolean;
     invalidScope?: boolean;
     ineligible?: boolean;
+    currentRunId?: string;
+    extraReferences?: ConclusionContractClaimReference[];
+    copiedReads?: boolean;
+    unknownUnit?: boolean;
+    categorical?: boolean;
     /** Register a capture whose table the product could not map, with this reason. */
     unavailableTable?: string;
   } = {}) {
     const ref = options.reference ?? {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: '54'};
     const raw: ConclusionContract = {
       schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [],
-      evidenceChain: [], uncertainties: [], nextSteps: [], claims: [{id: 'count', kind: 'numeric',
-        text: `The observed value is ${options.declaredNumber ?? 54}.`, references: [ref],
-        ...(options.declaredNumber === undefined ? {} : {semantics: {
-          schemaVersion: 'claim_semantics@1' as const, predicate: 'numeric.cell', polarity: 'affirmed' as const,
+      evidenceChain: [], uncertainties: [], nextSteps: [], claims: [{id: 'count', kind: options.categorical ? 'categorical' : 'numeric',
+        text: `The observed value is ${options.declaredNumber ?? 54}.`, references: [ref, ...(options.extraReferences ?? [])],
+        ...(options.declaredNumber === undefined && !options.categorical ? {} : {semantics: {
+          schemaVersion: 'claim_semantics@1' as const, predicate: options.categorical ? 'captured.cell' : 'numeric.cell', polarity: 'affirmed' as const,
           discourse: 'asserted' as const, quantifier: 'one' as const, modality: 'certain' as const,
           scope: {population: 'cited_rows' as const, subjectRefs: [ref]},
-          numeric: {operator: 'eq' as const, value: options.declaredNumber, unit: 'count'},
+          ...(options.categorical ? {} : {numeric: {operator: 'eq' as const, value: options.declaredNumber!, unit: 'count'}}),
         }}),
       }],
     };
@@ -653,13 +658,14 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     expect(store.registerStandaloneEvidenceCapture(options.unavailableTable
       ? captureEvidenceTable(undefined, {}, options.unavailableTable)
       : captureEvidenceTable(envelope.data, {
-        value: {unit: 'count', origin: {kind: 'native_producer', definitionFingerprint: 'count-v1'}},
+        value: {...(options.unknownUnit ? {} : {unit: 'count'}), origin: {kind: 'native_producer', definitionFingerprint: 'count-v1'}},
       }), {meta: envelope.meta, display: envelope.display})).toBe(true);
+    const view = store.createEvidenceReadView({ownerKey: 'prepared-test', currentRunId: options.currentRunId,
+      allowedTraces: [{traceId: options.denied ? 'another-trace' : 'trace-current', traceSide: 'current'}],
+      ...(options.readBudget === undefined ? {} : {budget: {maxReferences: options.readBudget}}),
+    });
     const prepared = await prepareClaimEvidence({conclusionContract: parsed.contract, bindingEligibility: 'eligible',
-      evidenceReadView: store.createEvidenceReadView({ownerKey: 'prepared-test',
-        allowedTraces: [{traceId: options.denied ? 'another-trace' : 'trace-current', traceSide: 'current'}],
-        ...(options.readBudget === undefined ? {} : {budget: {maxReferences: options.readBudget}}),
-      })});
+      evidenceReadView: options.copiedReads ? {resolveReferences: async requests => structuredClone(await view.resolveReferences(requests))} : view});
     const built = buildEvidenceContract({conclusionContract: parsed.contract, preparedEvidence: prepared,
       bindingEligibility: options.ineligible ? 'ineligible' : 'eligible', dataEnvelopes: [envelope]});
     const output = runDeterministicClaimVerifier({claimSupport: built.claimSupport});
@@ -678,6 +684,70 @@ describe('prepared reference outcomes across capture, builder and verifier', () 
     expect(output.passed).toBe(false);
     expect(built.anchors[0].cells![0].value).toBe('54');
     expect(getCapturedAnchorFacts(built.anchors[0])?.row.value).toBe(54);
+  });
+
+  it.each([
+    {evidenceRefId: 'data:invented', rowIndex: 0, column: 'value', value: 54},
+    {evidenceRefId: 'data:prepared', rowIndex: 9, column: 'value', value: 54},
+    {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'absent', value: 54},
+  ])('watermarks a live lookup binding failure without changing the failed reference: %j', async reference => {
+    const {output, built} = await preparedFixture({reference, currentRunId: 'run-current', declaredNumber: 54});
+    expect(output.status).not.toBe('failed');
+    expect(output.claimResults[0].referenceCells[0].status).toBe('missing');
+    expect(output.claimResults[0].deterministicProof.status).not.toBe('proved');
+    expect(output.issues.every(issue => issue.severity === 'warning')).toBe(true);
+    expect(runDeterministicClaimVerifier({claimSupport: structuredClone(built.claimSupport)}).status).toBe('failed');
+  });
+
+  it('does not grant advisory authority to copied read receipts or readers without a run', async () => {
+    const reference = {evidenceRefId: 'data:invented', rowIndex: 0, column: 'value', value: 54};
+    for (const options of [{copiedReads: true, currentRunId: 'run-current'}, {}]) {
+      expect((await preparedFixture({...options, reference})).output.status).toBe('failed');
+    }
+  });
+
+  it('reports an empty-table row locator as unverified instead of a proved zero', async () => {
+    const {output} = await preparedFixture({currentRunId: 'run-current', rows: [], declaredNumber: 0,
+      reference: {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: 0}});
+    expect(output.status).not.toBe('failed');
+    expect(output.claimResults[0]).toMatchObject({referenceCells: [{status: 'missing', message: 'row_index_out_of_range'}]});
+    expect(output.claimResults[0].deterministicProof.status).not.toBe('proved');
+  });
+
+  it.each([54, 55])('evaluates proposition %s independently but never proves a mismatched reference', async declaredNumber => {
+    const {output} = await preparedFixture({currentRunId: 'run-current', declaredNumber,
+      reference: {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: 99}});
+    expect(output.claimResults[0].referenceCells[0].status).toBe('value_mismatch');
+    expect(output.claimResults[0].deterministicProof.status).toBe(declaredNumber === 54 ? 'candidate' : 'rejected');
+    expect(output.status).toBe(declaredNumber === 54 ? 'partial' : 'failed');
+  });
+
+  it.each([54, 55])('an extra absent citation cannot prove or hide proposition %s', async declaredNumber => {
+    const {output} = await preparedFixture({currentRunId: 'run-current', declaredNumber,
+      reference: {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: 54},
+      extraReferences: [{evidenceRefId: 'data:invented'}]});
+    expect(output.claimResults[0].referenceCells.map(cell => cell.status)).toEqual(['matched', 'missing']);
+    expect(output.claimResults[0].deterministicProof.status).toBe(declaredNumber === 54 ? 'candidate' : 'rejected');
+    expect(output.status).toBe(declaredNumber === 54 ? 'partial' : 'failed');
+  });
+
+  it('retains categorical rejection and leaves unknown-unit numeric propositions unverified', async () => {
+    const categorical = await preparedFixture({currentRunId: 'run-current', categorical: true, rows: [['actual']],
+      reference: {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: 'different'}});
+    expect(categorical.output.status).toBe('failed');
+    expect(categorical.output.claimResults[0].deterministicProof).toMatchObject({status: 'rejected', reason: 'captured_cell_value_rejected'});
+    const unknown = await preparedFixture({currentRunId: 'run-current', unknownUnit: true, declaredNumber: 55,
+      reference: {evidenceRefId: 'data:prepared', rowIndex: 0, column: 'value', value: 55}});
+    expect(unknown.output.status).toBe('partial');
+    expect(unknown.output.claimResults[0].deterministicProof.status).toBe('candidate');
+  });
+
+  it.each([
+    {denied: true}, {invalidScope: true},
+    {reference: {evidenceRefId: 'data:prepared', sourceToolCallId: 'wrong-source', rowIndex: 0, column: 'value', value: 54}},
+    {unavailableTable: 'execution_witness_mismatch'},
+  ])('keeps scope, identity-source and integrity failures hard in a current reader: %j', async options => {
+    expect((await preparedFixture({...options, currentRunId: 'run-current'})).output.status).toBe('failed');
   });
 
   it('preserves explicit null from declaration through prepared capture and builder without proving a number or cause', async () => {

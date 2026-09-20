@@ -668,6 +668,9 @@
           "min_freq_mhz",
           "max_freq_mhz",
           "freq_drop_pct",
+          "frequency_variation_detected",
+          "evidence_status",
+          "interpretation",
           "throttle_detected"
         ],
         "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"

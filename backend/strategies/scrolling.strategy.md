@@ -15,18 +15,15 @@ investigation_contract:
     - id: scrolling_dependencies
       domain: dependency_chain
       description: "Connect Main/Render/raster/GPU/SF/present only with matching identities and timing. Explain separate app, system and pipeline evidence; a long frame or sleeping main thread is not itself the cause."
-    # When most frames are presented late because the queue holds them, the
-    # producer/consumer boundary is the question, and a frame-pacing answer that
-    # never measured buffer return has ruled out nothing. The condition is
-    # resolved from the ledger, so this obligation still applies when the final
-    # semantic review is unavailable. Threshold is a percentage, matching
-    # `render.frame.buffer_stuffing.rate`.
+    # A majority of raw Stuffing tags triggers cadence and mechanism review;
+    # it does not establish queue delay. The ledger-backed condition remains
+    # active when semantic review is unavailable. The threshold is a percentage.
     - id: scrolling_buffer_backpressure
       domain: dependency_chain
-      description: "Buffer Stuffing dominates the analysed frames. Decompose the producer/consumer boundary before attributing or excluding a side: measure dequeueBuffer waits and release-fence return, and say which side the evidence supports. A stuffing rate alone is the symptom, not the mechanism."
+      description: "Raw Buffer Stuffing tags exceed half of analysed frames. Read consumer_jank_detection presentation_cadence_audit to distinguish steady_late from cadence excursions, retaining mixed missed/drop signals. Before attributing or excluding producer/consumer backpressure, measure dequeueBuffer waits and release-fence return; raw tag share alone proves neither queue delay nor mechanism."
       condition:
         kind: evidence
-        description: "Buffer Stuffing accounts for more than half of the analysed frames."
+        description: "Raw Buffer Stuffing tags account for more than half of the analysed frames."
         metric_id: render.frame.buffer_stuffing.rate
         operator: gt
         value: 50
@@ -270,6 +267,9 @@ plan_template:
 3. Root-cause drill: 同时解释长 doFrame 和帧外主线程任务，按任务来源、exclusive 热点、Running/Runnable/等待选择深钻；任务的时长和出现时机不能被 reason_code 占比阈值排除。复用 batch 帧证据，只有相应缺口才用 `jank_frame_detail` / `frame_blocking_calls` / `blocking_chain_analysis`。workload_heavy 最后兜底，不能替代任务名称及追查方向。
 4. Conditional branches: TextureView/WebView/RN/GL/Compose/Flutter/mixed 命中时，`submit_plan` 必须在 `expectedCalls` 写入对应 producer/embedded/SF skill（Flutter 用 `invoke_skill(flutter_scrolling_analysis)`）；缺信号时执行阶段再 `skipped + reason`，不能在 plan 阶段 waiver 掉。
 5. Display boundary: BufferQueue/Fence/SF/HWC/刷新率/resync 相关时拆 App/RT、queue/dequeue/latch、SF commit/composite/present、fence；不要默认 16.6ms。
+   - 原始 Buffer Stuffing 标签占比 >50% 时，调用 `consumer_jank_detection` 并读 `presentation_cadence_audit`（已有同区间证据则复用）。此 Skill 使用 `package` 或 `layer_name` 定位目标，不接受 `process_name`；参数失败后不能删除目标过滤再把全局结果归给应用。
+   - 分开报告实际呈现间隔/丢弃帧与管线 Deadline/晚拍：`steady_late` 是信息性晚拍；含 Stuffing 的混合 Deadline 标签也不能直接证明画面停顿。先用 audit 的实测 VSync、`cadence_gap_frames`、`dropped_frames` 和晚拍偏移回答流畅度，再报告原始标签和管线等待。不能用 frame dur、expected frame dur 或混合口径 consumer_jank_rate 直接声称“严重卡顿”；均匀呈现仍可能整体晚若干 VSync，应报告实测偏移及所有间隔跳变。缺间隔/实测 VSync 的帧保留未判定，不计为流畅或误报。
+   - 晚拍量须有唯一 expected 匹配，缺失则未知。均匀节拍不证明管线健康；归因或排除反压仍需 dequeue/release-fence 证据。
    - 已有 `scrolling_analysis:vsync_config` artifact 时直接复用；只有 overview 缺少 VSync 证据时才调用 standalone `vsync_config`。不要在 `expectedCalls` 中无条件预占 standalone `vsync_config` 或其他仅用于补缺的工具。
 
 **Final report must include**
@@ -301,7 +301,7 @@ plan_template:
 
 **⚠️ 核心原则：**
 1. **逐帧根因诊断是最重要的**。概览统计（帧率、卡顿率）只是入口，真正有价值的是每一个掉帧帧的根因分析。
-2. **掉帧检测使用混合证据口径**：非 Buffer Stuffing 帧以 `present_type in (Late Present, Dropped Frame)` 为权威消费状态；Buffer Stuffing 才用同 layer `present_ts` 间隔 `>1.5x && <=6x VSync` 二次验证。`On-time Present` 仅有长间隔时只能记为 cadence candidate，不能升级为 hidden jank。
+2. **帧状态与画面节奏分开**：Dropped Frame 保留为丢弃；非 Stuffing 的 Late Present 保留为呈现状态异常。任何含 Buffer Stuffing 的标签（包括混合 App Deadline Missed）都要用同进程同 layer 的实际呈现间隔核验，不以责任类别绕过此规则。缺间隔或过长间隔保留未判定/复核，不能计为流畅或误报。混合口径统计不是用户可感知停顿率；`On-time Present` 的长间隔也只记 cadence candidate，不能直接升级为 hidden jank。
    - **Per-Layer Buffer 枯竭检测（token-gap 辅助模型）**：当 App Layer 在连续 SF DisplayFrame 中出现 token 跳跃（gap > 1），说明 SF 在中间帧合成时该 Layer 没有新 Buffer = 缓冲区枯竭
    - `token_gap = 1` → 正常（每帧都有新 buffer），`token_gap = N` → 跳过 N-1 个 DisplayFrame
    - 这是 per-layer 检测，不受 SF 全局合成状态影响（SF 可能在消费其他 Layer 的 buffer）

@@ -23,6 +23,7 @@ import {clearAllCodeAwareOutputGuards, registerCodeAwareCanary,
 import {sanitizeSourceReference, type SourceUseDecisionV1} from '../codebase/sourceUseDecision';
 import {finalizeOwnerSourceAwareAnalysisResultWithProjection} from '../codebase/sourceClaimVerifier';
 import {canonicalizeAnalysisResult} from '../canonicalAnalysisResult';
+import {claimVerificationStatusLine, summarizeClaimVerification} from '../analysisInvestigationPresentation';
 import type {AnalysisRunSelection} from '../../agentRuntime/analysisRunSpec';
 import {projectOwnerAnalysisResult, projectPrivateAnalysisResult} from '../security/privateAnalysisProjection';
 
@@ -37,10 +38,14 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
   selection?: AnalysisRunSelection;
   /** Emit the declaration as an invalid sidecar that still carries its claims. */
   invalidDeclaration?: boolean;
+  currentRead?: boolean;
+  runId?: string;
+  wrongReferenceValue?: number;
   dispatch?: (input: IntentTransportInput) => Promise<IntentTransportResult>} = {}) {
+  const runId = options.runId ?? 'run';
   const body = options.body ?? (options.source ? 'The captured name identifies the source marker.' : 'The captured value is 49.');
   const ref = {evidenceRefId: 'data:count', rowIndex: 0, column: options.source ? 'name' : 'count',
-    value: options.source ? options.source.declaredMarker ?? options.source.marker : 49};
+    value: options.source ? options.source.declaredMarker ?? options.source.marker : options.wrongReferenceValue ?? 49};
   const declared: ConclusionContract = {schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
     conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
     claims: options.claim === false ? [] : [{id: 'count', kind: options.source?.hypothetical ? 'inference' : options.source ? 'identity' : 'numeric', text: body, references: [ref],
@@ -83,7 +88,7 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
       JSON.stringify({...declared, verified: true}) + '\n```\n-->';
     delete result.conclusionContract;
   }
-  const candidate = {runId: 'run', attemptId: 'attempt', candidateRef: 'candidate',
+  const candidate = {runId, attemptId: 'attempt', candidateRef: 'candidate',
     conclusionFingerprint: analysisDeliveryFingerprint(result.conclusion)};
   const nativeDelivery = {entry: 'runtime_draft' as const, acceptedCandidate: candidate, outputOrigin: 'sdk_final' as const,
     completion: {...candidate, schemaVersion: 1 as const, runtimeKind: 'openai-agents-sdk' as const, status: 'completed' as const}};
@@ -91,7 +96,7 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
     {getSourceUseDecision: () => sourceUse!}, {context: nativeDelivery}) : undefined;
   const semanticBody = canonicalizeAnalysisResult(result).result.conclusion;
   const controller = new AbortController();
-  const owner: AnalysisFinalizationOwner = {runId: 'run', signal: controller.signal,
+  const owner: AnalysisFinalizationOwner = {runId, signal: controller.signal,
     isCurrent: () => true, assertAuthorized: () => {}};
   const dispatch = jest.fn(options.dispatch ?? (async (): Promise<IntentTransportResult> => {
     const location = {start: semanticBody.indexOf(body), end: semanticBody.indexOf(body) + body.length, text: body};
@@ -112,7 +117,7 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
     }]}};
   const pinnedRegistry = options.report
     ? buildStrategyRegistrySnapshotFromDefinitions({definitions: [reportStrategy], overlayGeneration: 'report-test'}) : registry;
-  attachFinalizationContext(result, {runId: 'run', sessionId: result.sessionId, deadlineMs: options.deadlineMs ?? Date.now() + 10_000,
+  attachFinalizationContext(result, {runId, sessionId: result.sessionId, deadlineMs: options.deadlineMs ?? Date.now() + 10_000,
     strategyRegistry: pinnedRegistry, traceIdentity: {currentTraceId: 'trace'},
     selection: options.selection,
     providerQuery: options.providerQuery,
@@ -124,7 +129,8 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
       taskKind: 'fact', sceneId: 'general', scope: options.report ? 'scene_wide' : 'bounded_question', recommendedComplexity: 'quick',
       deliverable: options.report ? 'report' : 'answer', evidenceAccess: 'existing_only'},
     deliveryContext: projection?.deliveryContext ?? nativeDelivery,
-    evidenceReadView: store.createEvidenceReadView({allowedTraces: [{traceId: 'trace', traceSide: 'current'}], ownerKey: 'run'}),
+    evidenceReadView: store.createEvidenceReadView({allowedTraces: [{traceId: 'trace', traceSide: 'current'}], ownerKey: 'run',
+      ...(options.currentRead ? {currentRunId: runId} : {})}),
     dispatchText: dispatch});
   const context = takeFinalizationContext(result)!;
   return {result, context, controller, owner, dispatch, envelope,
@@ -132,6 +138,44 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
 }
 
 afterEach(() => {clearAllCodeAwareOutputGuards(); jest.useRealTimers();});
+
+describe('current-run reference delivery diagnostics', () => {
+  it.each([{capture: false}, {wrongReferenceValue: 99}])('delivers %j with an explicit unverified watermark', async options => {
+    const final = await fixture({...options, currentRead: true}).run();
+    expect(final.result.deliveryAssurance).toMatchObject({completion: 'passed', claims: 'coverage_incomplete'});
+    expect(final.result.claimVerificationResult?.status).toBe('partial');
+    expect(final.result.claimVerificationResult?.claimResults[0].status).not.toBe('verified');
+    expect(claimVerificationStatusLine(summarizeClaimVerification(final.result.claimVerificationResult), 'zh-CN'))
+      .toContain('未核验 0/1');
+    expect(final.result.terminationReason).not.toBe('quality_gate_failed');
+  });
+
+  it('does not let an advisory reference hide a canonical semantic rejection', async () => {
+    const final = await fixture({currentRead: true, wrongReferenceValue: 99, inconsistent: true}).run();
+    expect(final.result.deliveryAssurance?.claims).toBe('failed');
+    expect(final.result.claimVerificationResult?.claimResults[0].status).toBe('unsupported');
+  });
+
+  it('preserves correct verification and strict source identity failures', async () => {
+    expect((await fixture({currentRead: true}).run()).result.deliveryAssurance?.claims).toBe('passed');
+    const invalid = await fixture({currentRead: true,
+      source: {marker: 'original_marker', declaredMarker: 'different_marker'}}).run();
+    expect(invalid.result.claimVerificationResult?.status).toBe('failed');
+  });
+
+  it.each([false, true])('does not reuse previous-run proof when restored=%s', async restored => {
+    const previous = (await fixture({currentRead: true, runId: 'previous-run'}).run()).result;
+    expect(previous.deliveryAssurance?.claims).toBe('passed');
+    const next = fixture({currentRead: true, runId: 'next-run', capture: false});
+    const old = restored ? JSON.parse(JSON.stringify(previous)) as AnalysisResult : previous;
+    next.result.claimSupport = old.claimSupport;
+    next.result.claimVerificationResult = old.claimVerificationResult;
+    const final = await next.run();
+    expect(final.result.claimVerificationResult?.claimResults[0]).toMatchObject({status: 'partial',
+      referenceResults: [{status: 'missing', message: 'evidence_not_retained'}]});
+    expect(final.result.deliveryAssurance?.claims).toBe('coverage_incomplete');
+  });
+});
 
 describe('issued investigation ledger through finalization', () => {
   function investigationRun(settings: {rows?: number; originRunId?: string; partialSibling?: boolean;

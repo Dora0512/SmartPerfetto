@@ -6083,6 +6083,7 @@
               "avg_end_freq_mhz",
               "avg_drop_pct",
               "throttled_core_ratio_pct",
+              "frequency_trend_risk",
               "thermal_risk",
               "prediction"
             ],
@@ -6147,6 +6148,8 @@
             "semantic_step": "thermal_overview",
             "required_columns": [
               "sensor_name",
+              "sample_quality",
+              "unit_basis",
               "sample_count",
               "min_temp_c",
               "max_temp_c",
@@ -6553,12 +6556,14 @@
             "parameters": {},
             "required_steps": [
               "vsync_config",
+              "presentation_cadence_audit",
               "consumer_jank_frames",
               "consumer_jank_summary",
               "jank_severity_distribution"
             ],
             "required_sql_steps": [
               "vsync_config",
+              "presentation_cadence_audit",
               "consumer_jank_frames",
               "consumer_jank_summary",
               "jank_severity_distribution"
@@ -8635,6 +8640,9 @@
               "min_freq_mhz",
               "max_freq_mhz",
               "freq_drop_pct",
+              "frequency_variation_detected",
+              "evidence_status",
+              "interpretation",
               "throttle_detected"
             ],
             "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"

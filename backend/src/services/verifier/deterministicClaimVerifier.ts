@@ -21,6 +21,7 @@ import {
   type EvidenceScalar,
 } from '../evidence/evidenceCapture';
 import {evidenceReferenceKey} from '../evidence/claimEvidencePreparation';
+import {referenceBindingFailureIsAdvisory} from '../evidence/evidenceReadView';
 
 export interface DeterministicClaimVerifierInput {
   claimSupport?: ClaimSupportV1[];
@@ -430,10 +431,16 @@ function deterministicProof(claim: ClaimSupportV1, references: ClaimReferenceVer
   // by the shared finalizer, never against Trace anchors or model metadata here.
   if (kind === 'source_location') return proof(kind, 'not_checked', 'source_evidence_required');
   if (semantics.source) return proof(kind, 'candidate', 'source_declaration_not_supported');
-  if (references.some(reference => reference.status === 'missing' || reference.status === 'ambiguous' || reference.status === 'value_mismatch')) {
-    return proof(kind, 'candidate', 'reference_cells_unresolved');
-  }
-  if (claim.anchors.some(anchor => !getCapturedAnchorFacts(anchor))) return proof(kind, 'candidate', 'execution_capture_missing');
+  const unresolved = references.some(reference => reference.status === 'missing' || reference.status === 'ambiguous' || reference.status === 'value_mismatch');
+  // An extra broken citation must not hide a contradiction in the predicate's
+  // own captured inputs. Evaluate those inputs, but never prove from bad refs.
+  const evaluated = evaluateTypedProposition(claim, semantics, kind, unresolved);
+  return unresolved && evaluated.status !== 'rejected' ? proof(kind, 'candidate', 'reference_cells_unresolved') : evaluated;
+}
+
+function evaluateTypedProposition(claim: ClaimSupportV1, semantics: ClaimSemanticsV1,
+  kind: Exclude<DeterministicClaimProofKind, 'none' | 'source_location'>, rejectOnly: boolean): DeterministicClaimProof {
+  if (!rejectOnly && claim.anchors.some(anchor => !getCapturedAnchorFacts(anchor))) return proof(kind, 'candidate', 'execution_capture_missing');
   if (semantics.discourse !== 'asserted' || semantics.polarity !== 'affirmed' || semantics.modality !== 'certain') {
     return proof(kind, 'candidate', 'proposition_assertion_not_supported');
   }
@@ -469,12 +476,15 @@ function coverageFor(proved: DeterministicClaimProof, references: ClaimReference
   };
 }
 
-function issueForReference(claimId: string, reference: ClaimReferenceVerificationResult): ClaimVerificationIssue | undefined {
+function issueForReference(claim: ClaimSupportV1, reference: ClaimReferenceVerificationResult): ClaimVerificationIssue | undefined {
   // Unverified references are reported once per claim and reason by verifyClaim.
   if (reference.status === 'matched' || reference.status === 'not_checked' || reference.status === 'ineligible') return undefined;
+  const anchors = claim.anchors.filter(anchor => anchor.anchorId === reference.anchorId);
+  const advisory = claim.kind !== 'identity' && !claim.semantics?.source &&
+    anchors.length === 1 && referenceBindingFailureIsAdvisory(anchors[0], reference.status);
   return {
-    claimId,
-    severity: 'error',
+    claimId: claim.claimId,
+    severity: advisory ? 'warning' : 'error',
     code: `claim_reference_${reference.status}`,
     message: reference.message || `claim reference ${reference.status}`,
     evidenceRefId: reference.evidenceRefId,
@@ -485,7 +495,7 @@ function verifyClaim(claim: ClaimSupportV1): {result: ClaimVerificationClaimResu
   const referenceCells = claim.anchors.flatMap(anchor => verifyAnchor(anchor, claim.bindingEligibility === 'ineligible'));
   const evaluated = deterministicProof(claim, referenceCells);
   const propositionCoverage = coverageFor(evaluated, referenceCells);
-  const issues = referenceCells.map(reference => issueForReference(claim.claimId, reference))
+  const issues = referenceCells.map(reference => issueForReference(claim, reference))
     .filter((issue): issue is ClaimVerificationIssue => Boolean(issue));
   const ineligible = claim.bindingEligibility === 'ineligible';
   if (ineligible) issues.push({claimId: claim.claimId, severity: 'warning', code: 'binding_ineligible',

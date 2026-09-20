@@ -574,7 +574,7 @@ steps:
   # 核心原理：
   # - 非 BS 帧：present_type IN ('Late Present', 'Dropped Frame') 为权威信号
   # - BS 帧：present_type 始终为 Late Present，需用 present_ts 间隔二次验证
-  #   间隔 > 1.5x vsync = 真实掉帧；否则 = 管线背压（非感知掉帧）
+  #   间隔 > 1.5x vsync 为掉帧候选；均匀间隔不直接证明管线背压
   # - vsync_missed 用 present_ts 间隔估算严重度（辅助信号）
   # - jank_type 用于判断责任归属（App vs SF）
   - id: performance_summary
@@ -600,11 +600,10 @@ steps:
       insights:
         - condition: "jank_rate > 10"
           template: "感知掉帧率 {{jank_rate}}% 较高，需要优化"
-        # A stuffing share does not by itself say which side produced it: a slow
-        # consumer and an app that submits ahead of the queue look the same here.
-        # State the observation and the fork, and name the skill that separates them.
+        # Raw stuffing tags require presentation-cadence and expected-offset
+        # evidence before any queue-delay or producer/consumer diagnosis.
         - condition: "buffer_stuffing_rate > 50"
-          template: "Buffer Stuffing 占比 {{buffer_stuffing_rate}}%，帧呈现被队列推迟为主；需区分消费端回收慢与生产端提交节奏，用 consumer_jank_detection / fence_wait_decomposition 定位，勿直接归因任一侧"
+          template: "原始 Buffer Stuffing 标签占比 {{buffer_stuffing_rate}}%，需要复核；用 consumer_jank_detection 的 presentation_cadence_audit 区分匀速晚拍与呈现间隔跳变，保留混合 Missed/Dropped 证据。标签占比不证明队列延迟；反压归因另需 dequeue/release-fence 证据"
         - condition: "app_jank > sf_jank"
           template: "App 侧掉帧 ({{app_jank}}) 多于 SF 侧 ({{sf_jank}})"
     display:
@@ -841,7 +840,7 @@ steps:
       ),
       -- Per-layer 帧序列：双信号混合检测基础数据
       -- present_type = SurfaceFlinger 的消费状态（非 BS 帧的权威信号）
-      -- present_ts interval = BS 帧的二次验证信号（区分真实掉帧 vs 管线背压）
+      -- present_ts interval = BS 标签帧的呈现节奏信号，不直接证明队列背压
       consumer_layer_frames AS (
         SELECT
           frame_key,
@@ -865,7 +864,7 @@ steps:
       -- 掉帧检测：双信号混合策略
       -- 非 BS 帧：present_type IN ('Late Present', 'Dropped Frame') 为权威信号
       -- BS 帧：present_type 始终为 Late Present，需用 present_ts 间隔作为二次验证
-      --        间隔 > 1.5x vsync = 真实掉帧（被 BS 掩盖）；否则 = 管线背压（非感知掉帧）
+      --        间隔 > 1.5x vsync 为掉帧候选；其他间隔仍需核验节奏与晚拍，不能直接归因背压
       consumer_frame_signals AS (
         SELECT
           frame_key,
@@ -938,7 +937,7 @@ steps:
           100.0 * (SELECT perceived_jank_frames FROM resolved_jank) / NULLIF((SELECT total FROM app_stats), 0),
           2
         ) as jank_rate,
-        -- Buffer Stuffing 帧数（管线背压，非 App 逻辑问题）
+        -- Buffer Stuffing 标签帧数；标签不证明管线背压，也不排除 App 侧原因
         (SELECT buffer_stuffing_frames FROM resolved_jank) as buffer_stuffing_frames,
         -- 总掉帧数（含 Buffer Stuffing，用于完整性展示）
         (SELECT janky_frames FROM resolved_jank) as janky_frames,
@@ -2287,7 +2286,7 @@ steps:
             ELSE 0 END) as consumer_jank_count,
           SUM(CASE WHEN sr.present_type IN ('Late Present', 'Dropped Frame')
             AND sr.jank_responsibility = 'APP' THEN 1 ELSE 0 END) as app_jank_count,
-          -- Buffer Stuffing 总帧数（管线背压，含正常 BS 和异常 BS）
+          -- Buffer Stuffing 标签总帧数，机制与呈现节奏需另行核验
           SUM(CASE WHEN sr.jank_responsibility = 'BUFFER_STUFFING' THEN 1 ELSE 0 END) as buffer_stuffing_count,
           MAX(CASE
             WHEN (
@@ -2722,7 +2721,7 @@ steps:
           WHEN jank_responsibility = 'APP' THEN
             'FrameTimeline 确认 App 侧帧时序异常（' || COALESCE(jank_type, '未知') || '），底层原因需结合直接证据判断'
           WHEN jank_responsibility = 'BUFFER_STUFFING' THEN
-            '帧耗时 ' || ROUND(actual_dur / 1e6, 2) || 'ms，BufferQueue 阻塞（Buffer Stuffing），延迟 ' || vsync_missed || ' 个 VSync'
+            '帧耗时 ' || ROUND(actual_dur / 1e6, 2) || 'ms，原始 Buffer Stuffing 标签；呈现间隔估算跳过 ' || vsync_missed || ' 个 VSync，需核验 cadence 与 dequeue/release-fence，标签不证明 BufferQueue 阻塞或排除 App 原因'
           WHEN jank_responsibility = 'SF' AND jank_type GLOB '*Prediction Error*' THEN
             'SurfaceFlinger 调度器预测时间漂移；应看聚合占比，孤立事件通常不代表用户可感知 App 卡顿'
           WHEN jank_responsibility = 'SF' AND jank_type GLOB '*Display HAL*' THEN
@@ -4133,9 +4132,8 @@ steps:
       classified AS (
         SELECT *,
           CASE
-            -- P0: Buffer Stuffing 管线背压 — 短路跳过线程分析
-            -- App 未错过 deadline，但 BufferQueue 积压导致 dequeueBuffer 背压
-            -- 主线程 S 状态来自 syncFrameState 等待，非锁/Binder 问题
+            -- P0: 保留 Buffer Stuffing 标签分类；此分支没有独立验证背压机制。
+            -- 不能凭标签排除 App、锁或 Binder；需核验呈现节奏与 dequeue/release-fence。
             WHEN jank_responsibility = 'BUFFER_STUFFING'
               THEN 'buffer_stuffing'
             -- P0.5: SF 责任按 Perfetto FrameTimeline 的直接类型细分。
@@ -4289,7 +4287,7 @@ steps:
         scope.root_cause_sample_limit_per_session,
         scope.root_cause_analysis_scope,
         CASE
-          WHEN reason_code = 'buffer_stuffing' THEN 'Buffer Stuffing: 管线背压，帧耗时 ' || dur_ms || 'ms，BufferQueue 积压导致跳帧（非 App 问题）'
+          WHEN reason_code = 'buffer_stuffing' THEN '原始 Buffer Stuffing 标签，帧耗时 ' || dur_ms || 'ms；呈现间隔异常候选，需用 presentation_cadence_audit 与 dequeue/release-fence 核验；尚未证明 BufferQueue 背压，也不能排除 App 原因'
           WHEN reason_code = 'sf_composition_slow' THEN 'SF合成超时: SurfaceFlinger 侧导致掉帧（非 App 问题），帧耗时 ' || dur_ms || 'ms'
           WHEN reason_code = 'display_hal' THEN 'Display HAL 延迟: SurfaceFlinger 已按时下发，但该帧未在目标 VSync 呈现（非 App 根因）'
           WHEN reason_code = 'prediction_error' THEN 'FrameTimeline 预测误差: SurfaceFlinger scheduler 的预测呈现时间发生漂移；孤立事件通常不代表用户可感知 App 卡顿'

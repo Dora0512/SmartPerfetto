@@ -1524,7 +1524,8 @@ describe('OpenAI finalization handoff', () => {
     options.analysisContextFingerprint = contextAuthorization.buildAnalysisContextAuthorizationFingerprint(options, resolveKnowledgeScope(options));
     const result = await runtime.analyze('query', 'finalization-read', 'trace', options);
     const context = takeContext(result);
-    expect(readView.mock.calls[0][0]).toMatchObject({allowedTraces: [{traceId: 'trace', traceSide: 'current'}], ownerKey: expect.any(String)});
+    expect(readView.mock.calls[0][0]).toMatchObject({allowedTraces: [{traceId: 'trace', traceSide: 'current'}], ownerKey: expect.any(String),
+      currentRunId: context.runId});
     expect(readView.mock.calls[0][0].ownerKey.length).toBeGreaterThan(0);
     const refs = await context.resolveReferences([
       {key: 'full-row', reference: {evidenceRefId: 'ev-native-captured', rowIndex: 600, column: 'value'}, requiredColumns: ['value']},
@@ -1532,13 +1533,49 @@ describe('OpenAI finalization handoff', () => {
     ], new AbortController().signal);
     expect(refs[0]).toMatchObject({status: 'resolved', originalRowIndex: 600, row: {value: 600}});
     expect(refs[1]).toMatchObject({status: 'denied'}); expect(query).not.toHaveBeenCalled();
+    const {prepareClaimEvidence} = await import('../../services/evidence/claimEvidencePreparation');
+    const {runClaimVerification} = await import('../../services/verifier/claimVerificationRunner');
+    const {parseConclusionContractDeclaration} = await import('../../agent/core/conclusionContract');
+    // This is the ordinary raw-store CLI path, with no Conversation facade to
+    // supply the run ID. The handed-off reader must retain diagnostic authority.
+    for (const reference of [
+      {evidenceRefId: 'ev-native-captured', rowIndex: 600, column: 'value', value: 999},
+      {evidenceRefId: 'ev-invented', rowIndex: 0, column: 'value', value: 999},
+    ]) {
+      const conclusionContract = parseConclusionContractDeclaration({schemaVersion: 'conclusion_contract_v1',
+        mode: 'focused_answer', conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
+        claims: [{id: 'value', kind: 'numeric', text: 'Value is 999.', references: [reference],
+          semantics: {schemaVersion: 'claim_semantics@1', predicate: 'numeric.cell', polarity: 'affirmed',
+            discourse: 'asserted', quantifier: 'one', modality: 'certain', scope: {population: 'cited_rows', subjectRefs: [reference]},
+            numeric: {operator: 'eq', value: 999, unit: 'count'}}}],
+      }).contract!;
+      const preparedEvidence = await prepareClaimEvidence({conclusionContract,
+        evidenceReadView: {resolveReferences: requests => context.resolveReferences(requests, new AbortController().signal)}});
+      const verification = runClaimVerification({conclusionContract, preparedEvidence}).claimVerificationResult;
+      expect(verification.status).toBe('partial');
+      expect(verification.claimResults[0].referenceResults?.[0].status)
+        .toBe(reference.evidenceRefId === 'ev-native-captured' ? 'value_mismatch' : 'missing');
+      expect(verification.claimResults[0].deterministicProof?.status).not.toBe('proved');
+    }
     const futureId = store.store({skillId: 'execute_sql', data: {columns: ['value'], rows: [[999]]},
       traceProvenance: buildTraceProcessorQueryProvenance({traceId: 'trace', traceSide: 'current'})});
     store.registerEvidenceCapture(futureId, captureEvidenceTable({columns: ['value'], rows: [[999]]}), {evidenceRefId: 'ev-next-run'});
     expect((await context.resolveReferences([{key: 'future', reference: {evidenceRefId: 'ev-next-run', rowIndex: 0}, requiredColumns: ['value']}], new AbortController().signal))[0])
       .toMatchObject({status: 'missing'});
+    const snapshot = store.serialize();
     store.clear();
     expect((await context.resolveReferences([{key: 'evicted', reference: {evidenceRefId: 'ev-native-captured', rowIndex: 600}, requiredColumns: ['value']}], new AbortController().signal))[0]).toMatchObject({status: 'missing'});
+    // Restored artifact metadata supplies neither a witness nor the previous
+    // run's authority. A subsequent finalization creates a freshly pinned read.
+    const restored = ArtifactStore.fromSnapshot(snapshot);
+    runtime.artifactStores.set('finalization-read', restored);
+    const restoredView = jest.spyOn(restored, 'createEvidenceReadView');
+    mockRun();
+    const next = takeContext(await runtime.analyze('next query', 'finalization-read', 'trace', {...options, runId: 'next-read-run'}));
+    expect(restoredView.mock.calls[0][0].currentRunId).toBe(next.runId);
+    expect(next.runId).not.toBe(context.runId);
+    expect((await next.resolveReferences([{key: 'old', reference: {evidenceRefId: 'ev-native-captured', rowIndex: 600}, requiredColumns: ['value']}], new AbortController().signal))[0])
+      .toMatchObject({status: 'missing'});
   });
   it('does not invent an evidence reader when the runtime has no artifact store', async () => {
     const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime); mockRun();

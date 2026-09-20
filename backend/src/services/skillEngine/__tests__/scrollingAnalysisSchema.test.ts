@@ -1581,12 +1581,31 @@ describe('scrolling_analysis skill schema', () => {
       `).all() as Array<{cause: string}>;
       expect(causes[0].cause).toContain('App');
       expect(causes[0].cause).not.toContain('预测时间漂移');
-      expect(causes[1].cause).toContain('BufferQueue');
+      expect(causes[1].cause).toContain('原始 Buffer Stuffing 标签');
+      expect(causes[1].cause).toContain('呈现间隔估算');
+      expect(causes[1].cause).toContain('dequeue/release-fence');
+      expect(causes[1].cause).toContain('标签不证明 BufferQueue 阻塞或排除 App 原因');
       expect(causes[1].cause).not.toContain('预测时间漂移');
       expect(causes[2].cause).toContain('SurfaceFlinger 调度器预测时间漂移');
     } finally {
       causeDb.close();
     }
+  });
+
+  it('keeps a stuffing batch diagnosis observational until backpressure is measured', () => {
+    const sql = String(getStep('batch_frame_root_cause').sql);
+    const branch = sql.match(/WHEN reason_code = 'buffer_stuffing' THEN ([^\n]+)/);
+    expect(branch).not.toBeNull();
+    const db = createScopedSqlFixture();
+    try {
+      const row = db.prepare(`WITH frame(dur_ms) AS (VALUES (19.67))
+        SELECT ${branch![1]} AS cause FROM frame`).get() as {cause: string};
+      expect(row.cause).toContain('原始 Buffer Stuffing 标签，帧耗时 19.67ms');
+      expect(row.cause).toContain('presentation_cadence_audit 与 dequeue/release-fence');
+      expect(row.cause).toContain('尚未证明 BufferQueue 背压，也不能排除 App 原因');
+      expect(row.cause).not.toContain('非 App 问题');
+      expect(row.cause).not.toContain('积压导致跳帧');
+    } finally { db.close(); }
   });
 
   it('keeps the documented SQL fallback on the same terminal-code and drill policy', () => {
@@ -1614,6 +1633,21 @@ describe('scrolling_analysis skill schema', () => {
     expect(strategy).not.toContain('不执行逐帧分析就直接出结论是不允许的');
   });
 
+  it('routes high raw stuffing tags to the cadence audit in the fast-visible core', () => {
+    const core = scrollingStrategy.split('#### Scrolling Core Strategy')[1].split('<!-- strategy-detail')[0];
+    expect(core).toContain('标签占比 >50%');
+    expect(core).toContain('`consumer_jank_detection`');
+    expect(core).toContain('`presentation_cadence_audit`');
+    expect(core).toContain('含 Stuffing 的混合 Deadline 标签也不能直接证明画面停顿');
+    expect(core).toContain('`package` 或 `layer_name`');
+    const insight = getStep('performance_summary').synthesize.insights.find(
+      (entry: any) => entry.condition === 'buffer_stuffing_rate > 50',
+    );
+    expect(insight.template).toContain('原始 Buffer Stuffing 标签占比');
+    expect(insight.template).toContain('presentation_cadence_audit');
+    expect(insight.template).not.toContain('帧呈现被队列推迟为主');
+  });
+
   it('uses Late/Dropped present as the non-Buffer-Stuffing consumer-jank authority', () => {
     expect(consumerJankSkill.prerequisites?.modules).toContain('android.frames.jank_type');
     expect(flutterSkill.prerequisites?.modules).toContain('android.frames.jank_type');
@@ -1630,9 +1664,15 @@ describe('scrolling_analysis skill schema', () => {
       String(getSkillStep(consumerJankSkill, 'jank_severity_distribution').sql),
       String(getSkillStep(flutterSkill, 'flutter_consumer_jank').sql),
     ]) {
-      expect(sql).toContain("present_type IN ('Late Present', 'Dropped Frame')");
-      expect(sql).toContain("jank_responsibility = 'BUFFER_STUFFING'");
-      expect(sql).toContain('android_is_missed_frame_type');
+      if (sql.includes('-- CONSUMER_JANK_')) {
+        expect(sql).toContain("present_type = 'Dropped Frame' THEN 1");
+        expect(sql).toContain("jank_type NOT GLOB '*Buffer Stuffing*'");
+        expect(sql).toContain('END as row_is_steady_stuffing');
+      } else {
+        expect(sql).toContain("present_type IN ('Late Present', 'Dropped Frame')");
+        expect(sql).toContain("jank_responsibility = 'BUFFER_STUFFING'");
+        expect(sql).toContain('android_is_missed_frame_type');
+      }
     }
   });
 
@@ -1686,9 +1726,12 @@ describe('scrolling_analysis skill schema', () => {
       `).get();
       expect(summary).toEqual({
         total_frames: 6,
+        raw_buffer_stuffing_frames: 2,
         consumer_jank_frames: 3,
+        unassessed_frames: 0,
+        smooth_frames: 3,
         app_reported_jank: 3,
-        false_positives: 1,
+        false_positives: 0,
         false_negatives: 1,
         max_vsync_missed: 1,
         avg_token_gap: 1.5,
@@ -1710,6 +1753,194 @@ describe('scrolling_analysis skill schema', () => {
     } finally {
       db.close();
     }
+  });
+
+  const runCadenceAudit = (db: Database.Database) => {
+    const sql = String(getSkillStep(consumerJankSkill, 'presentation_cadence_audit').sql);
+    const ctesAndSelect = sql.slice(sql.indexOf('-- PRESENTATION_CADENCE_CTES_BEGIN'))
+      .split('${package}').join('com.example.app')
+      .split('${layer_name}').join('')
+      .split('${start_ts}').join('NULL')
+      .split('${end_ts}').join('NULL');
+    return db.prepare(`WITH cadence_timing(vsync_period_ns) AS (VALUES (8333333)), ${ctesAndSelect}`).all() as any[];
+  };
+
+  const createSteadyLateFixture = () => {
+    const db = createConsumerJankFixture();
+    db.exec(`
+      DELETE FROM actual_frame_timeline_slice;
+      ALTER TABLE actual_frame_timeline_slice ADD COLUMN id INTEGER;
+      CREATE TABLE expected_frame_timeline_slice(
+        upid INTEGER, layer_name TEXT, surface_frame_token INTEGER, ts INTEGER, dur INTEGER
+      );
+    `);
+    const actual = db.prepare('INSERT INTO actual_frame_timeline_slice VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const expected = db.prepare('INSERT INTO expected_frame_timeline_slice VALUES (1, ?, ?, ?, ?)');
+    for (let i = 0; i < 10; i++) {
+      const layer = 'TX - com.example.app/Main#1';
+      actual.run(i + 1, i + 101, layer, i * 8333333, 24999999,
+        i === 4 ? 'App Deadline Missed, Buffer Stuffing' : 'Buffer Stuffing', 'Late Present', i + 1);
+      expected.run(layer, i + 101, i * 8333333, 8333333);
+    }
+    return db;
+  };
+
+  it('separates steady late presentation from raw mixed deadline tags', () => {
+    const db = createSteadyLateFixture();
+    try {
+      const [audit] = runCadenceAudit(db);
+      expect(audit).toMatchObject({
+        total_frames: 10, raw_buffer_stuffing_frames: 10, buffer_stuffing_label_pct: 100,
+        steady_late_frames: 8, cadence_status: 'steady_late', cadence_gap_frames: 0,
+        missed_frame_type_frames: 1, late_present_frames: 10, dropped_frames: 0, manual_review_required: 1,
+        matched_expected_frames: 10, min_late_vsyncs: 2, max_late_vsyncs: 2,
+      });
+      const frameCtes = renderAtomicConsumerCtes('consumer_jank_frames',
+        '-- CONSUMER_JANK_FRAME_CTES_BEGIN', '-- CONSUMER_JANK_FRAME_CTES_END');
+      const mixed = db.prepare(`WITH vsync_period(vsync_period_ns) AS (VALUES (8333333)),
+        ${frameCtes} SELECT is_consumer_jank, app_jank_type, jank_responsibility FROM frame_signals WHERE frame_id = 5`).get();
+      expect(mixed).toEqual({is_consumer_jank: 0, app_jank_type: 'App Deadline Missed, Buffer Stuffing', jank_responsibility: 'APP'});
+    } finally { db.close(); }
+  });
+
+  const consumerViews = (db: Database.Database, period: number | null = 8333333) => {
+    const query = (id: string, marker: string, select: string) => db.prepare(`
+      WITH vsync_period(vsync_period_ns) AS (VALUES (${period ?? 'NULL'})),
+      ${renderAtomicConsumerCtes(id, `-- CONSUMER_JANK_${marker}_CTES_BEGIN`, `-- CONSUMER_JANK_${marker}_CTES_END`)}
+      ${select}`).all() as any[];
+    return {
+      frames: query('consumer_jank_frames', 'FRAME', 'SELECT * FROM frame_signals ORDER BY frame_id'),
+      summary: query('consumer_jank_summary', 'SUMMARY', 'SELECT * FROM frame_stats')[0],
+      severity: query('jank_severity_distribution', 'SEVERITY', 'SELECT severity, COUNT(*) AS count FROM severity_analysis GROUP BY severity'),
+    };
+  };
+
+  it('keeps mixed-tag gaps and drops while all three views agree on unknown and steady frames', () => {
+    const db = createSteadyLateFixture();
+    try {
+      const steady = consumerViews(db);
+      expect(steady.summary).toMatchObject({consumer_jank_frames: 0, unassessed_frames: 1,
+        smooth_frames: 9, app_reported_jank: 10, false_positives: 8});
+      expect(steady.severity).toContainEqual({severity: 'UNASSESSED', count: 1});
+      db.exec(`UPDATE actual_frame_timeline_slice SET ts = ts + 8333333 WHERE id >= 5;
+        UPDATE actual_frame_timeline_slice SET present_type = 'Dropped Frame' WHERE id = 8;`);
+      const result = consumerViews(db);
+      expect(result.frames.find(row => row.frame_id === 5).is_consumer_jank).toBe(1);
+      expect(result.frames.find(row => row.frame_id === 8).is_consumer_jank).toBe(1);
+      expect(result.frames.find(row => row.frame_id === 9).is_consumer_jank).toBe(1);
+      expect(result.summary.consumer_jank_frames).toBe(3);
+      expect(result.frames.filter(row => row.is_consumer_jank === 1)).toHaveLength(3);
+      expect(result.severity).toContainEqual({severity: 'MINOR_JANK (missed=1)', count: 3});
+    } finally { db.close(); }
+  });
+
+  it('requires review for majority raw stuffing while retaining measured gaps and drops', () => {
+    const db = createSteadyLateFixture();
+    try {
+      db.exec(`UPDATE actual_frame_timeline_slice SET jank_type = 'None', present_type = 'On-time Present' WHERE id = 1;
+        UPDATE actual_frame_timeline_slice SET ts = ts + 8333333 WHERE id >= 5;
+        UPDATE actual_frame_timeline_slice SET present_type = 'Dropped Frame' WHERE id = 8;`);
+      const sql = String(getSkillStep(consumerJankSkill, 'consumer_jank_summary').sql);
+      const tail = sql.slice(sql.indexOf('-- CONSUMER_JANK_SUMMARY_CTES_BEGIN'))
+        .split('${package}').join('com.example.app').split('${layer_name}').join('')
+        .split('${start_ts}').join('').split('${end_ts}').join('');
+      const summary = db.prepare(`WITH vsync_period(vsync_period_ns) AS (VALUES (8333333)), ${tail}`).get();
+      expect(summary).toMatchObject({total_frames: 10, raw_buffer_stuffing_frames: 9,
+        consumer_jank_frames: 3, unassessed_frames: 0, manual_review_required: 1, rating: 'needs_review'});
+    } finally { db.close(); }
+  });
+
+  it('keeps missing timing, long gaps, incomplete rows and process boundaries unassessed', () => {
+    const db = createSteadyLateFixture();
+    try {
+      expect(consumerViews(db, null).summary).toMatchObject({
+        consumer_jank_frames: 0, unassessed_frames: 10, smooth_frames: 0, false_positives: 0,
+      });
+      db.exec(`UPDATE actual_frame_timeline_slice SET ts = ts + 1000000000 WHERE id >= 7;
+        UPDATE actual_frame_timeline_slice SET dur = -1 WHERE id = 3;
+        UPDATE actual_frame_timeline_slice SET upid = 2 WHERE id = 10;`);
+      const result = consumerViews(db);
+      for (const id of [1, 3, 7, 10]) {
+        expect(result.frames.find(row => row.frame_id === id).is_consumer_jank).toBeNull();
+      }
+      expect(result.summary.smooth_frames + result.summary.consumer_jank_frames + result.summary.unassessed_frames).toBe(10);
+      expect(result.severity).toContainEqual({severity: 'UNASSESSED', count: result.summary.unassessed_frames});
+    } finally { db.close(); }
+  });
+
+  it('does not substitute expected frame budgets for missing measured VSync', () => {
+    const db = createSteadyLateFixture();
+    try {
+      db.exec('CREATE TABLE counter(ts INTEGER, track_id INTEGER); CREATE TABLE counter_track(id INTEGER, name TEXT);');
+      db.aggregate('PERCENTILE', {
+        start: () => [] as number[],
+        step: (values: number[], value: number) => { values.push(value); return values; },
+        result: (values: number[]) => values.length ? values.sort((a, b) => a - b)[Math.floor(values.length / 2)] : null,
+      });
+      const render = (step: string) => String(getSkillStep(consumerJankSkill, step).sql)
+        .split("'${start_ts}'").join("''").split("'${end_ts}'").join("''")
+        .split('${start_ts}').join('NULL').split('${end_ts}').join('NULL')
+        .split('${package}').join('com.example.app').split('${layer_name}').join('');
+      expect(db.prepare(render('vsync_config')).get()).toEqual({vsync_period_ns: null, refresh_rate_hz: null});
+      const summary = db.prepare(render('consumer_jank_summary')).get();
+      expect(summary).toMatchObject({consumer_jank_frames: 0, smooth_frames: 0, unassessed_frames: 10,
+        false_positives: 0, rating: 'needs_review'});
+      expect(db.prepare(render('presentation_cadence_audit')).get()).toMatchObject({
+        vsync_period_ns: null, steady_late_frames: 0, cadence_status: 'insufficient_cadence_evidence',
+      });
+    } finally { db.close(); }
+  });
+
+  it('orders actual presentations and excludes SF display rows from app frame aggregation', () => {
+    const db = createSteadyLateFixture();
+    try {
+      // Reorder starts while retaining the same presentation sequence.
+      db.exec(`UPDATE actual_frame_timeline_slice SET ts = ts - 20000000, dur = dur + 20000000 WHERE id = 5;
+        INSERT INTO actual_frame_timeline_slice VALUES (99, 5, NULL, NULL, 0, 90000000, 'SurfaceFlinger CPU Deadline Missed', 'Late Present', 100);`);
+      const result = consumerViews(db);
+      expect(result.summary).toMatchObject({total_frames: 10, consumer_jank_frames: 0, unassessed_frames: 1});
+      expect(result.frames.find(row => row.frame_id === 5).is_consumer_jank).toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('keeps cadence excursions, burst boundaries, drops and incomplete frames visible', () => {
+    const db = createSteadyLateFixture();
+    try {
+      db.exec(`
+        UPDATE actual_frame_timeline_slice SET dur = dur + 8333333 WHERE id = 5;
+        UPDATE actual_frame_timeline_slice SET ts = ts + 1000000000 WHERE id >= 8;
+        UPDATE actual_frame_timeline_slice SET present_type = 'Dropped Frame' WHERE id = 2;
+        UPDATE actual_frame_timeline_slice SET dur = -1 WHERE id = 3;
+      `);
+      const rows = runCadenceAudit(db);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({dropped_frames: 1, incomplete_frames: 1});
+      expect(rows[0].cadence_gap_frames).toBeGreaterThan(0);
+      expect(rows[0].cadence_status).not.toBe('steady_late');
+      expect(rows[1]).toMatchObject({preceding_burst_gaps: 1, cadence_status: 'insufficient_cadence_evidence'});
+      expect(rows[1].preceding_burst_gap_ms).toBeGreaterThan(500);
+    } finally { db.close(); }
+  });
+
+  it('does not invent lateness from missing or ambiguous expected frames or another layer', () => {
+    const db = createSteadyLateFixture();
+    try {
+      db.exec(`
+        INSERT INTO expected_frame_timeline_slice SELECT * FROM expected_frame_timeline_slice;
+        INSERT INTO expected_frame_timeline_slice SELECT 2, layer_name, surface_frame_token, ts, dur
+          FROM expected_frame_timeline_slice;
+      `);
+      expect(runCadenceAudit(db)[0]).toMatchObject({
+        matched_expected_frames: 0, steady_late_frames: 0,
+        min_late_vsyncs: null, max_late_vsyncs: null, cadence_status: 'steady_cadence',
+      });
+      db.exec("DELETE FROM expected_frame_timeline_slice; UPDATE actual_frame_timeline_slice SET layer_name = 'TX - com.example.app/Other#2' WHERE id = 1");
+      const rows = runCadenceAudit(db);
+      expect(rows.every(row => row.matched_expected_frames === 0 && row.max_late_vsyncs === null)).toBe(true);
+      expect(rows.find(row => row.total_frames === 1)).toMatchObject({
+        steady_late_frames: 0, cadence_status: 'insufficient_cadence_evidence',
+      });
+    } finally { db.close(); }
   });
 
   it('keeps Flutter consumer-jank counts on the same hybrid contract', () => {

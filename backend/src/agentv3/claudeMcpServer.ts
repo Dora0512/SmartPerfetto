@@ -2584,6 +2584,20 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     };
   }
 
+  function retainArchitectureReceipt(producer: EvidenceProducerContext): void {
+    // Architecture detection is heuristic context, not a captured SQL cell.
+    // Retain its issued locator so a citation remains explicitly unverified.
+    const envelope = createDataEnvelope({columns: [], rows: []}, {
+      type: 'diagnostic', source: 'detect_architecture', title: 'detect_architecture',
+      evidenceRefId: producer.sourceToolCallId,
+      ...producerEnvelopeOptions(producer), traceId, traceSide: 'current',
+    });
+    artifactStore?.registerStandaloneEvidenceCapture?.(
+      captureEvidenceTable(undefined, {}, 'execution_witness_unavailable'),
+      {meta: envelope.meta, display: envelope.display},
+    );
+  }
+
   // Auto-inject `INCLUDE PERFETTO MODULE ...;` for stdlib tables/functions
   // referenced in raw SQL. Shared between execute_sql and execute_sql_on
   // so comparison-mode queries get the same treatment. See
@@ -2942,6 +2956,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             timestamp: Date.now(),
           });
           const payload = await detectArchitecturePayload(signal);
+          retainArchitectureReceipt(producer);
           emitUpdate?.({
             type: 'progress',
             content: {
@@ -2958,6 +2973,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             success: true,
             skillId: 'detect_architecture',
             delegatedTool: 'detect_architecture',
+            evidenceRefId: producer.sourceToolCallId,
             sourceToolCallId: producer.sourceToolCallId,
             paramsHash: producer.paramsHash,
             planPhaseId: producer.planPhaseId,
@@ -3562,12 +3578,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
       );
       try {
         const payload = await detectArchitecturePayload(signal);
+        retainArchitectureReceipt(producer);
         return {
           content: [{
             type: 'text' as const,
             text: JSON.stringify({
               ...payload,
               success: true,
+              evidenceRefId: producer.sourceToolCallId,
               sourceToolCallId: producer.sourceToolCallId,
               paramsHash: producer.paramsHash,
               planPhaseId: producer.planPhaseId,

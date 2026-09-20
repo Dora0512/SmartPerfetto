@@ -2261,7 +2261,52 @@ describe('createClaudeMcpServer', () => {
       expect(mockSkillExecutor.execute).not.toHaveBeenCalled();
     });
 
-    it('projects a real detector rejection as an MCP failure without default STANDARD evidence', async () => {
+    it.each([
+      ['detect_architecture', false], ['detect_architecture', true],
+      ['invoke_skill', false], ['invoke_skill', true],
+    ] as const)('retains %s cached=%s as issued context without proving heuristic claims', async (toolName, cached) => {
+      const {ArtifactStore: RealArtifactStore} = jest.requireActual<typeof import('../artifactStore')>('../artifactStore');
+      const {prepareClaimEvidence} = await import('../../services/evidence/claimEvidencePreparation');
+      const {runClaimVerification} = await import('../../services/verifier/claimVerificationRunner');
+      const store = new RealArtifactStore();
+      const {tools} = createTestServer({artifactStore: store, ...(cached ? {
+        cachedArchitecture: {type: 'Standard', confidence: 0.9, evidence: []},
+      } : {})});
+      const payload = await callTool(tools, toolName, toolName === 'invoke_skill' ? {skillId: 'detect_architecture'} : {});
+      expect(payload.success).toBe(true);
+      expect(payload.evidenceRefId).toBe(payload.sourceToolCallId);
+      const options = {ownerKey: 'architecture-test', allowedTraces: [{traceId: 'test-trace-123', traceSide: 'current' as const}]};
+      const view = store.createEvidenceReadView(options);
+      const reference = {evidenceRefId: payload.sourceToolCallId, column: 'confidence', value: 999};
+      const requests = [
+        {key: 'issued', reference, requiredColumns: ['confidence']},
+        {key: 'fake', reference: {evidenceRefId: 'detect_architecture:fake'}, requiredColumns: []},
+        {key: 'conflict', reference: {...reference, sourceToolCallId: 'wrong-call'}, requiredColumns: []},
+      ];
+      expect(await view.resolveReferences(requests)).toEqual([
+        {key: 'issued', status: 'missing', reason: 'execution_witness_unavailable'},
+        {key: 'fake', status: 'missing', reason: 'evidence_not_retained'},
+        {key: 'conflict', status: 'missing', reason: 'identifier_conflict'},
+      ]);
+      expect(await store.createEvidenceReadView({...options, allowedTraces: []}).resolveReferences([requests[0]]))
+        .toEqual([{key: 'issued', status: 'denied', reason: 'trace_outside_read_scope'}]);
+      const conclusionContract: import('../../agent/core/conclusionContract').ConclusionContract = {
+        schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', bindingEligibility: 'eligible',
+        conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
+        claims: [{id: 'heuristic', kind: 'numeric', text: 'Confidence is 999', references: [reference],
+          semantics: {schemaVersion: 'claim_semantics@1', predicate: 'numeric.cell', polarity: 'affirmed',
+            discourse: 'asserted', quantifier: 'one', modality: 'certain',
+            scope: {population: 'cited_rows', subjectRefs: [reference]}, numeric: {operator: 'eq', value: 999, unit: '%'}}}],
+      };
+      const preparedEvidence = await prepareClaimEvidence({conclusionContract, evidenceReadView: view});
+      const verification = runClaimVerification({conclusionContract, preparedEvidence}).claimVerificationResult;
+      expect(verification.status).not.toBe('failed');
+      expect(verification.claimResults[0].referenceResults).toEqual([expect.objectContaining({status: 'not_checked'})]);
+      expect(verification.claimResults[0].status).not.toBe('verified');
+      expect(verification.claimResults[0].deterministicProof?.status).not.toBe('proved');
+    });
+
+    it.each(['detect_architecture', 'invoke_skill'])('projects %s detector rejection without evidence receipts', async toolName => {
       const actualDetector = jest.requireActual<typeof import('../../agent/detectors/architectureDetector')>(
         '../../agent/detectors/architectureDetector');
       const pipeline = jest.requireActual<typeof import('../../services/pipelineSkillLoader')>('../../services/pipelineSkillLoader');
@@ -2269,14 +2314,18 @@ describe('createClaudeMcpServer', () => {
       const initialize = jest.spyOn(pipeline, 'ensurePipelineSkillsInitialized').mockRejectedValueOnce(failure);
       jest.mocked(createArchitectureDetector).mockReturnValueOnce(actualDetector.createArchitectureDetector());
       try {
-        const {tools} = createTestServer();
-        const raw = await tools.get('detect_architecture')!.handler({});
+        const {ArtifactStore: RealArtifactStore} = jest.requireActual<typeof import('../artifactStore')>('../artifactStore');
+        const store = new RealArtifactStore();
+        const register = jest.spyOn(store, 'registerStandaloneEvidenceCapture');
+        const {tools} = createTestServer({artifactStore: store});
+        const raw = await tools.get(toolName)!.handler(toolName === 'invoke_skill' ? {skillId: 'detect_architecture'} : {});
         expect(raw.isError).toBe(true);
         const payload = JSON.parse(raw.content[0].text);
         expect(payload).toMatchObject({success: false, error: failure.message});
         expect(payload).not.toHaveProperty('type');
         expect(payload).not.toHaveProperty('confidence');
         expect(payload).not.toHaveProperty('evidence');
+        expect(register).not.toHaveBeenCalled();
       } finally {
         initialize.mockRestore();
       }

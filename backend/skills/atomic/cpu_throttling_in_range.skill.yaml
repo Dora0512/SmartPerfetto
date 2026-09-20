@@ -22,7 +22,7 @@ tier: B
 
 meta:
   display_name: "CPU 限频检测"
-  description: "检测 CPU 热控限频情况（动态拓扑检测）"
+  description: "观测 CPU 频率变化；频率跨度不能独立证明热控限频"
   icon: "thermostat"
   tags: [cpu, thermal, throttling, composite]
 
@@ -76,8 +76,17 @@ steps:
           label: "降幅"
           type: percentage
           format: percentage
+        - name: frequency_variation_detected
+          label: "观测到频率变化"
+          type: boolean
+        - name: evidence_status
+          label: "热原因证据"
+          type: string
+        - name: interpretation
+          label: "解释"
+          type: string
         - name: throttle_detected
-          label: "检测到限频"
+          label: "已核验热控限频"
           type: boolean
     sql: |
       WITH
@@ -119,7 +128,10 @@ steps:
         ROUND(MIN(min_freq), 0) as min_freq_mhz,
         ROUND(MAX(max_freq), 0) as max_freq_mhz,
         ROUND(100.0 * (MAX(max_freq) - MIN(min_freq)) / NULLIF(MAX(max_freq), 0), 1) as freq_drop_pct,
-        CASE WHEN MIN(min_freq) < MAX(max_freq) * 0.7 THEN 1 ELSE 0 END as throttle_detected
+        CASE WHEN MIN(min_freq) < MAX(max_freq) * 0.7 THEN 1 ELSE 0 END as frequency_variation_detected,
+        NULL as throttle_detected,
+        'thermal_evidence_missing' as evidence_status,
+        '频率变化可能来自负载下降或空闲 DVFS；需直接限频证据与同窗口负载才能确定热控原因' as interpretation
       FROM per_cpu_stats
       GROUP BY
         CASE

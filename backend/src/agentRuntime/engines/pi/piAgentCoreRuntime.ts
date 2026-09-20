@@ -413,6 +413,7 @@ function createPiEvidenceReadView(
   if (!store) return undefined;
   const scope = options.runManifestAttributionSink?.identity.scope;
   return store.createEvidenceReadView({
+    currentRunId: runId,
     ownerKey: piRuntimeFingerprint({runId, sessionId,
       tenantId: options.tenantId ?? scope?.tenantId,
       workspaceId: options.workspaceId ?? scope?.workspaceId,

@@ -53,8 +53,8 @@ export function claimVerificationStatusLine(
   const explanation = claimVerificationNotCheckedExplanation(summary, language);
   const detail = explanation ? localize(language, `（${explanation}）`, ` (${explanation})`) : '';
   if (summary.status === 'failed') {
-    return `${prefix}: ${localize(language, `未通过，${unsupported} 条断言与证据不符（已核验 ${verified}/${total}）`,
-      `failed — ${unsupported} claim(s) contradict the evidence (verified ${verified}/${total})`)}`;
+    return `${prefix}: ${localize(language, `未通过，${unsupported} 条断言未通过核验（已核验 ${verified}/${total}）`,
+      `failed — ${unsupported} claim(s) failed verification (verified ${verified}/${total})`)}`;
   }
   if (summary.status === 'passed') {
     return `${prefix}: ${localize(language, `已核验 ${verified}/${total}`, `verified ${verified}/${total}`)}`;

@@ -43,9 +43,11 @@ describe('claim verification status line', () => {
         unsupportedClaimCount: 1, issueCount: 2});
   });
 
-  it('names a contradiction as a failure', () => {
+  it('reports failure without treating every unsupported reference as a contradiction', () => {
     expect(claimVerificationStatusLine(summary('failed', ['partial', 'unsupported']), 'zh-CN'))
-      .toBe('断言核验: 未通过，1 条断言与证据不符（已核验 0/2）');
+      .toBe('断言核验: 未通过，1 条断言未通过核验（已核验 0/2）');
+    expect(claimVerificationStatusLine(summary('failed', ['partial', 'unsupported']), 'en'))
+      .toBe('Claim verification: failed — 1 claim(s) failed verification (verified 0/2)');
   });
 
   it('names an invalid declaration as unverified, not contradicted', () => {
