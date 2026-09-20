@@ -5,7 +5,8 @@
 import { describe, expect, it } from '@jest/globals';
 import type express from 'express';
 import { StreamProjector } from '../streamProjector';
-import { createDataEnvelope } from '../../../types/dataContract';
+import { createDataEnvelope, type DataEnvelope } from '../../../types/dataContract';
+import {projectDataEnvelopePreview, projectSerializedDataEvent, TABLE_PREVIEW_MAX_BYTES, TABLE_PREVIEW_MAX_ROWS} from '../dataEnvelopePreview';
 
 class MockSseResponse {
   readonly writes: string[] = [];
@@ -36,6 +37,90 @@ function parseSsePayload(raw: string): Array<{ event: string; data: any }> {
 }
 
 describe('StreamProjector SSE Contract', () => {
+  function largeTable(rows: any[][]): DataEnvelope {
+    return createDataEnvelope({columns: ['id', 'value'], rows}, {
+      type: 'skill_result', source: 'compare_skill', title: 'Startup table',
+      layer: 'list', format: 'table', traceSide: 'reference',
+      evidenceRefId: 'evidence:original',
+    });
+  }
+
+  it('bounds large Skill tables on the wire without changing retained evidence', () => {
+    const projector = new StreamProjector();
+    const res = new MockSseResponse();
+    const envelope = largeTable(Array.from({length: 50_000}, (_, i) => [i, `slice-${i}`]));
+    let captured: unknown;
+    let buffered: unknown;
+    projector.broadcastStreamingUpdate('s1', [res as unknown as express.Response], {
+      type: 'data', content: [envelope, envelope], timestamp: 1,
+    } as any, {
+      seqId: 1,
+      onValidDataEnvelopes: (data) => {captured = data[0];},
+      onBufferedEvent: (event) => {buffered = JSON.parse(event.eventData);},
+    });
+    const payload = parseSsePayload(res.writes.join(''))[0].data;
+    expect(captured).toBe(envelope);
+    expect(envelope.data.rows).toHaveLength(50_000);
+    expect(envelope.display.preview).toBeUndefined();
+    expect(buffered).toEqual(payload);
+    for (const preview of payload.envelope) {
+      expect(preview.data.rows).toHaveLength(TABLE_PREVIEW_MAX_ROWS);
+      expect(preview.meta).toEqual(envelope.meta);
+      expect(preview.display.preview).toEqual({totalRows: 50_000, returnedRows: 200, reason: 'row_limit'});
+      expect(Buffer.byteLength(JSON.stringify(preview.data))).toBeLessThanOrEqual(TABLE_PREVIEW_MAX_BYTES);
+    }
+  });
+
+  it('bounds wide rows and nested row details without rewriting evidence cells', () => {
+    const wide = largeTable([[1, 'x'.repeat(300_000)], [2, 'short']]);
+    const preview = projectDataEnvelopePreview(wide);
+    expect(preview.data.rows).toEqual([]);
+    expect(preview.display.preview).toMatchObject({totalRows: 2, returnedRows: 0, reason: 'byte_limit'});
+    expect(wide.data.rows?.[0][1]).toHaveLength(300_000);
+
+    const detailed = largeTable([[1, 'one'], [2, 'two']]);
+    detailed.data.expandableData = [{item: {}, result: {success: true, error: 'x'.repeat(300_000)}}];
+    const projected = projectDataEnvelopePreview(detailed);
+    expect(projected.data.rows).toEqual(detailed.data.rows);
+    expect(projected.data.expandableData).toBeUndefined();
+    expect(projected.display.preview).toMatchObject({totalRows: 2, returnedRows: 2, detailsOmitted: true});
+    expect(detailed.data.expandableData).toHaveLength(1);
+    expect(projectDataEnvelopePreview(projected)).toEqual(projected);
+  });
+
+  it('reprojects old table events on direct send and buffered or persisted replay', () => {
+    const projector = new StreamProjector();
+    const payload = {type: 'data', envelope: largeTable(Array.from({length: 500}, (_, i) => [i, i]))};
+    const raw = JSON.stringify(payload);
+    const projected = projectSerializedDataEvent('data', raw);
+    expect(projectSerializedDataEvent('data', projected)).toBe(projected);
+    expect(JSON.parse(projected).envelope.display.preview.totalRows).toBe(500);
+    const res = new MockSseResponse();
+    projector.sendEvent(res as unknown as express.Response, 'data', payload, 3);
+    projector.replayBufferedEvents(res as unknown as express.Response,
+      [{seqId: 4, eventType: 'data', eventData: raw}], 3);
+    const events = parseSsePayload(res.writes.join(''));
+    expect(events).toHaveLength(2);
+    for (const event of events) expect(event.data.envelope.data.rows).toHaveLength(200);
+    expect(projectSerializedDataEvent('conclusion', raw)).toBe(raw);
+  });
+
+  it('does not return unchecked trailing details or sparse oversized cells', () => {
+    for (const rows of [[], [[1, 'one']]]) {
+      const envelope = largeTable(rows);
+      envelope.data.expandableData = [
+        {item: {}, result: {success: true}},
+        {item: {}, result: {success: true, error: 'x'.repeat(300_000)}},
+      ];
+      const preview = projectDataEnvelopePreview(envelope);
+      expect(preview.display.preview?.detailsOmitted).toBe(true);
+      expect(preview.data.expandableData).toHaveLength(rows.length);
+      expect(Buffer.byteLength(JSON.stringify(preview.data))).toBeLessThanOrEqual(TABLE_PREVIEW_MAX_BYTES);
+    }
+    const sparse = largeTable([[1, new Array(500_000)]]);
+    expect(projectDataEnvelopePreview(sparse).data.rows).toEqual([]);
+  });
+
   it('emits data event contract with envelope payload', () => {
     const projector = new StreamProjector();
     const res = new MockSseResponse();

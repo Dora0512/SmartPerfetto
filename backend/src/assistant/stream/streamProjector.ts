@@ -3,6 +3,7 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import express from 'express';
+import {projectDataEnvelopePreview, projectDataEventPayload, projectSerializedDataEvent} from './dataEnvelopePreview';
 import type { StreamingUpdate } from '../../agent';
 import {
   generateEventId,
@@ -82,7 +83,7 @@ export class StreamProjector {
       res.write(`id: ${seqId}\n`);
     }
     res.write(`event: ${eventType}\n`);
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.write(`data: ${JSON.stringify(projectDataEventPayload(eventType, payload))}\n\n`);
   }
 
   sendConnected(res: express.Response, payload: unknown): void {
@@ -164,9 +165,10 @@ export class StreamProjector {
         options.onValidDataEnvelopes?.(validEnvelopes);
       }
 
+      const previews = validEnvelopes.map(projectDataEnvelopePreview);
       const projectedEnvelope = Array.isArray(update.content)
-        ? validEnvelopes
-        : validEnvelopes[0] ?? [];
+        ? previews
+        : previews[0] ?? [];
 
       eventData = JSON.stringify(this.withObservability({
         type: 'data',
@@ -223,7 +225,7 @@ export class StreamProjector {
         try {
           res.write(`id: ${event.seqId}\n`);
           res.write(`event: ${event.eventType}\n`);
-          res.write(`data: ${event.eventData}\n\n`);
+          res.write(`data: ${projectSerializedDataEvent(event.eventType, event.eventData)}\n\n`);
           replayed++;
         } catch {
           break; // Client disconnected during replay

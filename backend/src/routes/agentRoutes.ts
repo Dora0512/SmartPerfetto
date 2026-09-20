@@ -126,6 +126,7 @@ import {buildTraceSummaryAttributionV1} from '../services/traceSummaryAttributio
 import {unavailableTraceSummaryV1} from '../services/traceSummaryExecutor';
 import { AssistantApplicationService } from '../assistant/application/assistantApplicationService';
 import { StreamProjector, SSE_RING_BUFFER_SIZE, type BufferedSseEvent } from '../assistant/stream/streamProjector';
+import {projectSerializedDataEvent} from '../assistant/stream/dataEnvelopePreview';
 import {
   appendReplayableSseEvent,
   hasTerminalReplayAfter,
@@ -1775,7 +1776,7 @@ function replayPersistedAgentEvents(
       const replayEvent = sanitizePersistedAnalysisCompletedEvent(session, event);
       res.write(`id: ${event.cursor}\n`);
       res.write(`event: ${replayEvent.eventType}\n`);
-      res.write(`data: ${replayEvent.eventData}\n\n`);
+      res.write(`data: ${projectSerializedDataEvent(replayEvent.eventType, replayEvent.eventData)}\n\n`);
       replayed++;
       lastCursor = event.cursor;
       if (isTerminalSseEvent(replayEvent.eventType, replayEvent.eventData)) {

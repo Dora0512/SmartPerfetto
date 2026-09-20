@@ -94,7 +94,7 @@ async function run() {
             baseUrl: providerBaseUrl,
             apiKey: credential,
             model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro',
-            lightModel: process.env.DEEPSEEK_LIGHT_MODEL || 'deepseek-v4-flash',
+            lightModel: process.env.DEEPSEEK_LIGHT_MODEL || 'deepseek-flash',
             maxOutputTokens: 16384,
             maxTurns: 100,
           }

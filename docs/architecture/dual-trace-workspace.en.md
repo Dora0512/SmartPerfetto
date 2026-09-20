@@ -10,6 +10,17 @@ and is out of scope here.
 
 ## Product Principles
 
+Chat tables use bounded SSE previews: at most 200 rows per table, with a
+conservative 256 KiB JSON data budget shared by rows and nested details.
+The preview retains a contiguous prefix of complete rows without rewriting
+cells; large details may be omitted. The UI distinguishes preview and total row
+counts, limits copying, saving and sorting to the preview, and does not present
+prefix statistics as full-table statistics. Missing preview rows remain
+unverified by local reference checks; backend evidence verification is unchanged.
+Live events and historical replay share this projection. Original Skill output
+and report/snapshot inputs retain full data. This is not a whole-event or process
+memory limit: metadata and other event types are outside this budget.
+
 - The default remains single-window. Opening a normal trace shows one Perfetto
   timeline and the AI Panel.
 - The no-trace AI Assistant page also exposes a `Dual Trace` entry. It opens two

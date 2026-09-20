@@ -438,6 +438,14 @@ export interface DataEnvelopeDisplay {
 
   /** Maximum number of visible rows before "show more" truncation. */
   maxVisibleRows?: number;
+
+  /** Chat transport preview only; original execution evidence remains unchanged. */
+  preview?: {
+    totalRows: number;
+    returnedRows: number;
+    reason: 'row_limit' | 'byte_limit';
+    detailsOmitted?: boolean;
+  };
 }
 
 /**
