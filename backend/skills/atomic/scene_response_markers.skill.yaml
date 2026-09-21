@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2024-2026 Gracker (Chris)
+
+name: scene_response_markers
+version: "1.0"
+type: composite
+category: input_response
+tier: B
+meta:
+  display_name: "场景响应原始标记"
+  description: "读取 Scroll、FlingStart 原始 slice 及线程或进程 track 归属；持续时间仅表示标记执行区间，不解释 name 内 duration，也不证明完整滚动、惯性或呈现。"
+  icon: "timeline"
+  tags: [scene, response, scroll, fling, marker, raw, interval]
+prerequisites:
+  required_tables: [slice, track, thread_track, thread, process_track, process, trace_bounds]
+inputs:
+  - {name: start_ts, type: timestamp, required: false}
+  - {name: end_ts, type: timestamp, required: false}
+  - {name: row_limit, type: number, required: false, default: 4096}
+steps:
+  - id: response_sources
+    type: atomic
+    name: "响应标记扫描范围"
+    display: {level: detail, layer: overview, title: "响应标记扫描范围"}
+    investigation_evidence:
+      window: {start: start_ts, end: end_ts}
+      metrics: []
+      scan:
+        domain: scene_response
+        resultStepId: response_markers
+        totalRowsColumn: total_rows
+        outputTruncatedColumn: output_truncated
+        cursorClosedColumn: cursor_closed
+        parseFailuresColumn: parse_failure_count
+    sql_fragments: [fragments/scene_response_marker_facts.sql]
+    sql: |
+      SELECT printf('%d', b.start_ts) AS start_ts, printf('%d', b.end_ts) AS end_ts,
+        (SELECT COUNT(*) FROM response_windowed) AS total_rows,
+        CASE WHEN (SELECT COUNT(*) FROM response_windowed) > MIN(4096, MAX(1, CAST(${row_limit|4096} AS INT)))
+          THEN 1 ELSE 0 END AS output_truncated,
+        1 AS cursor_closed,
+        (SELECT COUNT(*) FROM response_windowed WHERE dur < -1 OR (dur >= 0 AND end_ts IS NULL)) AS parse_failure_count,
+        (SELECT COUNT(*) FROM response_windowed WHERE dur = -1) AS open_marker_count,
+        CASE WHEN EXISTS (SELECT 1 FROM response_windowed) THEN 'partial' ELSE 'unavailable' END AS source_status,
+        'unknown' AS capture_status,
+        'exact_Scroll_or_FlingStart_name_or_FlingStart_space_prefix' AS marker_population,
+        'query_population_only_not_all_application_responses' AS coverage_limit
+      FROM response_bounds b
+    save_as: response_sources
+
+  - id: response_markers
+    type: atomic
+    name: "响应标记原始区间"
+    investigation_evidence:
+      window: {start: scan_start_ts, end: scan_end_ts}
+      identity: {upid: upid}
+      metrics:
+        - {domain: scene_response, metric_id: scene.response.marker, value: raw_name, status: source_status}
+    display:
+      level: detail
+      layer: list
+      title: "响应标记原始区间"
+      columns:
+        - {name: slice_id, label: "Slice ID", type: number}
+        - {name: ts, label: "标记开始", type: timestamp, unit: ns, clickAction: navigate_timeline}
+        - {name: dur, label: "标记持续", type: duration, unit: ns}
+        - {name: end_ts, label: "标记结束", type: timestamp, unit: ns}
+        - {name: raw_name, label: "标记原文", type: string}
+        - {name: process_name, label: "所属进程", type: string}
+        - {name: thread_name, label: "所属线程", type: string}
+        - {name: identity_basis, label: "归属来源", type: string}
+        - {name: source_status, label: "观测状态", type: string}
+    sql_fragments: [fragments/scene_response_marker_facts.sql]
+    sql: |
+      SELECT slice_id, 'slice' AS source_table, printf('%d', slice_id) AS source_id, marker_kind, raw_name,
+        printf('%d', ts) AS ts, printf('%d', dur) AS dur,
+        CASE WHEN end_ts IS NOT NULL THEN printf('%d', end_ts) END AS end_ts,
+        printf('%d', scan_start_ts) AS scan_start_ts,
+        CASE WHEN scan_end_ts IS NOT NULL THEN printf('%d', scan_end_ts) END AS scan_end_ts,
+        track_id, track_name, track_type,
+        CASE WHEN identity_basis = 'conflict' THEN NULL ELSE utid END AS utid,
+        upid, thread_upid, process_track_upid, thread_name, process_name, identity_basis,
+        CASE WHEN dur = -1 THEN 'open' WHEN end_ts IS NULL THEN 'invalid'
+          WHEN dur = 0 THEN 'instant' ELSE 'span' END AS boundary_kind,
+        CASE WHEN ts != scan_start_ts OR (end_ts IS NOT NULL AND end_ts != scan_end_ts) THEN 1 ELSE 0 END AS window_clipped,
+        CASE WHEN end_ts IS NULL OR identity_basis = 'conflict' OR ts != scan_start_ts OR end_ts != scan_end_ts
+          THEN 'partial' ELSE 'observed' END AS source_status,
+        'slice_execution_only_not_action_extent_or_presentation' AS semantic_limit,
+        'uninterpreted_producer_text' AS name_parameter_semantics,
+        COUNT(*) OVER () AS total_rows,
+        CASE WHEN COUNT(*) OVER () > MIN(4096, MAX(1, CAST(${row_limit|4096} AS INT))) THEN 1 ELSE 0 END AS output_truncated
+      FROM response_windowed
+      ORDER BY ts, slice_id
+      LIMIT MIN(4096, MAX(1, CAST(${row_limit|4096} AS INT)))
+    save_as: response_markers
+output:
+  format: layered
+  default_expanded: [response_sources, response_markers]

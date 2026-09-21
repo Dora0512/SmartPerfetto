@@ -1113,6 +1113,20 @@ describe('agent route RBAC', () => {
     expect(traceService.getOrLoadTrace).not.toHaveBeenCalled();
   });
 
+  it('does not accept a scene dispatch entry or capability from the analyze body', async () => {
+    delete process.env.SMARTPERFETTO_API_KEY;
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    process.env.SMARTPERFETTO_AI_ENABLED = 'true';
+    const traceService = {getOrLoadTrace: jest.fn()};
+    setTraceProcessorServiceForTests(traceService as unknown as TraceProcessorService);
+    const res = await analystHeaders(request(makeApp()).post('/api/agent/v1/analyze'))
+      .send({traceId: 'trace-a', query: 'scene reconstruction', entry: 'scene_reconstruction',
+        sceneRunBinding: {verified: true}, options: {entry: 'scene_reconstruction'}});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SCENE_REPLAY_SEPARATED');
+    expect(traceService.getOrLoadTrace).not.toHaveBeenCalled();
+  });
+
   it('rejects viewer analyze requests before trace access is evaluated', async () => {
     delete process.env.SMARTPERFETTO_API_KEY;
     process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';

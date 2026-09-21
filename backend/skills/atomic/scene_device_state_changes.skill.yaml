@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2024-2026 Gracker (Chris)
+
+name: scene_device_state_changes
+version: "1.0"
+type: composite
+category: system_context
+tier: B
+meta:
+  display_name: "场景设备状态变化"
+  description: "查询屏幕、充电和已提交 DeviceState 的瞬时事件与派生持续状态；保留厂商状态原值，不凭状态编号猜测折叠姿态。"
+  icon: "devices"
+  tags: [scene, device, screen, charging, posture, state]
+prerequisites:
+  modules: [android.screen_state, android.battery.charging_states]
+inputs:
+  - {name: start_ts, type: timestamp, required: false}
+  - {name: end_ts, type: timestamp, required: false}
+  - {name: row_limit, type: number, required: false, default: 4096}
+steps:
+  - id: state_sources
+    type: atomic
+    name: "设备状态采集范围"
+    display: {level: detail, layer: list, title: "设备状态数据来源"}
+    investigation_evidence:
+      window: {start: start_ts, end: end_ts}
+      metrics: []
+      scan:
+        domain: scene_device
+        sourceColumn: dimension
+        resultSourceColumn: dimension
+        resultStepId: state_intervals
+        totalRowsColumn: total_rows
+        outputTruncatedColumn: output_truncated
+        cursorClosedColumn: cursor_closed
+        parseFailuresColumn: parse_failure_count
+    sql_fragments: [fragments/scene_device_state_facts.sql]
+    sql: |
+      SELECT d.dimension,
+        (SELECT COUNT(*) FROM clipped c WHERE c.dimension = d.dimension) AS total_rows,
+        (SELECT COUNT(*) FROM clipped c WHERE c.dimension = d.dimension AND source_status = 'observed') AS observed_rows,
+        printf('%d', b.start_ts) AS start_ts, printf('%d', b.end_ts) AS end_ts,
+        CASE WHEN (SELECT COUNT(*) FROM clipped) > MIN(4096, MAX(1, CAST(${row_limit|4096} AS INT))) THEN 1 ELSE 0 END AS output_truncated,
+        1 AS cursor_closed, 0 AS parse_failure_count,
+        CASE WHEN EXISTS (SELECT 1 FROM clipped c WHERE c.dimension = d.dimension AND source_status = 'observed')
+          THEN 'partial' ELSE 'unavailable' END AS source_status,
+        'source_presence_does_not_prove_capture_completeness' AS reason
+      FROM (SELECT 'screen' AS dimension UNION ALL SELECT 'charging' UNION ALL SELECT 'device_state') d CROSS JOIN bounds b
+    save_as: state_sources
+
+  - id: state_intervals
+    type: atomic
+    name: "设备状态区间"
+    investigation_evidence:
+      window: {start: start_ts, end: end_ts}
+      context: {role: dimension}
+      metrics:
+        - {domain: scene_device, metric_id: scene.device.state, value: state_value, status: source_status}
+    display:
+      level: detail
+      layer: list
+      title: "设备状态变化"
+      columns:
+        - {name: start_ts, label: "开始", type: timestamp, unit: ns, clickAction: navigate_range, durationColumn: dur_ns}
+        - {name: end_ts, label: "结束", type: timestamp, unit: ns}
+        - {name: dur_ns, label: "持续", type: duration, unit: ns}
+        - {name: dimension, label: "维度", type: string}
+        - {name: fact_kind, label: "事实类型", type: string}
+        - {name: state_value, label: "状态原值", type: string}
+        - {name: source_status, label: "证据状态", type: string}
+        - {name: boundary_basis, label: "边界依据", type: string}
+    sql_fragments: [fragments/scene_device_state_facts.sql]
+    sql: |
+      SELECT dimension, object_key, printf('%d', clipped_start) AS start_ts,
+        printf('%d', clipped_end) AS end_ts, printf('%d', clipped_end - clipped_start) AS dur_ns,
+        state_value, raw_value, source_table, source_id, source_status, boundary_basis,
+        previous_value, semantic_limit, fact_kind,
+        printf('%d', start_ts) AS source_start_ts, printf('%d', end_ts) AS source_end_ts,
+        CASE WHEN clipped_start != start_ts OR clipped_end != end_ts THEN 1 ELSE 0 END AS window_clipped,
+        COUNT(*) OVER () AS total_rows,
+        CASE WHEN COUNT(*) OVER () > MIN(4096, MAX(1, CAST(${row_limit|4096} AS INT))) THEN 1 ELSE 0 END AS output_truncated
+      FROM clipped
+      ORDER BY clipped_start, dimension, object_key, source_order, fact_kind
+      LIMIT MIN(4096, MAX(1, CAST(${row_limit|4096} AS INT)))
+    save_as: state_intervals
+output:
+  format: layered
+  default_expanded: [state_sources, state_intervals]

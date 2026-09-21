@@ -302,8 +302,15 @@ export function localizeSkillDefinition(
         typeof raw.id === 'string' ? raw.id : undefined,
         outputLanguage,
       );
+      const display = raw.display && typeof raw.display === 'object' && !Array.isArray(raw.display)
+        ? {...raw.display as Record<string, unknown>} : undefined;
+      if (display?.title_i18n !== undefined) {
+        delete display.title_i18n;
+        display.title = step.title[outputLanguage];
+      }
       return {
         ...raw,
+        ...(display ? {display} : {}),
         ...(raw.name !== undefined ? {name: step.title[outputLanguage]} : {}),
         ...(raw.description !== undefined && step.description
           ? {description: step.description[outputLanguage]}

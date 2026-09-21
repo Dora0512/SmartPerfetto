@@ -70,6 +70,7 @@ const TRACE_CASES: TraceCase[] = [
 ];
 
 const REQUIRED_STEPS = [
+  'input_coverage',
   'user_gestures',
   'scroll_initiation',
   'inertial_scrolls',
@@ -123,6 +124,40 @@ async function runCase(testCase: TraceCase): Promise<void> {
         unlockEventCount = Array.isArray(step.data)
           ? step.data.filter((row: any) => String(row?.event || '').includes('解锁')).length
           : 0;
+      }
+    }
+
+    const gestures = findStep(result.layers, 'user_gestures')?.data || [];
+    const gaps = findStep(result.layers, 'idle_periods')?.data || [];
+    for (const gap of gaps) {
+      if (gap.category !== 'unknown' || gap.source_status !== 'partial') {
+        throw new Error('input observation gaps must not assert device/user idle');
+      }
+      for (const gesture of gestures) {
+        const start = BigInt(gesture.ts);
+        const end = start + BigInt(gesture.dur);
+        if (BigInt(gap.ts) < end && start < BigInt(gap.ts) + BigInt(gap.dur)) {
+          throw new Error('input coverage gap overlaps an observed contact');
+        }
+      }
+    }
+    const coverage = findStep(result.layers, 'input_coverage')?.data?.[0];
+    if (!coverage || !coverage.normalization_version || coverage.output_truncated !== 0) {
+      throw new Error('canonical trace must have explicit, untruncated input coverage');
+    }
+    if (testCase.file === 'scroll-demo-customer-scroll.pftrace') {
+      const movement = gestures.filter((row: any) => row.gesture_type === 'touch_move');
+      if (movement.length !== 2 || movement.some((row: any) => BigInt(row.dur) > 200000000n)) {
+        throw new Error('customer trace must preserve two observed movement contacts without frame-based extensions');
+      }
+      if (coverage.physical_event_count !== 35 || coverage.observed_event_count !== 140) {
+        throw new Error('customer trace physical-event/delivery identity regression');
+      }
+    }
+    if (testCase.file === 'Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace') {
+      if (coverage.observed_event_count !== 55 || coverage.physical_event_count !== 18 ||
+          !gestures.some((row: any) => row.gesture_type === 'input_unknown')) {
+        throw new Error('SurfaceView missing-action observations must survive with partial semantics');
       }
     }
 

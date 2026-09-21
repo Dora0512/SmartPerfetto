@@ -51,6 +51,8 @@ import {
   turnCliAnalysisEvidencePath,
   type CliAnalysisEvidenceOutput,
 } from './analysisResultPresentation';
+import {buildCliSceneReportBundle, cliSceneReportMetadata, latestCliSceneReportPath, loadedCliSceneReport,
+  rebindCliSceneReportTurnMarkdown, turnCliSceneReportPath} from './sceneReportReference';
 
 export interface CommitTurnInput {
   paths: CliPaths;
@@ -129,6 +131,7 @@ export function commitTurnOutputs(input: CommitTurnInput): CliAnalysisEvidenceOu
     result: result.result,
     sourceProvenance,
   });
+  const sceneBundle = buildCliSceneReportBundle({sessionId, turn, traceId: result.traceId, conclusion, turnMarkdown, result: result.result});
 
   writeConclusion(sp, conclusion);
   writeTurnMarkdown(sp, turn, turnMarkdown);
@@ -153,11 +156,14 @@ export function commitTurnOutputs(input: CommitTurnInput): CliAnalysisEvidenceOu
   assertCliReceiptPath(result, cliTurnPath);
   writeAnalysisQualitySidecars(sp, turn, result, sourceProvenance);
   writeJsonFile(sp, turnCliAnalysisEvidencePath(sp, turn), evidenceBundle);
+  writeJsonFile(sp, turnCliSceneReportPath(sp, turn), sceneBundle);
 
   writeConfig(sp, config);
   // Latest is a pointer-by-value. Write it last so a partial failure cannot
   // pair a previous turn's evidence with the newly written conclusion.
   writeJsonFile(sp, latestCliAnalysisEvidencePath(sp), evidenceBundle);
+  // A non-scene turn replaces the latest locator with an explicit none bundle.
+  writeJsonFile(sp, latestCliSceneReportPath(sp), sceneBundle);
 
   appendTranscriptTurn(sp.transcript, {
     turn,
@@ -206,6 +212,7 @@ export function commitTurnOutputs(input: CommitTurnInput): CliAnalysisEvidenceOu
     ...(result.result.partial ? { partial: true } : {}),
     ...(result.result.terminationReason ? { terminationReason: result.result.terminationReason } : {}),
     deliveryVerdict: deriveDeliveryVerdict(result.result),
+    ...cliSceneReportMetadata(loadedCliSceneReport(sceneBundle)),
   });
   return evidenceBundle;
 }
@@ -225,7 +232,8 @@ export function commitSourceSupplementOutput(input: {
   };
   const turnPrefix = path.join(input.sp.turnsDir, String(input.turn).padStart(3, '0'));
   const turnPath = `${turnPrefix}.md`;
-  const current = fs.existsSync(turnPath) ? fs.readFileSync(turnPath, 'utf8').trimEnd() : '';
+  const previousTurnMarkdown = fs.existsSync(turnPath) ? fs.readFileSync(turnPath, 'utf8') : '';
+  const current = previousTurnMarkdown.trimEnd();
   const heading = localize(outputLanguage, '源码补充', 'Source supplement');
   const metrics = localize(
     outputLanguage,
@@ -237,6 +245,8 @@ export function commitSourceSupplementOutput(input: {
     input.analysisEvidence,
     turnMarkdown,
   );
+  rebindCliSceneReportTurnMarkdown({sp: input.sp, sessionId: input.sessionId, turn: input.turn,
+    turnMarkdown: previousTurnMarkdown, nextMarkdown: turnMarkdown});
   writeTurnMarkdown(input.sp, input.turn, turnMarkdown);
   writeJsonFile(input.sp, turnCliAnalysisEvidencePath(input.sp, input.turn), reboundEvidence);
   // Latest remains a pointer-by-value and is written after the per-turn pair.

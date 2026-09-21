@@ -42,6 +42,8 @@ export interface Stage1RunResult {
   scenes: DisplayedScene[];
   /** Extracted from trace_time_range; 0 when the step is missing. */
   traceDurationSec: number;
+  traceBounds?: BuildDisplayedScenesResult['traceBounds'];
+  inputCoverage?: BuildDisplayedScenesResult['inputCoverage'];
   /** The raw skill result, kept for callers that want diagnostics or rawResults. */
   rawResult: SkillExecutionResult;
 }
@@ -92,6 +94,8 @@ export class SceneStage1Runner {
       envelopes,
       scenes: built.scenes,
       traceDurationSec: built.traceDurationSec,
+      traceBounds: built.traceBounds,
+      inputCoverage: built.inputCoverage,
       rawResult,
     };
   }

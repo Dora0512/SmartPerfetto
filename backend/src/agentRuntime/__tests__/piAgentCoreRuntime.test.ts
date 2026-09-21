@@ -53,6 +53,7 @@ import * as qualityGateModule from '../../services/finalResultQualityGate';
 import {takeFinalizationContext} from '../analysisFinalizationContext';
 import {ArtifactStore} from '../../agentv3/artifactStore';
 import {loadPiProviderRuntimeModules} from '../engines/pi/piAgentCoreProvider';
+import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
 
 const mockClaudeVerifierVerifyConclusion = jest.fn();
 jest.mock('../engines/claude/claudeVerifier', () => {
@@ -332,6 +333,16 @@ function rejectAfter(ms: number, onTimeout?: () => void): Promise<never> {
       reject(new Error(`test guard timed out after ${ms}ms`));
     }, ms);
   });
+}
+
+/** Provider activity timing uses real MCP tools, without machine-local AIW corpus verification. */
+async function withProviderActivityTimingFixture<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.SMARTPERFETTO_AIW_PACK_ENABLED;
+  process.env.SMARTPERFETTO_AIW_PACK_ENABLED = '0';
+  try {return await run();} finally {
+    if (previous === undefined) delete process.env.SMARTPERFETTO_AIW_PACK_ENABLED;
+    else process.env.SMARTPERFETTO_AIW_PACK_ENABLED = previous;
+  }
 }
 
 function delay(ms: number): Promise<void> {
@@ -1976,7 +1987,7 @@ describe('experimental Pi agent-core runtime contract', () => {
     })).toBe(false);
   });
 
-  it('treats Pi text and thinking deltas as first visible output but not toolcall deltas', async () => {
+  it('treats Pi text and thinking deltas as first visible output but not toolcall deltas', async () => withProviderActivityTimingFixture(async () => {
     const sessionId = 'session-pi-toolcall-activity-output';
     const traceId = 'trace-pi';
     FakePiAgent.promptHandler = async (agent) => {
@@ -2032,9 +2043,9 @@ describe('experimental Pi agent-core runtime contract', () => {
     expect(receipt.firstOutputMs).toEqual(expect.any(Number));
     expect(receipt.firstOutputMs!).toBeGreaterThanOrEqual(45);
     sessionContextManager.remove(sessionId);
-  });
+  }));
 
-  it('treats Pi text delta message_update events as real provider activity', async () => {
+  it('treats Pi text delta message_update events as real provider activity', async () => withProviderActivityTimingFixture(async () => {
     const sessionId = 'session-pi-delta-output';
     const traceId = 'trace-pi';
     FakePiAgent.promptHandler = async (agent) => {
@@ -2083,9 +2094,9 @@ describe('experimental Pi agent-core runtime contract', () => {
     expect(FakePiAgent.instances[0].aborted).toBe(false);
     expect(runtimePerformanceRecorder.seal().firstOutputMs).toEqual(expect.any(Number));
     sessionContextManager.remove(sessionId);
-  });
+  }));
 
-  it('pauses Pi provider idle timeout during tools and resumes on repeated delta output', async () => {
+  it('pauses Pi provider idle timeout during tools and resumes on repeated delta output', async () => withProviderActivityTimingFixture(async () => {
     const sessionId = 'session-pi-idle-tool-pause';
     const traceId = 'trace-pi';
     const updates: StreamingUpdate[] = [];
@@ -2143,9 +2154,9 @@ describe('experimental Pi agent-core runtime contract', () => {
     expect(FakePiAgent.instances[0].aborted).toBe(false);
     expect(updates.map(update => update.type)).not.toContain('error');
     sessionContextManager.remove(sessionId);
-  });
+  }));
 
-  it('pauses Pi provider idle between prompt calls and re-arms it for correction prompts', async () => {
+  it('pauses Pi provider idle between prompt calls and re-arms it for correction prompts', async () => withProviderActivityTimingFixture(async () => {
     const sessionId = 'session-pi-idle-between-prompts';
     const traceId = 'trace-pi-idle-between-prompts';
     const verificationIssue = {
@@ -2224,7 +2235,7 @@ describe('experimental Pi agent-core runtime contract', () => {
     expect(result.terminationReason).toBeUndefined();
     expect(updates.map(update => update.type)).not.toContain('error');
     sessionContextManager.remove(sessionId);
-  });
+  }));
 
   it('keeps same-session ownership until abort cleanup settles and suppresses late Pi events', async () => {
     const sessionId = 'session-pi-abort-join';
@@ -3038,6 +3049,37 @@ describe('experimental Pi agent-core runtime contract', () => {
         providerRuntimeLoader: loadFakePiProviderRuntime,
       });
   }
+
+  it('scene runtime matrix: runs the pinned Pi provider through shared proposal and private seal', async () => {
+    const f = createSceneRuntimeMatrixFixture('pi');
+    const runtime = typedRuntime({trace: f.traceProcessorService});
+    let sceneTool: any;
+    let response: unknown;
+    FakePiAgent.promptHandler = async agent => {
+      expect(agent.state.model).toMatchObject({id: 'pi-test-model'});
+      const availableTool = agent.state.tools.find((item: any) => item.name === 'propose_scene_timeline');
+      if (availableTool) {
+        sceneTool = availableTool;
+        response = await sceneTool.execute('scene-call', f.proposal());
+      }
+      return [{role: 'assistant', stopReason: 'stop', content: [{type: 'text', text: 'Scene candidates submitted.'}]}];
+    };
+    try {
+      const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
+      expect(result.turnIntent).toMatchObject({source: 'product', sceneId: 'scene_reconstruction'});
+      expect(piClassifierCalls).toHaveLength(0);
+      expect(JSON.stringify(response)).toContain('accepted');
+      const snapshot = f.seal();
+      expect(snapshot.revision).toBe(1);
+      expect(snapshot.runId).toBe(f.scope.runId);
+      expect(snapshot.segments[0].evidence[0].source.originRunId).toBe(f.scope.runId);
+      expect(f.boundsQueries).toEqual([f.scope.traceId]);
+      f.controller.abort();
+      const late = await sceneTool.execute('late-scene-call', f.proposal()).catch((error: Error) => ({error: error.message}));
+      expect(JSON.stringify(late)).not.toContain('"accepted":true');
+    } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
+    expect((runtime as any).artifactStores.has(f.scope.sessionId)).toBe(false);
+  });
 
   function passVerification() {
     mockClaudeVerifierVerifyConclusion.mockImplementation(async () => ({

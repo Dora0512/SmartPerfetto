@@ -150,6 +150,21 @@
       "createdAt": "2026-07-29T00:00:00.000Z"
     },
     {
+      "caseId": "synthetic-scene-observation-contracts-v1",
+      "catalogAlias": "scene-observation-contracts",
+      "query": "Reconstruct user input, device state and application response over the trace. Preserve exact observations, unknowns and independent object identities.",
+      "analysisMode": "full",
+      "expectedScene": "scene_reconstruction",
+      "goldenPoints": [
+        "Distinguish physical input from dispatch recipients, touch movement from confirmed scrolling, and ACTION_SCROLL from a physical wheel.",
+        "Preserve the observed CANCEL and exact input endpoints; gaps remain unobserved rather than idle.",
+        "Retain leading unknown screen and charging states and raw DeviceState values 17 and 23 without inferring unlock, posture or a transition at the first sample.",
+        "Preserve raw Scroll and FlingStart marker timestamps and process identities; marker-name duration does not prove an observed action endpoint."
+      ],
+      "split": "validation",
+      "createdAt": "2026-09-21T00:00:00.000Z"
+    },
+    {
       "caseId": "synthetic-scheduler-cpu-contention-v1",
       "catalogAlias": "scheduler-cpu-contention",
       "query": "Analyze scheduler and CPU contention and identify the workload most responsible for delay.",

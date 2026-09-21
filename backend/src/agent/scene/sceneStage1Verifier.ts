@@ -24,13 +24,15 @@ import type {
 export interface Stage1VerifierInput {
   scenes: DisplayedScene[];
   traceDurationSec: number;
+  traceBounds?: {startTs: string; endTs: string};
+  inputCoverage?: Record<string, unknown>;
   enableLlm?: boolean;
 }
 
 export async function runSceneStage1Verifier(
   input: Stage1VerifierInput,
 ): Promise<SceneReconstructionVerification> {
-  const deterministic = runDeterministicVerification(input.scenes, input.traceDurationSec);
+  const deterministic = runDeterministicVerification(input);
   const shouldAskLlm =
     input.enableLlm === true &&
     sceneStoryConfig.llmVerify &&
@@ -40,8 +42,8 @@ export async function runSceneStage1Verifier(
     return {
       ...deterministic,
       llm: {
-        status: sceneStoryConfig.llmVerify ? 'not_needed' : 'skipped',
-        summary: sceneStoryConfig.llmVerify
+        status: input.enableLlm === true && sceneStoryConfig.llmVerify ? 'not_needed' : 'skipped',
+        summary: input.enableLlm === true && sceneStoryConfig.llmVerify
           ? '确定性复核未发现需要模型二次判断的高风险歧义。'
           : 'LLM 复核未启用；已完成确定性复核。',
       },
@@ -51,27 +53,47 @@ export async function runSceneStage1Verifier(
   const llm = await runLlmVerifier(input.scenes, deterministic);
   const status = llm.status === 'needs_review' || deterministic.status === 'needs_review'
     ? 'needs_review'
-    : deterministic.status;
+    : llm.status === 'failed' ? 'failed' : deterministic.status;
   return {
     ...deterministic,
     status,
     verifier: 'deterministic+llm',
-    summary: llm.summary || deterministic.summary,
+    summary: deterministic.summary,
     llm,
   };
 }
 
-function runDeterministicVerification(
-  scenes: DisplayedScene[],
-  traceDurationSec: number,
-): SceneReconstructionVerification {
+function runDeterministicVerification(input: Stage1VerifierInput): SceneReconstructionVerification {
+  const {scenes, traceDurationSec, inputCoverage} = input;
   const issues: SceneReconstructionVerification['issues'] = [];
   const lowConfidenceSceneIds: string[] = [];
   const conflictSceneIds: string[] = [];
+  const ids = new Set<string>();
+  const allIds = new Set(scenes.map(scene => scene.id));
+  const boundsStart = exactNs(input.traceBounds?.startTs);
+  const boundsEnd = exactNs(input.traceBounds?.endTs);
+
+  if (input.traceBounds && (boundsStart === null || boundsEnd === null || boundsEnd < boundsStart)) {
+    issues.push({severity: 'bad', type: 'invalid_trace_bounds', message: 'Trace bounds are invalid.'});
+  }
 
   for (const scene of scenes) {
+    const start = exactNs(scene.startTs);
+    const end = exactNs(scene.endTs);
+    if (start === null || end === null || end < start || !Number.isFinite(scene.durationMs) || scene.durationMs < 0) {
+      issues.push({severity: 'bad', sceneId: scene.id, type: 'invalid_timing', message: 'Scene time range is invalid.'});
+    } else if (boundsStart !== null && boundsEnd !== null && (start < boundsStart || end > boundsEnd)) {
+      issues.push({severity: 'bad', sceneId: scene.id, type: 'outside_trace_bounds', message: 'Scene extends outside the trace bounds.'});
+    }
+    if (ids.has(scene.id)) {
+      issues.push({severity: 'bad', sceneId: scene.id, type: 'duplicate_scene_id', message: 'Scene identifier is not unique.'});
+    }
+    ids.add(scene.id);
+    if (scene.parentSceneId && (scene.parentSceneId === scene.id || !allIds.has(scene.parentSceneId))) {
+      issues.push({severity: 'warning', sceneId: scene.id, type: 'missing_parent_scene', message: 'Scene parent is missing or refers to itself.'});
+    }
     const confidence = typeof scene.confidenceScore === 'number' ? scene.confidenceScore : 0;
-    if (confidence > 0 && confidence < 0.65) {
+    if (scene.confidenceScore !== undefined && (!Number.isFinite(confidence) || confidence < 0.65)) {
       lowConfidenceSceneIds.push(scene.id);
       issues.push({
         severity: 'warning',
@@ -109,6 +131,25 @@ function runDeterministicVerification(
     }
   }
 
+  for (const sceneId of idleActivityConflicts(scenes)) {
+    issues.push({severity: 'bad', sceneId, type: 'idle_overlaps_activity',
+      message: 'Idle overlaps an observed input or launch interval.'});
+  }
+  if (inputCoverage) {
+    if (Number(inputCoverage.missing_action_count) > 0 || Number(inputCoverage.missing_timestamp_count) > 0) {
+      issues.push({severity: 'warning', type: 'input_semantics_missing',
+        message: 'Some observed input events lack action or timestamp information.'});
+    }
+    if (Number(inputCoverage.output_truncated) > 0) {
+      issues.push({severity: 'warning', type: 'input_output_truncated',
+        message: 'Input extraction exceeded its output budget.'});
+    }
+    if (inputCoverage.source_status !== 'observed') {
+      issues.push({severity: 'warning', type: 'input_coverage_partial',
+        message: 'Input capture completeness is not established; gaps do not prove inactivity.'});
+    }
+  }
+
   if (scenes.length === 0 && traceDurationSec > 0) {
     issues.push({
       severity: 'warning',
@@ -130,11 +171,13 @@ function runDeterministicVerification(
   const warningIssueCount = issues.filter(issue => issue.severity === 'warning').length;
   const status = badIssueCount > 0 || warningIssueCount > 0 ? 'needs_review' : 'passed';
   const summary = status === 'passed'
-    ? `场景还原复核通过：${scenes.length} 个场景，${actionCount} 个可深钻。`
-    : `场景还原需要复核：${warningIssueCount} 个 warning，${badIssueCount} 个 bad，${actionCount} 个可深钻场景。`;
+    ? `场景结构检查通过：${scenes.length} 个场景；原始证据与全程覆盖尚未核验。`
+    : `场景结构检查发现 ${warningIssueCount} 个待核查项、${badIssueCount} 个冲突；原始证据尚未核验。`;
 
   return {
     status,
+    scope: 'structure',
+    evidenceStatus: 'not_checked',
     verifier: 'deterministic',
     summary,
     checkedSceneCount: scenes.length,
@@ -142,6 +185,43 @@ function runDeterministicVerification(
     conflictSceneIds,
     issues,
   };
+}
+
+function exactNs(value: string | undefined): bigint | null {
+  if (typeof value !== 'string' || !/^(0|[1-9]\d{0,18})$/.test(value)) return null;
+  const parsed = BigInt(value);
+  return parsed <= 9_223_372_036_854_775_807n ? parsed : null;
+}
+
+function idleActivityConflicts(scenes: DisplayedScene[]): string[] {
+  const ranges = scenes.filter(scene =>
+    (scene.sourceStepId === 'user_gestures' && scene.sceneType !== 'input_unknown') ||
+    scene.sourceStepId === 'app_launches',
+  ).flatMap(scene => {
+    const start = exactNs(scene.startTs);
+    const end = exactNs(scene.endTs);
+    return start !== null && end !== null && end > start ? [{start, end}] : [];
+  }).sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+  const merged: typeof ranges = [];
+  for (const range of ranges) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.start <= previous.end) {
+      if (range.end > previous.end) previous.end = range.end;
+    } else merged.push({...range});
+  }
+  return scenes.filter(scene => scene.sceneType === 'idle').flatMap(scene => {
+    const start = exactNs(scene.startTs);
+    const end = exactNs(scene.endTs);
+    if (start === null || end === null || end <= start) return [];
+    let left = 0;
+    let right = merged.length;
+    while (left < right) {
+      const mid = (left + right) >>> 1;
+      if (merged[mid].end <= start) left = mid + 1;
+      else right = mid;
+    }
+    return left < merged.length && merged[left].start < end ? [scene.id] : [];
+  });
 }
 
 function shouldRunLlmVerifier(result: SceneReconstructionVerification): boolean {
@@ -251,19 +331,17 @@ function buildVerifierPrompt(
   });
 }
 
-function parseVerifierJson(raw: string): { status: 'passed' | 'needs_review'; summary: string } {
-  const jsonText = raw.match(/\{[\s\S]*\}/)?.[0] ?? raw;
+export function parseVerifierJson(raw: string): { status: 'passed' | 'needs_review' | 'failed'; summary: string } {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*)\n```$/.exec(trimmed);
   try {
-    const parsed = JSON.parse(jsonText);
-    const status = parsed?.status === 'needs_review' ? 'needs_review' : 'passed';
-    const summary = typeof parsed?.summary === 'string' && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : 'LLM 复核完成。';
-    return { status, summary };
+    const parsed = JSON.parse(fenced ? fenced[1] : trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+      Object.keys(parsed).some(key => key !== 'status' && key !== 'summary') ||
+      (parsed.status !== 'passed' && parsed.status !== 'needs_review') ||
+      typeof parsed.summary !== 'string' || !parsed.summary.trim()) throw new Error('Invalid verifier response');
+    return {status: parsed.status, summary: parsed.summary.trim()};
   } catch {
-    return {
-      status: raw.includes('needs_review') || raw.includes('需要') ? 'needs_review' : 'passed',
-      summary: raw.slice(0, 300),
-    };
+    return {status: 'failed', summary: 'LLM 复核响应不符合约定，未获得有效复核结果。'};
   }
 }

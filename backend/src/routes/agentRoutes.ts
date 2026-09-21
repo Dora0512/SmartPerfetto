@@ -9,15 +9,20 @@
  */
 
 import express from 'express';
+import {createSceneRunDispatchBinding, sceneRunOwnerKey, type SceneRuntimeSeal} from '../agent/scene/sceneRuntimeBinding';
+import {projectSceneTimelineForClient} from '../agent/scene/sceneTimelineProjection';
+import {getSceneEvidenceArchive} from '../services/sceneReport/sceneEvidenceArchiveService';
+import {resolveCapabilityTraceProcessorIdentity} from '../services/capabilityManifestRuntimeIdentity';
+import {analysisDeliveryFingerprint} from '../types/analysisDelivery';
+import {SCENE_FINITE_RULE_VERSION} from '../agent/scene/sceneTimelineProposal';
+import {appendSceneAwareReplayEvent, includeLatestSceneReplay} from '../assistant/stream/sceneTimelineReplay';
+import {dispatchAnalysisRun, SmartPreviewSelectionError,
+  type AnalysisRunDispatchDependencies} from '../assistant/application/analysisRunDispatchService';
 import * as fs from 'fs';
 import * as path from 'path';
 import {randomUUID} from 'crypto';
-import {
-  getTraceProcessorService,
-  type TraceInfo,
-  type TraceProcessorLeaseQueryContext,
-} from '../services/traceProcessorService';
-import { createSessionLogger, SessionLogger } from '../services/sessionLogger';
+import {getTraceProcessorService, type TraceProcessorLeaseQueryContext} from '../services/traceProcessorService';
+import {SessionLogger} from '../services/sessionLogger';
 import { getHTMLReportGenerator } from '../services/htmlReportGenerator';
 import { buildAgentDrivenReportData } from '../services/agentReportData';
 import {
@@ -61,7 +66,6 @@ import {
   type ResourceOwnerFields,
 } from '../services/resourceOwnership';
 import { hasRbacPermission, sendForbidden } from '../services/rbac';
-import { requireAiEnabledForHttp, sendAiDisabledErrorIfPresent } from './aiCapabilityPolicyHttp';
 import { AiDisabledError, assertAiFeatureEnabled } from '../services/aiCapabilityPolicy';
 import { readTraceMetadataForContext } from '../services/traceMetadataStore';
 import { sessionContextManager, EnhancedSessionContext } from '../agent/context/enhancedSessionContext';
@@ -98,14 +102,7 @@ import {
   buildTraceProcessorLeaseModeDecision,
   type TraceProcessorLeaseModeDecision,
 } from '../services/traceProcessorLeaseModeDecision';
-import { evaluateAnalysisRunQuota, type EnterpriseQuotaDecision } from '../services/enterpriseQuotaPolicyService';
-import {
-  evaluateTenantMutationPolicy,
-  sendTenantMutationDeniedPayload,
-} from '../services/enterpriseTenantLifecycleService';
-import { estimateTraceProcessorRssBytes, TraceProcessorAdmissionError } from '../services/traceProcessorRamBudget';
-import {prepareAnalysisRunTraceProcessorLeases, analysisRunTraceProcessorFailureSide,
-  type AnalysisRunTraceProcessorLeases} from '../services/analysisRunTraceProcessorLease';
+import {estimateTraceProcessorRssBytes} from '../services/traceProcessorRamBudget';
 import { TraceProcessorFactory } from '../services/workingTraceProcessor';
 import { registerAgentLogsRoutes } from './agentLogsRoutes';
 import { registerAgentQuickSceneRoutes } from './agentQuickSceneRoutes';
@@ -114,12 +111,7 @@ import { registerAgentExternalIssueRoutes } from './agentExternalIssueRoutes';
 import { registerAgentResumeRoutes } from './agentResumeRoutes';
 import { registerAgentSessionCatalogRoutes } from './agentSessionCatalogRoutes';
 import { registerTeachingRoutes } from './agentTeachingRoutes';
-import {
-  AnalyzeOptionsError,
-  normalizeAnalyzeOptions,
-  normalizeSelectionContext,
-  type AnalyzeMode,
-} from './agent/normalizeAnalyzeOptions';
+import {AnalyzeOptionsError, type AnalyzeMode} from './agent/normalizeAnalyzeOptions';
 import { finalizeAgentDrivenSession } from './agent/finalizeAgentDrivenSession';
 import {executeManagedTraceSummaryV1} from '../services/managedTraceSummary';
 import {buildTraceSummaryAttributionV1} from '../services/traceSummaryAttribution';
@@ -148,20 +140,12 @@ import {
   type AnalysisRunPersistenceScope,
   type PersistedAnalysisRunStatus,
 } from '../services/analysisRunStore';
-import {
-  AgentAnalyzeSessionService,
-  AnalyzeSessionPreparationError,
-  buildAgentQueryWithContinuityNotice,
-  type AnalyzeSessionRunContext,
-} from '../assistant/application/agentAnalyzeSessionService';
+import {buildAgentQueryWithContinuityNotice, type AnalyzeSessionRunContext} from '../assistant/application/agentAnalyzeSessionService';
 import { buildAssistantResultContract } from '../assistant/contracts/assistantResultContract';
 import {
   persistCompletedAnalysisResultSnapshot,
   resolveAnalysisResultSceneType,
 } from '../services/analysisResultSnapshotPipeline';
-import {
-  getDefaultAndroidInternalsPackResolver,
-} from '../services/androidInternalsPack/androidInternalsPackResolver';
 // Agent-Driven Architecture v2.0 - Focus tracking
 import type { FocusInteraction } from '../agent/context/focusStore';
 // DataEnvelope types for v2.0 data contract
@@ -176,11 +160,7 @@ import { buildTraceContextDataEnvelopes, decorateTraceContextDatasets } from '..
 import {recordAdaptiveRoutingPostEvidenceBestEffort} from '../agentRuntime/adaptiveRoutingProjection';
 import type { ConclusionContract } from '../agent/core/conclusionContract';
 import {sanitizeSourceUseDecision} from '../services/codebase/sourceUseDecision';
-import {
-  projectPrimaryAnalysisOptions,
-  resolveAnalysisSourceActivation,
-  type AnalysisSourceActivation,
-} from '../services/codebase/analysisSourceActivationPolicy';
+import {type AnalysisSourceActivation} from '../services/codebase/analysisSourceActivationPolicy';
 import {resetRuntimeForSourceActivation} from '../services/codebase/analysisSourceContextTransition';
 import {
   AnalysisSourceSupplementFailure,
@@ -221,11 +201,7 @@ import {
   resolveKnowledgeScope,
   type KnowledgeScope,
 } from '../services/scopedKnowledgeStore';
-import {authorizeAnalysisContext} from '../services/analysisContextAuthorization';
-import {
-  registerPrivateAnalysisQueryForEcho,
-  revokeCodeAwareOutputGuards,
-} from '../services/security/codeAwareOutputRegistry';
+import {revokeCodeAwareOutputGuards} from '../services/security/codeAwareOutputRegistry';
 import {projectCodeAwareStreamingUpdate, projectOwnerCodeAwareStreamingUpdate} from '../services/security/codeAwareStreamingUpdateProjection';
 import {
   privateAnalysisFailureMessage,
@@ -262,13 +238,7 @@ import {
   getEffectiveRuntimeRegistrySnapshot,
   resolveEffectiveSkillRegistryForRuntime,
 } from '../services/selfEvolution/effectiveRuntimeRegistryProvider';
-import {
-  createRunManifestLifecycle,
-  disposeRunManifestLifecyclesForSession,
-  getActiveRunManifestLifecycle,
-  withRunManifestLifecycle,
-  type RunManifestLifecycle,
-} from '../services/selfEvolution/runManifestLifecycle';
+import {createRunManifestLifecycle, disposeRunManifestLifecyclesForSession, getActiveRunManifestLifecycle, type RunManifestLifecycle} from '../services/selfEvolution/runManifestLifecycle';
 import {getRunManifestStore} from '../services/selfEvolution/runManifestStore';
 import {
   FeedbackEventStore,
@@ -343,16 +313,6 @@ function normalizeRunSequence(value: unknown): number {
 
 function buildRunId(sessionId: string, sequence: number): string {
   return `run-${sessionId}-${sequence}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function sendAgentQuotaDenied(res: express.Response, decision: EnterpriseQuotaDecision): express.Response {
-  return res.status(decision.httpStatus).json({
-    success: false,
-    code: decision.code,
-    status: decision.status,
-    error: decision.message,
-    details: decision.details,
-  });
 }
 
 function terminalRunStatusForResult(
@@ -502,7 +462,7 @@ function startSessionRun(
   query: string,
   requestId: string,
 ): AnalyzeSessionRunContext | undefined {
-  if (session.cancellationInFlightRunId) return undefined;
+  if (session.cancellationInFlightRunId || session.sceneExecutionInFlightRunId) return undefined;
   const nextSequence = normalizeRunSequence(session.runSequence) + 1;
   session.runSequence = nextSequence;
 
@@ -1086,11 +1046,11 @@ function readRequiredCancellationRunId(value: unknown): string | undefined {
   return runId ? runId : undefined;
 }
 
-function sendCancelSessionRunResult(res: express.Response, result: CancelSessionRunResult): express.Response {
+function projectCancelSessionRunResult(result: CancelSessionRunResult): {status: number; body: Record<string, unknown>} {
   const { session, runId, runStatus, outcome, reason } = result;
   switch (outcome) {
     case 'source_enrichment_cancelled':
-      return res.json({
+      return {status: 200, body: {
         success: true,
         sessionId: session.sessionId,
         runId,
@@ -1099,10 +1059,10 @@ function sendCancelSessionRunResult(res: express.Response, result: CancelSession
         sessionStatus: session.status,
         outcome,
         reason,
-      });
+      }};
     case 'cancelled':
     case 'already_cancelled':
-      return res.json({
+      return {status: 200, body: {
         success: true,
         sessionId: session.sessionId,
         runId,
@@ -1110,17 +1070,17 @@ function sendCancelSessionRunResult(res: express.Response, result: CancelSession
         sessionStatus: session.status,
         outcome,
         reason,
-      });
+      }};
     case 'run_not_found':
-      return res.status(404).json({
+      return {status: 404, body: {
         success: false,
         sessionId: session.sessionId,
         runId,
         code: 'RUN_NOT_FOUND',
         error: 'Run not found in session',
-      });
+      }};
     case 'run_not_active':
-      return res.status(409).json({
+      return {status: 409, body: {
         success: false,
         sessionId: session.sessionId,
         runId,
@@ -1129,9 +1089,9 @@ function sendCancelSessionRunResult(res: express.Response, result: CancelSession
         status: runStatus,
         activeRunId: session.activeRun?.runId,
         sessionStatus: session.status,
-      });
+      }};
     case 'run_not_cancellable':
-      return res.status(409).json({
+      return {status: 409, body: {
         success: false,
         sessionId: session.sessionId,
         runId,
@@ -1139,8 +1099,13 @@ function sendCancelSessionRunResult(res: express.Response, result: CancelSession
         error: 'Run is already terminal',
         status: runStatus,
         sessionStatus: session.status,
-      });
+      }};
   }
+}
+
+function sendCancelSessionRunResult(res: express.Response, result: CancelSessionRunResult): express.Response {
+  const response = projectCancelSessionRunResult(result);
+  return res.status(response.status).json(response.body);
 }
 
 // Attach/echo requestId for all agent endpoints.
@@ -1170,6 +1135,9 @@ interface RunScopedSseReplayState {
 }
 
 interface AnalysisSession {
+  sceneTimelineReplay?: BufferedSseEvent;
+  sceneExecutionInFlightRunId?: string;
+  sceneReconstructionRunId?: string;
   orchestrator: IOrchestrator;
   orchestratorUpdateHandler?: (update: StreamingUpdate) => void;
   sessionId: string;
@@ -1602,6 +1570,13 @@ function sanitizePersistedAnalysisCompletedEvent(
 
   const result: AgentRuntimeAnalysisResult = {
     sessionId: session.sessionId,
+    sceneTimeline: data?.sceneTimeline?.schemaVersion === 'scene_timeline@1' &&
+      data.sceneTimeline.sessionId === session.sessionId && data.sceneTimeline.traceId === session.traceId &&
+      data.sceneTimeline.runId === (payload?.runId ?? data?.observability?.runId) &&
+      Array.isArray(data.sceneTimeline.segments) ? data.sceneTimeline : undefined,
+    sceneReport: data?.sceneReport?.schemaVersion === 'scene_report_ref@1' &&
+      data.sceneReport.sessionId === session.sessionId && data.sceneReport.traceId === session.traceId &&
+      data.sceneReport.runId === (payload?.runId ?? data?.observability?.runId) ? data.sceneReport : undefined,
     success: data?.success === true,
     findings: Array.isArray(data?.findings) ? data.findings : [],
     hypotheses: Array.isArray(data?.hypotheses) ? data.hypotheses : [],
@@ -1643,6 +1618,7 @@ function sanitizePersistedAnalysisCompletedEvent(
         turnIntent: undefined, completion: undefined, outputOrigin: undefined, runtimeAppendix: undefined,
         reportAssessment: undefined, investigationAssessment: undefined, deliveryAssurance: undefined,
         identityResolutions: undefined,
+        sceneTimeline: undefined, sceneReport: undefined,
         uiActionProposals: [],
       }
     : result;
@@ -1654,6 +1630,8 @@ function sanitizePersistedAnalysisCompletedEvent(
     ? {
         privateProjectionVersion: PRIVATE_ANALYSIS_EVENT_PROJECTION_VERSION,
         ...copyAnalysisDeliveryFields(durableResult),
+        sceneTimeline: durableResult.sceneTimeline ? projectSceneTimelineForClient(durableResult.sceneTimeline) : undefined,
+        sceneReport: durableResult.sceneReport,
         sourceUseDecision: durableResult.sourceUseDecision,
         sourceClaimVerificationResult: durableResult.sourceClaimVerificationResult,
         ...(typeof data?.success === 'boolean' ? {success: durableResult.success} : {}),
@@ -2107,25 +2085,6 @@ function isResolvedSessionAccessible(req: express.Request, resolved: ResolvedSes
   return isOwnedByContext(resolved, requireRequestContext(req));
 }
 
-async function ensureTraceAccessible(
-  req: express.Request,
-  res: express.Response,
-  traceId: string,
-  code = 'TRACE_NOT_UPLOADED',
-): Promise<boolean> {
-  const context = requireRequestContext(req);
-  const metadata = await readTraceMetadataForContext(traceId, context);
-  if (!metadata) {
-    res.status(404).json({
-      success: false,
-      error: 'Trace not found in backend',
-      code,
-    });
-    return false;
-  }
-  return true;
-}
-
 function requestedSessionIsVisible(sessionId: string, context: RequestContext): boolean {
   const activeSession = assistantAppService.getSession(sessionId);
   if (activeSession) {
@@ -2134,32 +2093,6 @@ function requestedSessionIsVisible(sessionId: string, context: RequestContext): 
 
   const persistedSession = SessionPersistenceService.getInstance().getSession(sessionId);
   return !persistedSession || isOwnedByContext(persistedSession.metadata, context);
-}
-
-function sendRunStartConflictIfNeeded(res: express.Response, session: AnalysisSession | undefined): boolean {
-  if (!session) return false;
-  if (session.cancellationInFlightRunId) {
-    res.status(409).json({
-      success: false,
-      code: 'CANCELLATION_IN_PROGRESS',
-      error: 'The current run is still stopping',
-      sessionId: session.sessionId,
-      runId: session.cancellationInFlightRunId,
-    });
-    return true;
-  }
-  const activeRun = session.activeRun;
-  if (session.status === 'awaiting_user' || activeRun?.status === 'pending' || activeRun?.status === 'running') {
-    res.status(409).json({
-      success: false,
-      code: 'RUN_ALREADY_ACTIVE',
-      error: 'The session already has an active run',
-      sessionId: session.sessionId,
-      runId: activeRun?.runId,
-    });
-    return true;
-  }
-  return false;
 }
 
 function normalizeRouteReferenceTraceId(value: unknown): string | undefined {
@@ -2606,714 +2539,43 @@ function isDedicatedSceneReplayRequest(query: string): boolean {
  *   }
  * }
  */
+function analysisRunDispatchDependencies(): AnalysisRunDispatchDependencies<AnalysisSession> {
+  return {
+    configuredOutputLanguage, sessionOutputLanguage, enterpriseLeasesEnabled,
+    leaseScopeFromRequestContext, buildLeaseModeDecisionForTrace, startSessionRun,
+    markSessionRunStatus, isSessionRunCancelled, abortHttpFinalizationRuns,
+    isStaleRun, settleSessionRunExecution, resetSessionRuntimeForSourceActivation,
+    createHttpRunManifestLifecycle, sealCompletedHttpRunManifest, finalizeHttpRunManifestLifecycle,
+    persistSessionRunState, cancelActiveAnalysisSourceEnrichment, assignSessionOwner,
+    requestedSessionIsVisible, resolveVisibleSessionReferenceTraceIdForTrace, buildRecoveredResultFromContext,
+    ensureToolsRegistered, isDedicatedSceneReplayRequest, runSmartAnalysis,
+    smartSelectionReportId, analyzeOptionsErrorMessage, smartPreviewSelectionErrorMessage,
+    resolveSmartPreviewReportForSelection, runAgentDrivenAnalysis, broadcastToAgentDrivenClients,
+    assistantAppService, httpAnalysisRunLeaseControllers, admittedLocalAnalysisRuns,
+    blockedSceneStrategyIds: SCENE_STRATEGY_IDS,
+    sceneRunHooks: {onAdmitted: ({session, run, traceId, signal, assertCurrent}) => {
+      session.sceneReconstructionRunId = run.runId;
+      const binding = createSceneRunDispatchBinding({scope: {runId: run.runId, sessionId: session.sessionId, traceId,
+        ownerKey: sceneRunOwnerKey(session)}, signal, assertCurrent});
+      return {bindOptions: binding.bindOptions, seal: binding.seal, release: async () => {
+        // Runtime maps must drop the exact run's facade while it is still live.
+        // Cleanup precedes settlement, so a following run cannot own this session yet.
+        try {await Promise.resolve(session.orchestrator.cleanupSession?.(session.sessionId));}
+        finally {binding.release();}
+      }};
+    }},
+  };
+}
+
 async function handleAnalyzeRequest(
   req: express.Request,
   res: express.Response,
   requestedSessionIdOverride?: string,
 ): Promise<void> {
-  let executionSession: AnalysisSession | undefined;
-  let executionRunId: string | undefined;
-  let executionRunManifestLifecycle: RunManifestLifecycle | undefined;
-  let executionHandedOff = false;
-  let runTraceProcessorLeases: AnalysisRunTraceProcessorLeases | undefined;
-  let releaseLeaseOwner = () => {};
-  try {
-    const requestId = getRequestId(req);
-    const requestContext = requireRequestContext(req);
-    const {
-      traceId,
-      query,
-      sessionId: bodyRequestedSessionId,
-      options: rawOptions = {},
-      selectionContext: rawSelectionContext,
-      referenceTraceId,
-      traceContext: rawTraceContext,
-      providerId,
-    } = req.body;
-    const requestedSessionId = requestedSessionIdOverride || bodyRequestedSessionId;
-    const earlyOutputLanguage: OutputLanguage = rawOptions &&
-      typeof rawOptions === 'object' &&
-      !Array.isArray(rawOptions) &&
-      (rawOptions.outputLanguage === 'en' || rawOptions.outputLanguage === 'zh-CN')
-      ? rawOptions.outputLanguage
-      : configuredOutputLanguage();
-    if (!hasRbacPermission(requestContext, 'agent:run')) {
-      sendForbidden(res, 'Starting analysis requires agent:run permission');
-      return;
-    }
-
-    if (!requireAiEnabledForHttp(res, 'agent_analyze')) {
-      return;
-    }
-
-    const tenantDecision = evaluateTenantMutationPolicy(requestContext);
-    if (!tenantDecision.allowed) {
-      res.status(tenantDecision.httpStatus).json(sendTenantMutationDeniedPayload(tenantDecision));
-      return;
-    }
-
-    if (!traceId) {
-      res.status(400).json({
-        success: false,
-        code: 'TRACE_ID_REQUIRED',
-        error: localize(earlyOutputLanguage, '缺少 traceId', 'traceId is required'),
-      });
-      return;
-    }
-
-    if (!query) {
-      res.status(400).json({
-        success: false,
-        code: 'QUERY_REQUIRED',
-        error: localize(earlyOutputLanguage, '缺少 query', 'query is required'),
-      });
-      return;
-    }
-
-    if (isDedicatedSceneReplayRequest(query)) {
-      res.status(400).json({
-        success: false,
-        code: 'SCENE_REPLAY_SEPARATED',
-        error: localize(
-          earlyOutputLanguage,
-          '场景还原已独立为专用功能',
-          'Scene reconstruction is available as a dedicated feature',
-        ),
-        hint: localize(
-          earlyOutputLanguage,
-          '请使用 /scene 命令（前端）或 POST /api/agent/v1/scene-reconstruct（后端）',
-          'Use the /scene command in the UI or POST /api/agent/v1/scene-reconstruct',
-        ),
-      });
-      return;
-    }
-
-    const inheritedReferenceTraceId = resolveVisibleSessionReferenceTraceIdForTrace(
-      requestedSessionId,
-      traceId,
-      requestContext,
-    );
-    let options: ReturnType<typeof normalizeAnalyzeOptions>;
-    try {
-      options = normalizeAnalyzeOptions(rawOptions, {
-        endpoint: requestedSessionIdOverride ? '/sessions/:id/runs' : '/analyze',
-        hasReferenceTraceId: !!referenceTraceId || !!inheritedReferenceTraceId,
-        ...(typeof traceId === 'string' ? { traceId } : {}),
-        ...(typeof referenceTraceId === 'string'
-          ? { referenceTraceId }
-          : typeof inheritedReferenceTraceId === 'string'
-            ? { referenceTraceId: inheritedReferenceTraceId }
-            : {}),
-      });
-    } catch (error: any) {
-      if (error instanceof AnalyzeOptionsError) {
-        const requestedErrorLanguage = rawOptions && typeof rawOptions === 'object' &&
-          !Array.isArray(rawOptions) && rawOptions.outputLanguage === 'en'
-          ? 'en'
-          : rawOptions && typeof rawOptions === 'object' &&
-              !Array.isArray(rawOptions) && rawOptions.outputLanguage === 'zh-CN'
-            ? 'zh-CN'
-            : configuredOutputLanguage();
-        res.status(error.httpStatus).json({
-          success: false,
-          error: analyzeOptionsErrorMessage(error, requestedErrorLanguage),
-          code: error.code,
-        });
-        return;
-      }
-      throw error;
-    }
-    const requestOutputLanguage = options.outputLanguage ?? configuredOutputLanguage();
-
-    const analysisContextAuthorization = authorizeAnalysisContext({
-      selection: options,
-      scope: knowledgeScopeFromRequestContext(requestContext),
-      outputLanguage: requestOutputLanguage,
-      canReadRegisteredContext: hasRbacPermission(requestContext, 'codebase:read'),
-    });
-    if (!analysisContextAuthorization.allowed) {
-      res.status(analysisContextAuthorization.httpStatus)
-        .json(analysisContextAuthorization.payload);
-      return;
-    }
-    const sourceActivation = resolveAnalysisSourceActivation({
-      query,
-      analysisMode: options.analysisMode,
-      codeAwareMode: options.codeAwareMode,
-      codebaseIds: options.codebaseIds,
-    });
-    const authorizedCodebaseSelection =
-      options.codeAwareMode &&
-      options.codeAwareMode !== 'off' &&
-      options.codebaseIds?.length
-        ? {
-            codeAwareMode: options.codeAwareMode,
-            codebaseIds: [...options.codebaseIds],
-          }
-        : undefined;
-
-    if (requestedSessionId && !requestedSessionIsVisible(requestedSessionId, requestContext)) {
-      sendResourceNotFound(res, 'Session not found');
-      return;
-    }
-    const liveRequestedSession = requestedSessionId
-      ? assistantAppService.getSession(requestedSessionId)
-      : undefined;
-    let validatedSmartPreviewReport: SceneReport | undefined;
-    if (
-      options.preset === 'smart' &&
-      options.smartAction === 'analyze' &&
-      smartSelectionReportId(options.smartSelection)
-    ) {
-      try {
-        validatedSmartPreviewReport = await resolveSmartPreviewReportForSelection({
-          session: (liveRequestedSession ?? {sceneStoryReport: undefined}) as AnalysisSession,
-          selection: options.smartSelection,
-          traceId,
-          owner: ownerFieldsFromContext(requestContext),
-        }) ?? undefined;
-      } catch (error) {
-        if (error instanceof SmartPreviewSelectionError) {
-          res.status(409).json({
-            success: false,
-            error: smartPreviewSelectionErrorMessage(
-              requestOutputLanguage,
-              error.reportId,
-            ),
-            code: error.code,
-          });
-          return;
-        }
-        throw error;
-      }
-    }
-
-    let selectionContext: ReturnType<typeof normalizeSelectionContext>;
-    try {
-      selectionContext = normalizeSelectionContext(rawSelectionContext);
-    } catch (error) {
-      if (error instanceof AnalyzeOptionsError) {
-        res.status(error.httpStatus).json({
-          success: false,
-          code: error.code,
-          error: analyzeOptionsErrorMessage(error, requestOutputLanguage),
-        });
-        return;
-      }
-      throw error;
-    }
-
-    // Verify trace exists
-    const traceProcessorService = getTraceProcessorService();
-    if (!(await ensureTraceAccessible(req, res, traceId))) {
-      return;
-    }
-    const trace = await traceProcessorService.getOrLoadTrace(traceId);
-    if (!trace) {
-      res.status(404).json({
-        success: false,
-        error: localize(requestOutputLanguage, '后端中未找到 trace', 'Trace not found in backend'),
-        hint: localize(
-          requestOutputLanguage,
-          '请先将 trace 上传到后端',
-          'Please upload the trace to the backend first',
-        ),
-        code: 'TRACE_NOT_UPLOADED',
-      });
-      return;
-    }
-
-    const validateReferenceTraceForRun = async (candidateReferenceTraceId: string): Promise<TraceInfo | null> => {
-      if (candidateReferenceTraceId === traceId) {
-        res.status(400).json({
-          success: false,
-          error: localize(
-            requestOutputLanguage,
-            'referenceTraceId 必须与 traceId 不同',
-            'referenceTraceId must be different from traceId',
-          ),
-          code: 'SAME_TRACE_COMPARISON',
-        });
-        return null;
-      }
-      if (!(await ensureTraceAccessible(
-        req,
-        res,
-        candidateReferenceTraceId,
-        'REFERENCE_TRACE_NOT_UPLOADED',
-      ))) {
-        return null;
-      }
-      const refTrace = await traceProcessorService.getOrLoadTrace(candidateReferenceTraceId);
-      if (!refTrace) {
-        res.status(404).json({
-          success: false,
-          error: localize(
-            requestOutputLanguage,
-            '后端中未找到对比 trace',
-            'Reference trace not found in backend',
-          ),
-          hint: localize(
-            requestOutputLanguage,
-            '请先将对比 trace 上传到后端',
-            'Please upload the reference trace to the backend first',
-          ),
-          code: 'REFERENCE_TRACE_NOT_UPLOADED',
-        });
-        return null;
-      }
-      return refTrace;
-    };
-
-    // Comparison mode: validate reference trace if provided
-    let requestedReferenceTrace: TraceInfo | null = null;
-    if (referenceTraceId) {
-      requestedReferenceTrace = await validateReferenceTraceForRun(referenceTraceId);
-      if (!requestedReferenceTrace) return;
-      console.log(`[AgentRoutes] Comparison mode: current=${traceId}, reference=${referenceTraceId}`);
-    }
-
-    const quotaDecision = evaluateAnalysisRunQuota(requestContext);
-    if (!quotaDecision.allowed) {
-      sendAgentQuotaDenied(res, quotaDecision);
-      return;
-    }
-
-    // Initialize tools
-    ensureToolsRegistered();
-
-    const analyzeSessionService = new AgentAnalyzeSessionService<AnalysisSession>({
-      assistantAppService,
-      createSessionLogger,
-      sessionPersistenceService: SessionPersistenceService.getInstance(),
-      buildRecoveredResultFromContext,
-      onSessionSecurityCleanup: sessionId => {
-        revokeCodeAwareOutputGuards(sessionId);
-        const active = assistantAppService.getSession(sessionId);
-        if (active) {
-          abortHttpFinalizationRuns(active);
-          void cancelActiveAnalysisSourceEnrichment(active, 'analysis_context_changed');
-        }
-      },
-    });
-
-    let sessionId: string;
-    let preparedSession: AnalysisSession | undefined;
-    let isNewSession = true;
-    if (sendRunStartConflictIfNeeded(res, liveRequestedSession)) return;
-    try {
-      const analysisContextFingerprint = buildAnalysisContextAuthorizationFingerprint(
-        options,
-        knowledgeScopeFromRequestContext(requestContext),
-      );
-      options = projectPrimaryAnalysisOptions(
-        {
-          ...options,
-          analysisContextFingerprint,
-        } as AnalysisOptions,
-        sourceActivation,
-      ) as ReturnType<typeof normalizeAnalyzeOptions>;
-      const availablePack = getDefaultAndroidInternalsPackResolver().resolve();
-      if (availablePack) {
-        (options as AnalysisOptions).androidInternalsPackPin = {
-          contentVersion: availablePack.contentVersion,
-          contentFingerprint: availablePack.contentFingerprint,
-          sourceRevision: availablePack.sourceRevision,
-        };
-      }
-      const prepared = analyzeSessionService.prepareSession({
-        traceId,
-        query,
-        requestedSessionId,
-        referenceTraceId,
-        providerId,
-        providerScope: {
-          tenantId: requestContext.tenantId,
-          workspaceId: requestContext.workspaceId,
-          userId: requestContext.userId,
-        },
-        options,
-        analysisContextFingerprint,
-      });
-      sessionId = prepared.sessionId;
-      preparedSession = prepared.session as AnalysisSession;
-      preparedSession.analysisContextFingerprint = analysisContextFingerprint;
-      preparedSession.androidInternalsPackPin ??=
-        (options as AnalysisOptions).androidInternalsPackPin;
-      (options as AnalysisOptions).androidInternalsPackPin =
-        preparedSession.androidInternalsPackPin;
-      isNewSession = prepared.isNewSession;
-      if (isNewSession) {
-        assignSessionOwner(preparedSession, requestContext);
-      } else if (!isOwnedByContext(preparedSession, requestContext)) {
-        sendResourceNotFound(res, 'Session not found');
-        return;
-      }
-    } catch (error: any) {
-      if (error instanceof AnalyzeSessionPreparationError) {
-        res.status(error.httpStatus).json({
-          success: false,
-          error: error.message,
-          code: error.code,
-          ...(error.hint ? { hint: error.hint } : {}),
-        });
-        return;
-      }
-      throw error;
-    }
-
-    const blockedStrategyIds = Array.from(
-      new Set([
-        ...SCENE_STRATEGY_IDS,
-        ...(Array.isArray(options.blockedStrategyIds) ? options.blockedStrategyIds : []),
-      ]),
-    );
-    const sessionForRun = preparedSession || assistantAppService.getSession(sessionId);
-    if (!sessionForRun) {
-      throw new Error(`Session ${sessionId} not found after preparation`);
-    }
-    const effectiveReferenceTraceId = referenceTraceId || sessionForRun.referenceTraceId;
-    let effectiveReferenceTrace = requestedReferenceTrace;
-    if (effectiveReferenceTraceId) {
-      if (!effectiveReferenceTrace || effectiveReferenceTraceId !== referenceTraceId) {
-        effectiveReferenceTrace = await validateReferenceTraceForRun(effectiveReferenceTraceId);
-        if (!effectiveReferenceTrace) return;
-      }
-      sessionForRun.referenceTraceId = effectiveReferenceTraceId;
-      sessionForRun.comparisonSource = 'raw_trace_pair';
-    }
-    await cancelActiveAnalysisSourceEnrichment(sessionForRun, 'superseded_by_new_analysis');
-    await resetSessionRuntimeForSourceActivation(sessionForRun, query, sourceActivation);
-    sessionForRun.sourceActivation = sourceActivation;
-    sessionForRun.sourceAuthorization = authorizedCodebaseSelection
-      ? {
-          ...authorizedCodebaseSelection,
-          analysisContextFingerprint: sessionForRun.analysisContextFingerprint as string,
-        }
-      : undefined;
-    sessionForRun.codeAwareMode = options.codeAwareMode;
-    sessionForRun.codebaseIds = Array.isArray(options.codebaseIds) ? options.codebaseIds : undefined;
-    sessionForRun.knowledgeSourceIds = Array.isArray(options.knowledgeSourceIds)
-      ? options.knowledgeSourceIds
-      : undefined;
-    if (sessionUsesPrivateKnowledge(sessionForRun)) {
-      registerPrivateAnalysisQueryForEcho(sessionId, query);
-    }
-    if (validatedSmartPreviewReport) {
-      sessionForRun.sceneStoryReport = validatedSmartPreviewReport;
-    }
-
-    if (sendRunStartConflictIfNeeded(res, sessionForRun)) return;
-    const runContext = startSessionRun(sessionForRun, query, requestId);
-    if (!runContext) {
-      sendRunStartConflictIfNeeded(res, sessionForRun);
-      return;
-    }
-    executionSession = sessionForRun;
-    executionRunId = runContext.runId;
-    sessionForRun.logger.setMetadata({
-      requestId: runContext.requestId,
-      runId: runContext.runId,
-      runSequence: runContext.sequence,
-    });
-    const runManifestLifecycle = await createHttpRunManifestLifecycle(
-      sessionForRun,
-      runContext,
-      {
-        analysisMode: options.analysisMode,
-        referenceTraceId: effectiveReferenceTraceId,
-      },
-    );
-    executionRunManifestLifecycle = runManifestLifecycle;
-
-    const leaseController = new AbortController();
-    const leaseControllers = httpAnalysisRunLeaseControllers.get(sessionForRun) ?? new Map<string, AbortController>();
-    httpAnalysisRunLeaseControllers.set(sessionForRun, leaseControllers);
-    leaseControllers.set(runContext.runId, leaseController);
-    releaseLeaseOwner = () => {
-      runTraceProcessorLeases?.release();
-      if (leaseControllers.get(runContext.runId) === leaseController) leaseControllers.delete(runContext.runId);
-    };
-    try {
-      runTraceProcessorLeases = await prepareAnalysisRunTraceProcessorLeases({
-        service: traceProcessorService, scope: leaseScopeFromRequestContext(requestContext),
-        runId: runContext.runId, sessionId, currentTraceId: traceId, referenceTraceId: effectiveReferenceTraceId,
-        signal: leaseController.signal,
-        assertCurrent: () => {
-          if (assistantAppService.getSession(sessionId) !== sessionForRun ||
-            isSessionRunCancelled(sessionForRun, runContext.runId) || isStaleRun(sessionForRun, runContext.runId)) {
-            throw new DOMException('Analysis run is no longer current', 'AbortError');
-          }
-        },
-        onInvalidated: () => abortHttpFinalizationRuns(sessionForRun, runContext.runId),
-        metadata: {requestId: runContext.requestId, runSequence: runContext.sequence},
-        ...(enterpriseLeasesEnabled() ? {decideMode: (selectedTrace: {id: string; size: number}) =>
-          buildLeaseModeDecisionForTrace(leaseScopeFromRequestContext(requestContext), selectedTrace.id, 'agent_run', {
-            analysisMode: options.analysisMode, traceSizeBytes: selectedTrace.size,
-          })} : {}),
-      });
-      runTraceProcessorLeases.assertCurrent();
-      if (!resolveFeatureConfig().enterprise) {
-        const admittedRuns = admittedLocalAnalysisRuns.get(sessionForRun) ?? new Set<string>();
-        admittedRuns.add(runContext.runId);
-        admittedLocalAnalysisRuns.set(sessionForRun, admittedRuns);
-        persistSessionRunState(sessionForRun, 'pending', undefined, runContext.runId);
-      }
-    } catch (leaseError: any) {
-      if (leaseController.signal.aborted || isSessionRunCancelled(sessionForRun, runContext.runId) ||
-        isStaleRun(sessionForRun, runContext.runId)) {
-        res.json({success: false, status: 'cancelled', sessionId, runId: runContext.runId});
-        return;
-      }
-      sessionForRun.status = 'failed';
-      sessionForRun.error = leaseError.message;
-      markSessionRunStatus(sessionForRun, 'failed', leaseError.message, runContext.runId);
-      const admission = leaseError instanceof TraceProcessorAdmissionError;
-      res.status(admission ? 503 : 409).json({success: false,
-        code: admission ? 'TRACE_PROCESSOR_RAM_BUDGET_EXCEEDED' : leaseError.code ??
-          (analysisRunTraceProcessorFailureSide(leaseError) === 'reference'
-            ? 'REFERENCE_TRACE_PROCESSOR_LEASE_UNAVAILABLE' : 'TRACE_PROCESSOR_LEASE_UNAVAILABLE'),
-        error: leaseError.message, ...(admission ? {details: leaseError.decision} : {}),
-      });
-      return;
-    }
-    const leases = runTraceProcessorLeases;
-    // Keep legacy enterprise response metadata; personal private processor identities stay internal.
-    const currentLeaseEntry = enterpriseLeasesEnabled() ? leases.entries.find(entry => entry.side === 'current') : undefined;
-    const referenceLeaseEntry = enterpriseLeasesEnabled() ? leases.entries.find(entry => entry.side === 'reference') : undefined;
-    const agentRunLease = currentLeaseEntry?.lease;
-    const referenceAgentRunLease = referenceLeaseEntry?.lease;
-    const agentRunLeaseDecision = currentLeaseEntry?.decision;
-    const referenceAgentRunLeaseDecision = referenceLeaseEntry?.decision;
-
-    if (options.preset === 'smart') {
-      const smartAnalysisPromise = withRunManifestLifecycle(
-        runManifestLifecycle,
-        () => leases.run(() => runSmartAnalysis(sessionId, query, traceId, {
-          runContext,
-          traceProcessorService,
-          smartAction: options.smartAction ?? 'preview',
-          smartSelection: options.smartSelection,
-          forceRefresh: options.forceRefresh === true,
-          providerId: sessionForRun.providerId,
-          analysisContextFingerprint: sessionForRun.analysisContextFingerprint,
-          analysisMode: options.analysisMode,
-          blockedStrategyIds,
-          owner: ownerFieldsFromContext(requestContext),
-          knowledgeScope: knowledgeScopeFromRequestContext(requestContext),
-          codeAwareMode: options.codeAwareMode,
-          codebaseIds: options.codebaseIds,
-          knowledgeSourceIds: options.knowledgeSourceIds,
-          runManifestAttributionSink: runManifestLifecycle.builder,
-        })),
-      )
-        .then(() => {
-          sealCompletedHttpRunManifest(
-            sessionForRun,
-            runManifestLifecycle,
-            runContext.runId,
-          );
-        })
-        .catch((error) => {
-          const session = assistantAppService.getSession(sessionId);
-          if (session) {
-            const privateKnowledge = sessionUsesPrivateKnowledge(session);
-            const publicErrorMessage = privateKnowledge
-              ? projectOwnerAnalysisError(sessionId, error, sessionOutputLanguage(session))
-              : error.message;
-            if (isSessionRunCancelled(session, runContext.runId) || isStaleRun(session, runContext.runId)) {
-              session.logger.info('AgentRoutes', 'Ignoring smart analysis failure after cancellation', {
-                sessionId,
-                runId: runContext.runId,
-                error: privateKnowledge ? privateAnalysisFailureMessage(sessionOutputLanguage(session)) : error?.message || String(error),
-              });
-              return;
-            }
-            session.logger.error(
-              'AgentRoutes',
-              'Smart analysis failed',
-              privateKnowledge ? new Error(privateAnalysisFailureMessage(sessionOutputLanguage(session))) : error,
-            );
-            session.status = 'failed';
-            session.error = publicErrorMessage;
-            markSessionRunStatus(session, 'failed', publicErrorMessage, runContext.runId);
-            broadcastToAgentDrivenClients(
-              sessionId,
-              {
-                type: 'error',
-                content: { message: publicErrorMessage, error: publicErrorMessage },
-                timestamp: Date.now(),
-              },
-              runContext.runId,
-            );
-          }
-        });
-      executionHandedOff = true;
-      void smartAnalysisPromise.finally(() => {
-        releaseLeaseOwner();
-        finalizeHttpRunManifestLifecycle(
-          sessionForRun,
-          runManifestLifecycle,
-        );
-        settleSessionRunExecution(sessionForRun, runContext.runId);
-      });
-
-      res.json({
-        success: true,
-        sessionId,
-        message: isNewSession ? 'Smart analysis started' : 'Smart analysis started',
-        isNewSession,
-        providerSnapshotChanged: preparedSession?.providerSnapshotChanged || undefined,
-        architecture: 'agent-driven',
-        preset: 'smart',
-        runId: runContext.runId,
-        requestId: runContext.requestId,
-        runSequence: runContext.sequence,
-        observability: {
-          runId: runContext.runId,
-          requestId: runContext.requestId,
-          runSequence: runContext.sequence,
-        },
-      });
-      return;
-    }
-
-    // Validate traceContext — must be array of objects with columns/rows
-    const traceContext = Array.isArray(rawTraceContext)
-      ? rawTraceContext.filter(
-          (d: any) => d && typeof d === 'object' && Array.isArray(d.columns) && Array.isArray(d.rows),
-        )
-      : undefined;
-
-    const sessionRunIsInactive =
-      isSessionRunCancelled(sessionForRun, runContext.runId) || isStaleRun(sessionForRun, runContext.runId);
-    if (sessionRunIsInactive) {
-      sessionForRun.logger.info('AgentRoutes', 'Skipping agent-driven analysis for inactive run', {
-        sessionId,
-        runId: runContext.runId,
-      });
-    }
-    let analysisPromise: Promise<void> = Promise.resolve();
-    if (!sessionRunIsInactive) {
-      analysisPromise = withRunManifestLifecycle(
-        runManifestLifecycle,
-        () => leases.run(() => runAgentDrivenAnalysis(sessionId, query, traceId, {
-          ...options,
-          selectionContext,
-          blockedStrategyIds,
-          traceProcessorService,
-          runContext,
-          referenceTraceId: effectiveReferenceTraceId,
-          traceContext: traceContext && traceContext.length > 0 ? traceContext : undefined,
-          providerId: sessionForRun.providerId !== undefined ? sessionForRun.providerId : providerId,
-          knowledgeScope: knowledgeScopeFromRequestContext(requestContext),
-          runManifestAttributionSink: runManifestLifecycle.builder,
-        })),
-      )
-        .then(() => {
-          sealCompletedHttpRunManifest(
-            sessionForRun,
-            runManifestLifecycle,
-            runContext.runId,
-          );
-        })
-        .catch((error) => {
-          const session = assistantAppService.getSession(sessionId);
-          if (session) {
-            const privateKnowledge = sessionUsesPrivateKnowledge(session);
-            const publicErrorMessage = privateKnowledge
-              ? projectOwnerAnalysisError(sessionId, error, sessionOutputLanguage(session))
-              : error?.message || String(error);
-            if (isSessionRunCancelled(session, runContext.runId) || isStaleRun(session, runContext.runId)) {
-              session.logger.info('AgentRoutes', 'Ignoring agent-driven analysis failure after cancellation', {
-                sessionId,
-                runId: runContext.runId,
-                error: privateKnowledge ? privateAnalysisFailureMessage(sessionOutputLanguage(session)) : publicErrorMessage,
-              });
-              return;
-            }
-            session.logger.error(
-              'AgentRoutes',
-              'Agent-driven analysis failed',
-              privateKnowledge ? new Error(privateAnalysisFailureMessage(sessionOutputLanguage(session))) : error,
-            );
-            session.status = 'failed';
-            session.error = publicErrorMessage;
-            markSessionRunStatus(session, 'failed', publicErrorMessage, runContext.runId);
-            broadcastToAgentDrivenClients(
-              sessionId,
-              {
-                type: 'error',
-                content: {message: publicErrorMessage, error: publicErrorMessage},
-                timestamp: Date.now(),
-              },
-              runContext.runId,
-            );
-          }
-        });
-    }
-    analysisPromise = analysisPromise.finally(() => {
-      finalizeHttpRunManifestLifecycle(
-        sessionForRun,
-        runManifestLifecycle,
-      );
-    });
-    executionHandedOff = true;
-    void analysisPromise.finally(() => {
-      releaseLeaseOwner();
-      settleSessionRunExecution(sessionForRun, runContext.runId);
-    });
-
-    res.json({
-      success: true,
-      sessionId,
-      message: preparedSession?.providerSnapshotChanged
-        ? 'Provider configuration changed; continuing with a fresh SDK session'
-        : isNewSession
-          ? 'Analysis started'
-          : 'Continuing analysis (multi-turn)',
-      isNewSession,
-      providerSnapshotChanged: preparedSession?.providerSnapshotChanged || undefined,
-      architecture: 'agent-driven',
-      runId: runContext.runId,
-      leaseId: agentRunLease?.id,
-      leaseState: agentRunLease?.state,
-      leaseMode: agentRunLease?.mode,
-      leaseModeReason: agentRunLeaseDecision?.reason,
-      leaseQueueLength: agentRunLeaseDecision?.signals?.sharedQueueLength,
-      referenceLeaseId: referenceAgentRunLease?.id,
-      referenceLeaseState: referenceAgentRunLease?.state,
-      referenceLeaseMode: referenceAgentRunLease?.mode,
-      referenceLeaseModeReason: referenceAgentRunLeaseDecision?.reason,
-      requestId: runContext.requestId,
-      runSequence: runContext.sequence,
-      observability: {
-        runId: runContext.runId,
-        requestId: runContext.requestId,
-        runSequence: runContext.sequence,
-      },
-    });
-  } catch (error: any) {
-    if (sendAiDisabledErrorIfPresent(res, error)) {
-      return;
-    }
-    console.error('[AgentRoutes] Analyze error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Agent analysis failed',
-    });
-  } finally {
-    if (!executionHandedOff) releaseLeaseOwner();
-    if (!executionHandedOff && executionSession && executionRunId) {
-      if (executionRunManifestLifecycle) {
-        finalizeHttpRunManifestLifecycle(
-          executionSession,
-          executionRunManifestLifecycle,
-        );
-      }
-      settleSessionRunExecution(executionSession, executionRunId);
-    }
-  }
+  const response = await dispatchAnalysisRun({entry: 'analysis', requestId: getRequestId(req),
+    context: requireRequestContext(req), body: req.body ?? {}, requestedSessionIdOverride},
+    analysisRunDispatchDependencies());
+  res.status(response.status).json(response.body);
 }
 
 registerAgentConversationRoutes(router);
@@ -3356,7 +2618,7 @@ function resolveReplayBufferForStream(session: AnalysisSession, runId?: string):
     }
     return Array.from(byKey.values()).sort((a, b) => a.seqId - b.seqId);
   }
-  const source = session.sseEventBuffer;
+  const source = includeLatestSceneReplay(session.sseEventBuffer, session.sceneTimelineReplay, targetRunId);
   if (!targetRunId) return source;
   return source.filter((event) => !event.runId || event.runId === targetRunId);
 }
@@ -3554,14 +2816,32 @@ function connectedStreamQuery(
     : streamRun?.query ?? session.query;
 }
 
-router.get('/:sessionId/stream', (req, res) => {
-  handleSessionStream(req, res, req.params.sessionId);
+async function ensureSceneHistoryAccessible(req: express.Request, res: express.Response, session: AnalysisSession): Promise<boolean> {
+  if (!session.sceneReconstructionRunId && !session.result?.sceneTimeline && !session.sceneTimelineReplay &&
+      session.result?.turnIntent?.sceneId !== 'scene_reconstruction' && !isDedicatedSceneReplayRequest(session.query)) return true;
+  if (!await readTraceMetadataForContext(session.traceId, requireRequestContext(req))) {
+    sendResourceNotFound(res, 'Scene trace is no longer accessible'); return false;
+  }
+  const reference = session.result?.sceneReport;
+  if (reference && (reference.expiresAt <= Date.now() || !await sceneStoryService.getFinalizedReport(sceneRunOwnerKey(session), reference.reportId))) {
+    sendResourceNotFound(res, 'Scene report not found or expired'); return false;
+  }
+  return true;
+}
+async function handleAuthorizedSessionStream(req: express.Request, res: express.Response, sessionId: string,
+  options: {runId?: string} = {}): Promise<void> {
+  const session = getAuthorizedSession(req, res, sessionId);
+  if (!session || !await ensureSceneHistoryAccessible(req, res, session)) return;
+  handleSessionStream(req, res, sessionId, options);
+}
+router.get('/:sessionId/stream', async (req, res) => {
+  await handleAuthorizedSessionStream(req, res, req.params.sessionId);
 });
 
-router.get('/runs/:runId/stream', (req, res) => {
+router.get('/runs/:runId/stream', async (req, res) => {
   const session = getAuthorizedSessionByRunId(req, res, req.params.runId);
   if (!session) return;
-  handleSessionStream(req, res, session.sessionId, { runId: req.params.runId });
+  await handleAuthorizedSessionStream(req, res, session.sessionId, {runId: req.params.runId});
 });
 
 /**
@@ -3569,11 +2849,11 @@ router.get('/runs/:runId/stream', (req, res) => {
  *
  * Get analysis status (for polling)
  */
-router.get('/:sessionId/status', (req, res) => {
+router.get('/:sessionId/status', async (req, res) => {
   const { sessionId } = req.params;
 
   const session = getAuthorizedSession(req, res, sessionId);
-  if (!session) return;
+  if (!session || !await ensureSceneHistoryAccessible(req, res, session)) return;
 
   const response: any = {
     success: true,
@@ -3602,6 +2882,8 @@ router.get('/:sessionId/status', (req, res) => {
       const resultContract = buildSessionResultContract(session, projectedFindings);
       response.result = {
         ...copyAnalysisDeliveryFields(result),
+        sceneTimeline: result.sceneTimeline ? projectSceneTimelineForClient(result.sceneTimeline) : undefined,
+        sceneReport: result.sceneReport,
         sourceUseDecision: result.sourceUseDecision,
         sourceClaimVerificationResult: result.sourceClaimVerificationResult,
         success: result.success,
@@ -4352,6 +3634,7 @@ const sceneJobArtifactStore = new FileSystemSceneJobArtifactStore(sceneStoryConf
 // lookup, so it must outlive a single request. SkillExecutor is still created
 // per-request inside the route handler.
 const sceneStoryService = new SceneStoryService({
+  evidenceArchive: getSceneEvidenceArchive(),
   broadcast: broadcastToAgentDrivenClients,
   getSession: (id) => assistantAppService.getSession(id) as any,
   isRunCurrent: (sessionId, runId) => {
@@ -4367,12 +3650,19 @@ const sceneStoryService = new SceneStoryService({
 });
 
 registerSceneReconstructRoutes(router, {
+  streamSceneAnalysis: handleAuthorizedSessionStream,
+  checkSceneHistory: async (req, res, sessionId) => {
+    const session = getAuthorizedSession(req, res, sessionId);
+    return Boolean(session && await ensureSceneHistoryAccessible(req, res, session));
+  },
+  projectSceneResult: session => session.result ? projectStoredHttpResult(session, session.result) : undefined,
+  getRequestId,
+  dispatchSceneAnalysis: input => dispatchAnalysisRun({...input, entry: 'scene_reconstruction'}, analysisRunDispatchDependencies()),
+  cancelSceneRun: async (sessionId, runId) => {
+    const result = await cancelSessionRun(sessionId, runId, 'Scene reconstruction cancelled by user');
+    return result ? projectCancelSessionRunResult(result) : {status: 404, body: {success: false, code: 'SESSION_NOT_FOUND'}};
+  },
   assistantAppService,
-  streamProjector,
-  ensureToolsRegistered,
-  runAgentDrivenAnalysis,
-  broadcastToAgentDrivenClients,
-  sendAgentDrivenResult,
   isSceneReplayOnlyQuery,
   buildSceneReplayNarrative,
   normalizeNarrativeForClient,
@@ -4806,16 +4096,7 @@ export function analyzeOptionsErrorMessage(
   }
 }
 
-export class SmartPreviewSelectionError extends Error {
-  readonly code = 'smart_preview_selection_stale';
-  readonly reportId: string;
-
-  constructor(reportId: string) {
-    super('Smart preview selection is unavailable');
-    this.name = 'SmartPreviewSelectionError';
-    this.reportId = reportId;
-  }
-}
+export {SmartPreviewSelectionError} from '../assistant/application/analysisRunDispatchService';
 
 export function smartPreviewSelectionErrorMessage(
   outputLanguage: OutputLanguage,
@@ -5716,11 +4997,12 @@ async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId:
   let allowAutomaticPrefetch = false;
   let finalizationContext: RuntimeFinalizationContext | undefined;
   let contextTransferred = false;
+  let sceneSeal: SceneRuntimeSeal | undefined;
   let acceptingUpdates = true;
   const rawDataEnvelopes: DataEnvelope[] = [...(session.dataEnvelopes ?? [])];
   const canPrefetch = () => {
     finalizationRun.assertCurrent();
-    return allowAutomaticPrefetch && Date.now() < runtimeDeadlineMs;
+    return !options.sceneRunBinding && allowAutomaticPrefetch && Date.now() < runtimeDeadlineMs;
   };
   const agentQuery =
     session.agentQuery && session.query === query
@@ -5730,7 +5012,7 @@ async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId:
   // Track generation is a lightweight derivation step from DataEnvelopes.
   // Enable by default (unless explicitly disabled) so `/api/agent/v1/analyze` can
   // also produce TrackEvent(s) when the scene reconstruction skill runs.
-  const shouldGenerateTracks = options.generateTracks !== false;
+  const shouldGenerateTracks = !options.sceneRunBinding && options.generateTracks !== false;
 
   // Capture LLM call telemetry into session logs (privacy-safe: hashes + params only)
   const modelRouter = getSharedModelRouter();
@@ -5777,6 +5059,13 @@ async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId:
     const normalizedUpdate = normalizeAgentDrivenUpdate(projectedUpdate, outputLanguage);
 
     if (normalizedUpdate.type === 'conclusion' || normalizedUpdate.type === 'answer_token') return;
+    if (options.sceneRunBinding && normalizedUpdate.type === 'error') {
+      // A provider failure may still leave a valid committed proposal. Only the
+      // product's finalization/catch path owns terminal delivery for scene runs.
+      broadcastToAgentDrivenClients(sessionId, {type: 'degraded',
+        content: {fallback: 'scene_runtime_error'}, timestamp: normalizedUpdate.timestamp}, runIdForAnalysis);
+      return;
+    }
     finalizationRun.assertCurrent();
 
     // Final narrative is emitted through analysis_completed after deterministic
@@ -5889,8 +5178,7 @@ async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId:
     console.log('[AgentRoutes.AgentDriven] Starting orchestrator.analyze...');
     finalizationRun.assertCurrent();
     let result = await logger.timed('AgentDrivenAnalysis', 'analyze', async () => {
-        const analyze = () =>
-          session.orchestrator.analyze(agentQuery, sessionId, traceId, {
+        const baseAnalyzeOptions: AnalysisOptions = {
             traceProcessorService: options.traceProcessorService,
             packageName: options.packageName,
             timeRange: options.timeRange,
@@ -5917,7 +5205,10 @@ async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId:
             userId: session.userId,
             runId: runIdForAnalysis,
             runManifestAttributionSink: options.runManifestAttributionSink,
-          }).then(nativeResult => {
+          };
+        const analyzeOptions = options.sceneRunBinding ? options.sceneRunBinding.bindOptions(baseAnalyzeOptions) : baseAnalyzeOptions;
+        const analyze = () => session.orchestrator.analyze(agentQuery, sessionId, traceId, analyzeOptions).then(nativeResult => {
+            sceneSeal = options.sceneRunBinding?.seal();
             finalizationContext = takeFinalizationContext(nativeResult);
             acceptingUpdates = false;
             session.orchestrator.off('update', handleUpdate);
@@ -6037,12 +5328,50 @@ async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId:
     contextTransferred = true;
     const finalized = await finalizeAnalysisResult({
       result, context: finalizationContext, owner: finalizationRun.owner, query,
+      ...(sceneSeal ? {scene: {seal: sceneSeal, outputLanguage, providerId: options.providerId,
+        scope: {runId: runIdForAnalysis, sessionId, traceId,
+        ownerKey: sceneRunOwnerKey(session)}}} : {}),
       dataEnvelopes: rawDataEnvelopes, comparisonReportSection: session.comparisonReportSection,
       comparisonIdentity,
       caseRetrieval,
     });
     finalizationRun.assertCurrent();
     result = finalized.result;
+    if (finalized.scenePublication && result.sceneTimeline) {
+      try {
+        const requestedRange = result.sceneTimeline.scanCoverage?.requestedWindow;
+        if (!requestedRange) throw new Error('scene_report_bounds_unavailable');
+        const tp = options.traceProcessorService;
+        const processorInput = tp?.getRunningCapabilityTraceProcessorInput?.(traceId);
+        const processorIdentity = processorInput ? await resolveCapabilityTraceProcessorIdentity(processorInput)
+          : {source: 'unknown', reason: 'runtime_identity_unavailable'};
+        finalizationRun.assertCurrent();
+        const traceContentHash = tp ? await computeTraceContentHash(tp, traceId) : null;
+        finalizationRun.assertCurrent();
+        const published = await sceneStoryService.acceptFinalizedTimeline({publication: finalized.scenePublication,
+          scope: {runId: runIdForAnalysis, sessionId, traceId, ownerKey: sceneRunOwnerKey(session)},
+          assertCurrent: finalizationRun.assertCurrent,
+          meta: {owner: session, requestedRange, traceContentHash,
+            schemaVersion: result.sceneTimeline.schemaVersion, ruleVersion: SCENE_FINITE_RULE_VERSION,
+            producerFingerprint: analysisDeliveryFingerprint({
+              coveragePlan: result.sceneTimeline.scanCoverage?.plan?.fingerprint ?? null,
+              definitions: [...new Set(result.sceneTimeline.segments.flatMap(item =>
+                item.evidence.flatMap(excerpt => Object.values(excerpt.fields).map(field => field.origin.definitionFingerprint))))].sort(),
+            }),
+            traceProcessorFingerprint: analysisDeliveryFingerprint(processorIdentity)}});
+        finalizationRun.assertCurrent();
+        session.sceneStoryReport = published.report;
+        result.sceneReport = {schemaVersion: 'scene_report_ref@1', reportId: published.report.reportId,
+          traceId, sessionId, runId: runIdForAnalysis, revision: result.sceneTimeline.revision,
+          manifestSha256: published.archiveRef.manifestSha256, expiresAt: published.archiveRef.expiresAt};
+      } catch (error) {
+        finalizationRun.assertCurrent();
+        result.partial = true;
+        result.sceneTimeline = {...result.sceneTimeline, diagnostics: [...result.sceneTimeline.diagnostics,
+          {code: 'scene_archive_unavailable'}]};
+        logger.warn('SceneReconstruction', 'Timeline archive unavailable', {diagnostic: diagnosticLogIdentity(errorMessage(error))});
+      }
+    }
     if (canPrefetch() && (result.success || result.partial === true)) {
       void captureCaseCandidatesAfterQualityArtifacts({
         sessionId, traceId, session, result, normalizedConclusionContract: result.conclusionContract,
@@ -6396,6 +5725,8 @@ function broadcastToAgentDrivenClients(sessionId: string, update: StreamingUpdat
   const session = assistantAppService.getSession(sessionId);
   if (!session) return;
   if (runId && !isCurrentRunOwner(session, runId)) return;
+  if (update.type === 'scene_timeline_updated' && (!runId || update.content?.runId !== runId ||
+      update.content?.sessionId !== sessionId || update.content?.traceId !== session.traceId)) return;
   session.lastActivityAt = Date.now();
 
   // F3: Assign monotonic sequence ID for replay on reconnect
@@ -6406,8 +5737,11 @@ function broadcastToAgentDrivenClients(sessionId: string, update: StreamingUpdat
     seqId,
     onBufferedEvent: (event) => {
       if (runId) event.runId = runId;
-      session.sseEventBuffer.push(event);
-      persistBufferedAgentEvent(
+      appendSceneAwareReplayEvent(session.sseEventBuffer, event);
+      if (event.eventType === 'scene_timeline_updated') session.sceneTimelineReplay = event;
+      // In-progress scene witnesses are live-only. Persist the final archived
+      // revision, rather than storing repeated full candidate manifests on disk.
+      else persistBufferedAgentEvent(
         session,
         {
           cursor: event.seqId,
@@ -8107,6 +7441,8 @@ function ensureCompletedAnalysisFinalArtifacts(
           ? durableResultForClient.conclusion
           : input.normalizedConclusion,
         ...copyAnalysisDeliveryFields(durableResultForClient),
+        sceneReport: durableResultForClient.sceneReport,
+        sceneTimelineRevision: durableResultForClient.sceneTimeline?.revision,
         success: durableResultForClient.success,
         sourceClaimVerificationResult: durableResultForClient.sourceClaimVerificationResult,
         conclusionContract: durableResultForClient.conclusionContract,
@@ -8390,6 +7726,8 @@ function ensureCompletedAnalysisSseEvents(session: AnalysisSession, runId?: stri
             ? projectPrivateAnalysisReceipt(analysisReceipt)
             : analysisReceipt,
           uiActionProposals: projectedUiActionProposals,
+          sceneTimeline: result.sceneTimeline ? projectSceneTimelineForClient(result.sceneTimeline) : undefined,
+          sceneReport: result.sceneReport,
           smartScenePreview: privateKnowledge && result.smartScenePreview
             ? projectOwnerStructuredValue(session.sessionId, result.smartScenePreview)
             : result.smartScenePreview,

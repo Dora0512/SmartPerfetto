@@ -434,7 +434,7 @@
       "id": "strategy-overview",
       "type": "strategy",
       "target": "overview",
-      "query": "发生了什么",
+      "query": "性能概览",
       "expected_strategy": "overview",
       "source_file": "backend/strategies/overview.strategy.md",
       "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"

@@ -9,6 +9,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { computePaths, ensureLayout, ensureSessionLayout, sessionPaths } from '../../io/paths';
 import { commitSourceSupplementOutput, commitTurnOutputs } from '../turnPersistence';
 import {loadCliAnalysisEvidence} from '../analysisResultPresentation';
+import {latestCliSceneReportPath, loadCliSceneReport, turnCliSceneReportPath} from '../sceneReportReference';
 import type { Renderer } from '../../repl/renderer';
 import type { RunTurnOutput } from '../cliAnalyzeService';
 import {clearCodeAwareOutputGuards, registerCodeAwareCanary} from '../../../services/security/codeAwareOutputRegistry';
@@ -27,6 +28,38 @@ function rendererStub(): Renderer {
 }
 
 describe('commitTurnOutputs', () => {
+  it('persists a bound scene reference, rebinds supplements and clears latest on an ordinary next turn', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-cli-scene-'));
+    const paths = computePaths(home); ensureLayout(paths);
+    const sessionId = 'scene-cli-session', sp = sessionPaths(paths, sessionId), renderer = rendererStub();
+    const sceneReport = {schemaVersion: 'scene_report_ref@1' as const, reportId: 'scene-v3-cli', traceId: 'trace',
+      sessionId, runId: 'run', revision: 1, expiresAt: Date.now() + 60_000, manifestSha256: 'a'.repeat(64)};
+    const result: RunTurnOutput = {sessionId, traceId: 'trace', codeAwareMode: 'off', reportHtml: '<html>scene report</html>',
+      result: {sessionId, success: true, conclusion: 'body', findings: [], hypotheses: [], confidence: 0.5, rounds: 1, totalDurationMs: 1,
+        sceneReport, sceneTimeline: {schemaVersion: 'scene_timeline@1', sessionId, traceId: 'trace', runId: 'run', revision: 1,
+          status: 'partial', segments: [], unresolved: ['RAW_SCENE_HISTORY_CANARY'], diagnostics: [],
+          coverage: {status: 'unknown', captureStatus: 'unknown', reason: 'missing', sources: []}}}};
+    const initial = '# Turn 1\n\nbody\n';
+    const commit = (turn: number, markdown: string) => commitTurnOutputs({paths, sp, renderer, sessionId, turn, query: 'query', result,
+      config: {sessionId, tracePath: '/tmp/trace', traceId: 'trace', createdAt: 1, lastTurnAt: turn, turnCount: turn}, turnMarkdown: markdown,
+      indexEntry: {sessionId, createdAt: 1, lastTurnAt: turn, tracePath: '/tmp/trace', traceFilename: 'trace',
+        firstQuery: 'query', turnCount: turn, status: 'completed'}});
+    try {
+      const analysisEvidence = commit(1, initial);
+      expect(JSON.parse(fs.readFileSync(turnCliSceneReportPath(sp, 1), 'utf8'))).toMatchObject({status: 'available', reference: sceneReport});
+      expect(renderer.printCompletion).toHaveBeenCalledWith(expect.objectContaining({sceneReport, sceneReportStatus: 'partial'}));
+      expect(fs.readFileSync(sp.transcript, 'utf8')).not.toContain('RAW_SCENE_HISTORY_CANARY');
+      expect(JSON.parse(fs.readFileSync(sp.transcript, 'utf8').trim()).history).not.toHaveProperty('sceneReport');
+      commitSourceSupplementOutput({sp, renderer, sessionId, turn: 1, analysisEvidence,
+        supplement: {message: 'Source supplement.', metrics: {searchCalls: 1, readCalls: 1, durationMs: 1}}});
+      const supplemented = fs.readFileSync(path.join(sp.turnsDir, '001.md'), 'utf8');
+      expect(loadCliSceneReport({sp, sessionId, turn: 1, conclusion: 'body', turnMarkdown: supplemented, latest: true}).status).toBe('available');
+      delete result.result.sceneReport; delete result.result.sceneTimeline;
+      commit(2, '# Turn 2\n\nbody\n');
+      expect(JSON.parse(fs.readFileSync(latestCliSceneReportPath(sp), 'utf8'))).toMatchObject({status: 'none', reference: null, binding: {turn: 2}});
+      expect(loadCliSceneReport({sp, sessionId, turn: 1, conclusion: 'body', turnMarkdown: supplemented}).status).toBe('available');
+    } finally {fs.rmSync(home, {recursive: true, force: true});}
+  });
   it('rebinds per-turn and latest evidence after appending a source supplement', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-cli-source-supplement-'));
     const paths = computePaths(home);

@@ -22,6 +22,10 @@ function sceneLabels(): ScenePresentationRegistry['scenes'] {
   return registry.scenes;
 }
 
+export function isKnownSceneType(sceneType: string): boolean {
+  return Object.prototype.hasOwnProperty.call(sceneLabels(), sceneType);
+}
+
 export function displaySceneType(
   sceneType: string,
   outputLanguage: OutputLanguage,
@@ -77,7 +81,9 @@ export function projectSceneVerification(
     summary: localize(
       outputLanguage,
       verification.summary,
-      `Scene verification status: ${verification.status}; checked ${verification.checkedSceneCount} scenes.`,
+      verification.scope === 'structure'
+        ? `Scene structure check: ${verification.status}; checked ${verification.checkedSceneCount} scenes. Raw evidence and full-trace coverage were not checked.`
+        : `Scene verification status: ${verification.status}; checked ${verification.checkedSceneCount} scenes.`,
     ),
     issues: verification.issues.map(issue => ({
       ...issue,

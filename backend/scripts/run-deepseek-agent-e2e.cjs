@@ -90,6 +90,20 @@ function sourceFactExpectation(query) {
 }
 
 const suites = {
+  'scene-reconstruction': {
+    label: 'scene reconstruction product-route verification',
+    output: 'test-output/e2e-scene-reconstruction-real.json',
+    args: ['--entry', 'scene-reconstruction', '--mode', 'full', '--provider-id', 'env',
+      '--trace', '../Trace/real/android-scroll-customer/trace.pftrace',
+      '--output', 'test-output/e2e-scene-reconstruction-real.json', '--keep-session'],
+  },
+  'scene-cancel': {
+    label: 'scene reconstruction cancellation after candidate',
+    output: 'test-output/e2e-scene-cancel-real.json',
+    args: ['--entry', 'scene-reconstruction', '--scene-scenario', 'cancel', '--mode', 'full', '--provider-id', 'env',
+      '--trace', '../Trace/real/android-scroll-customer/trace.pftrace',
+      '--output', 'test-output/e2e-scene-cancel-real.json', '--keep-session'],
+  },
   startup: {
     label: 'startup final-report gate',
     output: 'test-output/e2e-deepseek-startup-real.json',
@@ -492,7 +506,7 @@ function resolveRuntimeKinds(value) {
 }
 
 function printUsage() {
-  console.log('Usage: node scripts/run-deepseek-agent-e2e.cjs [--suite all|context|startup|scrolling|external-issue|dual-trace|context-source|context-rag|context-combined|code-aware-semantic-delta|system-analysis] [--runtime claude-agent-sdk|openai-agents-sdk|pi-agent-core|opencode|qoder-agent-sdk|all|all-deepseek] [--timeout-ms <number>] [--repeat 5] [--output-dir <path>]');
+  console.log('Usage: node scripts/run-deepseek-agent-e2e.cjs [--suite all|context|startup|scrolling|scene-reconstruction|scene-cancel|external-issue|dual-trace|context-source|context-rag|context-combined|code-aware-semantic-delta|system-analysis] [--runtime claude-agent-sdk|openai-agents-sdk|pi-agent-core|opencode|qoder-agent-sdk|all|all-deepseek] [--timeout-ms <number>] [--repeat 5] [--output-dir <path>]');
   console.log('');
   console.log('Runs SmartPerfetto Agent SSE E2E with Deepseek-backed SmartPerfetto runtimes.');
   console.log('');

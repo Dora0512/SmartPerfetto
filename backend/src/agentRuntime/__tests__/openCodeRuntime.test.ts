@@ -67,6 +67,7 @@ import type {RunManifestAttributionSink} from '../../types/selfEvolution';
 import * as evaluationRuntimeHooks from '../../services/selfEvolution/evaluationRuntimeHooks';
 import {renderConclusionContractSidecar, type ConclusionContract} from '../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
+import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
 
 const mockOpenCodeIntentTransport = jest.fn<typeof runOpenCodeIntentTransport>();
 jest.mock('../engines/opencode/openCodeIntentTransport', () => ({
@@ -478,6 +479,43 @@ function createNativeIntentHarness(input: {
 }
 
 describe('OpenCode native turn intent and delivery', () => {
+  it('scene runtime matrix: runs the pinned OpenCode provider through shared bridge proposal and private seal', async () => {
+    const f = createSceneRuntimeMatrixFixture('opencode');
+    let definitions: any[] = [];
+    let response: any;
+    const prompts: any[] = [];
+    const bridgeClose = jest.fn(async () => undefined);
+    const runtime = new OpenCodeRuntime(createFakeRuntimeInput({traceProcessorService: f.traceProcessorService,
+      selection: {kind: OPENCODE_RUNTIME_KIND, source: 'env'}}), {
+      env: {SMARTPERFETTO_OPENCODE_MODEL_JSON: JSON.stringify({providerID: 'smartperfetto', modelID: 'scene-pinned-opencode'})},
+      moduleLoader: createOpenCodeReportModuleLoader([async () => {
+        response = await dispatchOpenCodeBridgeRequest(definitions, {jsonrpc: '2.0', id: 1, method: 'tools/call',
+          params: {name: 'propose_scene_timeline', arguments: f.proposal()}}, undefined, {getSignal: () => f.controller.signal});
+        return openCodeAssistantResponse('scene-main', 'Scene candidates submitted.');
+      }], prompts, () => undefined),
+      bridgeStarter: (async (tools: any[]) => {definitions = tools; return {port: 4107, token: 'scene-test-token',
+        requestTimeoutMs: 5000, close: bridgeClose, getDiagnostics: () => ({connectionCount: 0, requestCount: 0})};}) as any,
+    });
+    try {
+      const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
+      expect(result.turnIntent).toMatchObject({source: 'product', sceneId: 'scene_reconstruction'});
+      expect(mockOpenCodeIntentTransport.mock.calls.filter(([input]) => input.systemPrompt === '')).toHaveLength(0);
+      expect(JSON.stringify(prompts[0])).toContain('scene-pinned-opencode');
+      expect(response.result.structuredContent).toMatchObject({accepted: true, revision: 1});
+      const snapshot = f.seal();
+      expect(snapshot.revision).toBe(1);
+      expect(snapshot.runId).toBe(f.scope.runId);
+      expect(snapshot.segments[0].evidence[0].source.originRunId).toBe(f.scope.runId);
+      expect(f.boundsQueries).toEqual([f.scope.traceId]);
+      f.controller.abort();
+      const late = await dispatchOpenCodeBridgeRequest(definitions, {jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: {name: 'propose_scene_timeline', arguments: f.proposal()}}, undefined, {getSignal: () => f.controller.signal})
+        .catch((error: Error) => ({error: error.message}));
+      expect(JSON.stringify(late)).not.toContain('"accepted":true');
+    } finally {await runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
+    expect((runtime as any).artifactStores.has(f.scope.sessionId)).toBe(false);
+    expect(bridgeClose).toHaveBeenCalled();
+  });
   it.each([false, true])('uses one pinned no-tool closeout and counts its attempt even on failure: %s', async closeoutError => withBackendDataDir(async () => {
     const harness = createNativeIntentHarness({finish: 'tool-calls', answer: 'Only the frame interval is known.',
       closeoutAnswer: 'The frame interval is known. The cause is unverified; inspect the main-thread interval next.',

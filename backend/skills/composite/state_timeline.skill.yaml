@@ -3,7 +3,7 @@
 # This file is part of SmartPerfetto. See LICENSE for details.
 
 name: state_timeline
-version: "1.0"
+version: "1.1"
 type: composite
 category: interaction
 tier: S
@@ -30,7 +30,38 @@ inputs:
     type: string
     required: true
 
+  - name: scene_row_limit
+    type: number
+    required: false
+    default: 4096
+
 steps:
+  - id: input_coverage
+    type: atomic
+    name: "输入事实覆盖范围"
+    display:
+      level: hidden
+      layer: overview
+    sql_fragments: [fragments/scene_input_facts.sql]
+    sql: |
+      SELECT printf('%d', start_ts) AS start_ts, printf('%d', end_ts) AS end_ts,
+        (SELECT COUNT(*) FROM scene_input_facts) AS observed_event_count,
+        (SELECT COUNT(*) FROM scene_primary_input) AS physical_event_count,
+        (SELECT COUNT(*) FROM scene_primary_input WHERE event_action = 'UNKNOWN') AS physical_missing_action_count,
+        (SELECT COUNT(*) FROM scene_input_facts WHERE event_action = 'UNKNOWN') AS missing_action_count,
+        (SELECT COUNT(*) FROM scene_raw_input WHERE ts IS NULL) AS missing_timestamp_count,
+        (SELECT COUNT(*) FROM scene_gestures) AS gesture_count,
+        (SELECT COUNT(*) FROM scene_input_gaps WHERE end_ts > ts) AS gap_count,
+        MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096) AS output_row_limit,
+        CASE WHEN (SELECT COUNT(*) FROM scene_gestures) +
+          (SELECT COUNT(*) FROM scene_input_gaps WHERE end_ts > ts) > MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
+          THEN 1 ELSE 0 END AS output_truncated,
+        'partial' AS source_status, 'capture_completeness_unproven' AS reason,
+        'inertial_boundary_unavailable' AS inertial_source_status,
+        'scene_input_v1' AS normalization_version FROM trace_bounds
+    save_as: input_coverage
+    optional: true
+
   # ==========================================================================
   # Step 0: Trace 时间范围 + 可用表探测
   # ==========================================================================
@@ -41,11 +72,11 @@ steps:
       level: hidden
     sql: |
       SELECT
-        MIN(ts) AS t_start,
-        MAX(ts) AS t_end,
-        printf('%d', MIN(ts)) AS t_start_str,
-        printf('%d', MAX(ts)) AS t_end_str,
-        ROUND((MAX(ts) - MIN(ts)) / 1e9, 2) AS duration_sec,
+        printf('%d', start_ts) AS t_start,
+        printf('%d', end_ts) AS t_end,
+        printf('%d', start_ts) AS t_start_str,
+        printf('%d', end_ts) AS t_end_str,
+        ROUND((end_ts - start_ts) / 1e9, 2) AS duration_sec,
         CASE
           WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name='android_screen_state') THEN 1
           ELSE 0
@@ -62,11 +93,7 @@ steps:
           WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name='actual_frame_timeline_slice') THEN 1
           ELSE 0
         END AS has_frame_timeline
-      FROM (
-        SELECT ts FROM slice WHERE dur > 0
-        UNION ALL
-        SELECT ts FROM counter WHERE value IS NOT NULL
-      )
+      FROM trace_bounds
     save_as: timeline_bounds
 
   # ==========================================================================
@@ -90,98 +117,16 @@ steps:
         - { name: dur_ns, label: "时长(ns)", type: duration, unit: ns, hidden: true }
         - { name: dur_ms, label: "时长(ms)", type: number }
         - { name: source_status, label: "数据源", type: string, hidden: true }
+    sql_fragments: [fragments/scene_screen_facts.sql]
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
-      ),
-      screen_segments AS (
-        SELECT
-          ts AS start_ts,
-          ts + dur AS end_ts,
-          CASE screen_state
-            WHEN 1 THEN 'SCREEN_OFF'
-            WHEN 2 THEN 'SCREEN_ON'
-            WHEN 3 THEN 'SCREEN_DOZE'
-            ELSE 'SCREEN_UNKNOWN'
-          END AS state
-        FROM android_screen_state
-        WHERE dur > 0
-        ORDER BY ts
-      ),
-      numbered AS (
-        SELECT *, ROW_NUMBER() OVER (ORDER BY start_ts) AS rn
-        FROM screen_segments
-      ),
-      -- Gap filling: leading, inter-segment, trailing
-      -- Uses COALESCE to handle empty screen_segments (table exists but no data)
-      gaps AS (
-        -- Fallback: no screen data at all → single UNKNOWN covering entire trace
-        SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
-          'UNKNOWN' AS state
-        WHERE NOT EXISTS (SELECT 1 FROM screen_segments)
-
-        UNION ALL
-
-        -- Leading gap: trace start → first screen event
-        SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT MIN(start_ts) FROM screen_segments) AS end_ts,
-          'UNKNOWN' AS state
-        WHERE EXISTS (SELECT 1 FROM screen_segments)
-          AND (SELECT MIN(start_ts) FROM screen_segments) > (SELECT t_start FROM trace_bounds)
-
-        UNION ALL
-
-        -- Inter-segment gaps (should be rare for screen_state)
-        SELECT
-          n1.end_ts AS start_ts,
-          n2.start_ts AS end_ts,
-          'UNKNOWN' AS state
-        FROM numbered n1
-        JOIN numbered n2 ON n2.rn = n1.rn + 1
-        WHERE n2.start_ts > n1.end_ts
-
-        UNION ALL
-
-        -- Trailing gap: last screen event → trace end
-        SELECT
-          (SELECT MAX(end_ts) FROM screen_segments) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
-          'UNKNOWN' AS state
-        WHERE EXISTS (SELECT 1 FROM screen_segments)
-          AND (SELECT MAX(end_ts) FROM screen_segments) < (SELECT t_end FROM trace_bounds)
-      ),
-      all_segments AS (
-        SELECT start_ts, end_ts, state FROM screen_segments
-        UNION ALL
-        SELECT start_ts, end_ts, state FROM gaps
-      )
-      SELECT
-        'device' AS lane,
-        state,
-        CASE state
-          WHEN 'SCREEN_ON' THEN '屏幕点亮'
-          WHEN 'SCREEN_OFF' THEN '屏幕熄灭'
-          WHEN 'SCREEN_DOZE' THEN '屏幕休眠'
-          ELSE '未知'
-        END AS state_label,
-        printf('%d', start_ts) AS start_ts,
-        printf('%d', end_ts) AS end_ts,
-        end_ts - start_ts AS dur_ns,
-        CAST((end_ts - start_ts) / 1000000 AS INT) AS dur_ms,
-        'available' AS source_status
-      FROM all_segments
-      WHERE end_ts > start_ts
-      ORDER BY start_ts
-      LIMIT 200
-
+      SELECT 'device' AS lane, state,
+        CASE state WHEN 'SCREEN_ON' THEN '屏幕点亮' WHEN 'SCREEN_OFF' THEN '屏幕熄灭'
+          WHEN 'SCREEN_DOZE' THEN '屏幕低功耗显示（DOZE）' ELSE '未知' END AS state_label,
+        printf('%d', ts) AS start_ts, printf('%d', end_ts) AS end_ts,
+        printf('%d', end_ts - ts) AS dur_ns, (end_ts - ts) / 1000000 AS dur_ms,
+        source_status, 'android_screen_state' AS source_table, source_ids, COUNT(*) OVER () AS total_rows
+      FROM scene_screen_lane ORDER BY ts
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # -- Device fallback: table missing → single UNKNOWN covering entire trace
   - id: device_state_lane_fallback
     type: atomic
@@ -202,13 +147,9 @@ steps:
         - { name: dur_ms, label: "时长(ms)", type: number }
         - { name: source_status, label: "数据源", type: string, hidden: true }
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
+      WITH lane_bounds AS (
+        SELECT start_ts AS t_start, end_ts AS t_end FROM trace_bounds
       )
       SELECT
         'device' AS lane,
@@ -219,15 +160,19 @@ steps:
         t_end - t_start AS dur_ns,
         CAST((t_end - t_start) / 1000000 AS INT) AS dur_ms,
         'table_missing' AS source_status
-      FROM trace_bounds
-
+      FROM lane_bounds
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # ==========================================================================
-  # Step 2a: 用户输入状态泳道 — 帧级 FLING 终止检测
-  # 当 actual_frame_timeline_slice 可用时走此路径，FLING 终止由帧渲染停止决定
+  # Step 2a: 用户输入状态泳道 — 规范化输入事实
+  # 兼容保留 step ID；两条路径使用相同事实，不以出帧推断 FLING
   # ==========================================================================
   - id: input_state_lane_frames
     type: atomic
-    name: "用户输入状态泳道（帧级）"
+    investigation_evidence:
+      window: {start: start_ts, end: end_ts}
+      metrics: []
+    name: "用户输入状态泳道"
     optional: true
     condition: timeline_bounds.data[0]?.has_frame_timeline === 1 && timeline_bounds.data[0]?.has_input_events === 1
     display:
@@ -243,214 +188,35 @@ steps:
         - { name: dur_ns, label: "时长(ns)", type: duration, unit: ns, hidden: true }
         - { name: dur_ms, label: "时长(ms)", type: number }
         - { name: source_status, label: "数据源", type: string, hidden: true }
+    sql_fragments: [fragments/scene_input_facts.sql]
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
-      ),
-      -- Gesture event extraction from MOTION events
-      gesture_events AS (
-        SELECT
-          read_time AS ts,
-          event_action,
-          CASE WHEN event_action IN ('DOWN', 'POINTER_DOWN') THEN 1 ELSE 0 END AS is_start
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-      ),
-      -- Group events into gestures (each DOWN starts a new gesture)
-      gesture_groups AS (
-        SELECT ts, event_action,
-          SUM(is_start) OVER (ORDER BY ts) AS gesture_id
-        FROM gesture_events
-      ),
-      -- Aggregate per gesture
-      gesture_summary AS (
-        SELECT
-          gesture_id,
-          MIN(ts) AS start_ts,
-          MAX(ts) AS end_ts,
-          MAX(ts) - MIN(ts) AS dur,
-          COUNT(*) AS event_count,
-          COUNT(CASE WHEN event_action = 'MOVE' THEN 1 END) AS move_count,
-          MAX(CASE WHEN event_action IN ('UP', 'POINTER_UP') THEN ts END) AS up_ts,
-          MAX(CASE WHEN event_action = 'CANCEL' THEN 1 ELSE 0 END) AS was_cancelled
-        FROM gesture_groups
-        WHERE gesture_id > 0
-        GROUP BY gesture_id
-        HAVING event_count >= 2
-      ),
-      -- Classify each gesture into a state
-      classified AS (
-        SELECT
-          gesture_id,
-          start_ts,
-          COALESCE(up_ts, end_ts) AS end_ts,
-          CASE
-            WHEN was_cancelled = 1 THEN 'TAP'
-            WHEN move_count >= 3 THEN 'SCROLL_DRAG'
-            WHEN dur >= 300000000 AND move_count <= 2 THEN 'LONG_PRESS'
-            ELSE 'TAP'
-          END AS state,
-          move_count,
-          was_cancelled
-        FROM gesture_summary
-      ),
-      -- App frames from actual_frame_timeline_slice (for FLING termination)
-      frame_apps AS (
-        SELECT
-          a.ts,
-          a.dur,
-          a.ts + a.dur AS end_ts,
-          COALESCE(
-            NULLIF(p.name, ''),
-            CASE
-              WHEN a.layer_name IS NOT NULL AND instr(a.layer_name, '/') > 1
-              THEN substr(a.layer_name, 1, instr(a.layer_name, '/') - 1)
-              ELSE NULL
-            END
-          ) AS app_package
-        FROM actual_frame_timeline_slice a
-        LEFT JOIN process p ON p.upid = a.upid
-        WHERE a.dur > 0
-          AND a.surface_frame_token IS NOT NULL
-      ),
-      -- FLING windows: from SCROLL_DRAG UP to next DOWN (max 3s scan window)
-      fling_windows AS (
-        SELECT
-          c.gesture_id,
-          c.end_ts AS fling_start,
-          MIN(
-            COALESCE(
-              (SELECT c2.start_ts FROM classified c2
-               WHERE c2.start_ts > c.end_ts
-               ORDER BY c2.start_ts LIMIT 1),
-              c.end_ts + 3000000000
-            ),
-            c.end_ts + 3000000000
-          ) AS fling_window_end
-        FROM classified c
-        WHERE c.state = 'SCROLL_DRAG'
-          AND c.move_count >= 4
-          AND c.end_ts < (SELECT t_end FROM trace_bounds)
-      ),
-      -- Match frames in fling window (exclude system processes)
-      fling_with_frames AS (
-        SELECT
-          w.gesture_id,
-          w.fling_start,
-          w.fling_window_end,
-          MAX(f.end_ts) AS last_frame_end,
-          COUNT(f.ts) AS frame_count
-        FROM fling_windows w
-        LEFT JOIN frame_apps f
-          ON f.ts >= w.fling_start
-         AND f.ts < w.fling_window_end
-         AND f.app_package IS NOT NULL
-         AND f.app_package != ''
-         AND f.app_package NOT GLOB 'surfaceflinger*'
-         AND f.app_package NOT GLOB 'system_server*'
-         AND f.app_package NOT GLOB 'com.android.systemui*'
-        GROUP BY w.gesture_id, w.fling_start, w.fling_window_end
-      ),
-      -- Resolve FLING end: last frame end if frames found, else conservative default
-      fling_candidates AS (
-        SELECT
-          fling_start AS start_ts,
-          CASE
-            WHEN frame_count >= 1 AND last_frame_end > fling_start + 80000000
-              THEN MIN(last_frame_end, fling_window_end)
-            ELSE MIN(fling_start + 300000000, fling_window_end)
-          END AS end_ts,
-          'FLING' AS state
-        FROM fling_with_frames
-      ),
-      -- Combine gestures + fling
-      input_events AS (
-        SELECT start_ts, end_ts, state FROM classified
+      WITH segments AS (
+        SELECT ts, end_ts, UPPER(gesture_type) AS state, CASE gesture_type WHEN 'touch_move' THEN '连续触摸移动' WHEN 'touch_hold' THEN '持续触摸（长按识别未确认）' WHEN 'tap' THEN '点击接触' WHEN 'cancelled' THEN '触摸取消' WHEN 'key' THEN '按键输入' WHEN 'scroll_input' THEN '滚动轴输入（ACTION_SCROLL）' WHEN 'wheel' THEN '滚轮输入' ELSE '输入活动（动作信息不完整）' END AS state_label,
+          source_status, stream_key, source_table, source_id, source_ids,
+          upid, device_id, display_id, input_source, event_count, missing_action_count
+        FROM scene_gestures
         UNION ALL
-        SELECT start_ts, end_ts, state FROM fling_candidates
-        WHERE end_ts > start_ts + 80000000
-      ),
-      ordered AS (
-        SELECT start_ts, end_ts, state,
-          ROW_NUMBER() OVER (ORDER BY start_ts) AS rn
-        FROM input_events
-        ORDER BY start_ts
-      ),
-      -- Fill gaps with IDLE
-      idle_gaps AS (
-        SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
-          'IDLE' AS state
-        WHERE NOT EXISTS (SELECT 1 FROM ordered)
-
-        UNION ALL
-
-        SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT MIN(start_ts) FROM ordered) AS end_ts,
-          'IDLE' AS state
-        WHERE EXISTS (SELECT 1 FROM ordered)
-          AND (SELECT MIN(start_ts) FROM ordered) > (SELECT t_start FROM trace_bounds)
-
-        UNION ALL
-
-        SELECT
-          o1.end_ts AS start_ts,
-          o2.start_ts AS end_ts,
-          'IDLE' AS state
-        FROM ordered o1
-        JOIN ordered o2 ON o2.rn = o1.rn + 1
-        WHERE o2.start_ts > o1.end_ts
-
-        UNION ALL
-
-        SELECT
-          (SELECT MAX(end_ts) FROM ordered) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
-          'IDLE' AS state
-        WHERE EXISTS (SELECT 1 FROM ordered)
-          AND (SELECT MAX(end_ts) FROM ordered) < (SELECT t_end FROM trace_bounds)
-      ),
-      all_raw AS (
-        SELECT start_ts, end_ts, state FROM ordered
-        UNION ALL
-        SELECT start_ts, end_ts, state FROM idle_gaps
-        WHERE end_ts > start_ts
+        SELECT ts, end_ts, 'UNKNOWN', '未观测到输入（采集完整性未确认）', 'partial', NULL,
+          'input_coverage_gap', NULL, NULL, NULL, NULL, NULL, NULL, 0, 0
+        FROM scene_input_gaps WHERE end_ts > ts
       )
-      SELECT
-        'input' AS lane,
-        state,
-        CASE state
-          WHEN 'IDLE' THEN '空闲'
-          WHEN 'TAP' THEN '点击'
-          WHEN 'LONG_PRESS' THEN '长按'
-          WHEN 'SCROLL_DRAG' THEN '按压滑动'
-          WHEN 'FLING' THEN '惯性滑动'
-          ELSE state
-        END AS state_label,
-        printf('%d', start_ts) AS start_ts,
-        printf('%d', end_ts) AS end_ts,
-        end_ts - start_ts AS dur_ns,
-        CAST((end_ts - start_ts) / 1000000 AS INT) AS dur_ms,
-        'available_frame_based' AS source_status
-      FROM all_raw
-      WHERE end_ts > start_ts
-      ORDER BY start_ts
-      LIMIT 1000
-
+      SELECT 'input' AS lane, state, state_label, printf('%d', ts) AS start_ts,
+        printf('%d', end_ts) AS end_ts, printf('%d', end_ts - ts) AS dur_ns,
+        (end_ts - ts) / 1000000 AS dur_ms, source_status, stream_key,
+        source_table, source_id, source_ids, upid, device_id, display_id, input_source,
+        event_count, missing_action_count, 'MEDIUM' AS confidence, COUNT(*) OVER () AS total_rows
+      FROM segments ORDER BY ts, stream_key
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # ==========================================================================
-  # Step 2b: 用户输入状态泳道 — 启发式降级
-  # 当 actual_frame_timeline_slice 不可用时走此路径，FLING 用 3s 上限估算
+  # Step 2b: 用户输入状态泳道 — 无帧数据兼容入口
+  # 帧数据不影响输入事实；保持与主路径同一规范化和未知边界
   # ==========================================================================
   - id: input_state_lane_fallback
     type: atomic
-    name: "用户输入状态泳道（启发式）"
+    investigation_evidence:
+      window: {start: start_ts, end: end_ts}
+      metrics: []
+    name: "用户输入状态泳道"
     optional: true
     condition: timeline_bounds.data[0]?.has_frame_timeline !== 1 && timeline_bounds.data[0]?.has_input_events === 1
     display:
@@ -466,151 +232,25 @@ steps:
         - { name: dur_ns, label: "时长(ns)", type: duration, unit: ns, hidden: true }
         - { name: dur_ms, label: "时长(ms)", type: number }
         - { name: source_status, label: "数据源", type: string, hidden: true }
+    sql_fragments: [fragments/scene_input_facts.sql]
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
-      ),
-      gesture_events AS (
-        SELECT
-          read_time AS ts,
-          event_action,
-          CASE WHEN event_action IN ('DOWN', 'POINTER_DOWN') THEN 1 ELSE 0 END AS is_start
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-      ),
-      gesture_groups AS (
-        SELECT ts, event_action,
-          SUM(is_start) OVER (ORDER BY ts) AS gesture_id
-        FROM gesture_events
-      ),
-      gesture_summary AS (
-        SELECT
-          gesture_id,
-          MIN(ts) AS start_ts,
-          MAX(ts) AS end_ts,
-          MAX(ts) - MIN(ts) AS dur,
-          COUNT(*) AS event_count,
-          COUNT(CASE WHEN event_action = 'MOVE' THEN 1 END) AS move_count,
-          MAX(CASE WHEN event_action IN ('UP', 'POINTER_UP') THEN ts END) AS up_ts,
-          MAX(CASE WHEN event_action = 'CANCEL' THEN 1 ELSE 0 END) AS was_cancelled
-        FROM gesture_groups
-        WHERE gesture_id > 0
-        GROUP BY gesture_id
-        HAVING event_count >= 2
-      ),
-      classified AS (
-        SELECT
-          gesture_id,
-          start_ts,
-          COALESCE(up_ts, end_ts) AS end_ts,
-          CASE
-            WHEN was_cancelled = 1 THEN 'TAP'
-            WHEN move_count >= 3 THEN 'SCROLL_DRAG'
-            WHEN dur >= 300000000 AND move_count <= 2 THEN 'LONG_PRESS'
-            ELSE 'TAP'
-          END AS state,
-          move_count,
-          was_cancelled
-        FROM gesture_summary
-      ),
-      -- FLING: heuristic — from UP to next DOWN (max 3s)
-      fling_candidates AS (
-        SELECT
-          c.end_ts AS start_ts,
-          MIN(
-            COALESCE(
-              (SELECT c2.start_ts FROM classified c2
-               WHERE c2.start_ts > c.end_ts
-               ORDER BY c2.start_ts LIMIT 1),
-              c.end_ts + 3000000000
-            ),
-            c.end_ts + 3000000000
-          ) AS end_ts,
-          'FLING' AS state
-        FROM classified c
-        WHERE c.state = 'SCROLL_DRAG'
-          AND c.move_count >= 4
-          AND c.end_ts < (SELECT t_end FROM trace_bounds)
-      ),
-      input_events AS (
-        SELECT start_ts, end_ts, state FROM classified
+      WITH segments AS (
+        SELECT ts, end_ts, UPPER(gesture_type) AS state, CASE gesture_type WHEN 'touch_move' THEN '连续触摸移动' WHEN 'touch_hold' THEN '持续触摸（长按识别未确认）' WHEN 'tap' THEN '点击接触' WHEN 'cancelled' THEN '触摸取消' WHEN 'key' THEN '按键输入' WHEN 'scroll_input' THEN '滚动轴输入（ACTION_SCROLL）' WHEN 'wheel' THEN '滚轮输入' ELSE '输入活动（动作信息不完整）' END AS state_label,
+          source_status, stream_key, source_table, source_id, source_ids,
+          upid, device_id, display_id, input_source, event_count, missing_action_count
+        FROM scene_gestures
         UNION ALL
-        SELECT start_ts, end_ts, state FROM fling_candidates
-        WHERE end_ts > start_ts + 16000000
-      ),
-      ordered AS (
-        SELECT start_ts, end_ts, state,
-          ROW_NUMBER() OVER (ORDER BY start_ts) AS rn
-        FROM input_events
-        ORDER BY start_ts
-      ),
-      idle_gaps AS (
-        SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
-          'IDLE' AS state
-        WHERE NOT EXISTS (SELECT 1 FROM ordered)
-
-        UNION ALL
-
-        SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT MIN(start_ts) FROM ordered) AS end_ts,
-          'IDLE' AS state
-        WHERE EXISTS (SELECT 1 FROM ordered)
-          AND (SELECT MIN(start_ts) FROM ordered) > (SELECT t_start FROM trace_bounds)
-
-        UNION ALL
-
-        SELECT
-          o1.end_ts AS start_ts,
-          o2.start_ts AS end_ts,
-          'IDLE' AS state
-        FROM ordered o1
-        JOIN ordered o2 ON o2.rn = o1.rn + 1
-        WHERE o2.start_ts > o1.end_ts
-
-        UNION ALL
-
-        SELECT
-          (SELECT MAX(end_ts) FROM ordered) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
-          'IDLE' AS state
-        WHERE EXISTS (SELECT 1 FROM ordered)
-          AND (SELECT MAX(end_ts) FROM ordered) < (SELECT t_end FROM trace_bounds)
-      ),
-      all_raw AS (
-        SELECT start_ts, end_ts, state FROM ordered
-        UNION ALL
-        SELECT start_ts, end_ts, state FROM idle_gaps
-        WHERE end_ts > start_ts
+        SELECT ts, end_ts, 'UNKNOWN', '未观测到输入（采集完整性未确认）', 'partial', NULL,
+          'input_coverage_gap', NULL, NULL, NULL, NULL, NULL, NULL, 0, 0
+        FROM scene_input_gaps WHERE end_ts > ts
       )
-      SELECT
-        'input' AS lane,
-        state,
-        CASE state
-          WHEN 'IDLE' THEN '空闲'
-          WHEN 'TAP' THEN '点击'
-          WHEN 'LONG_PRESS' THEN '长按'
-          WHEN 'SCROLL_DRAG' THEN '按压滑动'
-          WHEN 'FLING' THEN '惯性滑动'
-          ELSE state
-        END AS state_label,
-        printf('%d', start_ts) AS start_ts,
-        printf('%d', end_ts) AS end_ts,
-        end_ts - start_ts AS dur_ns,
-        CAST((end_ts - start_ts) / 1000000 AS INT) AS dur_ms,
-        'available_heuristic' AS source_status
-      FROM all_raw
-      WHERE end_ts > start_ts
-      ORDER BY start_ts
-      LIMIT 1000
-
+      SELECT 'input' AS lane, state, state_label, printf('%d', ts) AS start_ts,
+        printf('%d', end_ts) AS end_ts, printf('%d', end_ts - ts) AS dur_ns,
+        (end_ts - ts) / 1000000 AS dur_ms, source_status, stream_key,
+        source_table, source_id, source_ids, upid, device_id, display_id, input_source,
+        event_count, missing_action_count, 'MEDIUM' AS confidence, COUNT(*) OVER () AS total_rows
+      FROM segments ORDER BY ts, stream_key
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # ==========================================================================
   # Step 3: 应用状态泳道 (前台应用)
   # ==========================================================================
@@ -633,13 +273,9 @@ steps:
         - { name: dur_ms, label: "时长(ms)", type: number }
         - { name: source_status, label: "数据源", type: string, hidden: true }
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
+      WITH lane_bounds AS (
+        SELECT start_ts AS t_start, end_ts AS t_end FROM trace_bounds
       ),
       -- Top app from battery stats (already has ts + duration)
       app_segments AS (
@@ -657,8 +293,8 @@ steps:
       gaps AS (
         -- Fallback: no app data → single UNKNOWN covering entire trace
         SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
+          (SELECT t_start FROM lane_bounds) AS start_ts,
+          (SELECT t_end FROM lane_bounds) AS end_ts,
           'UNKNOWN' AS state
         WHERE NOT EXISTS (SELECT 1 FROM app_segments)
 
@@ -666,11 +302,11 @@ steps:
 
         -- Leading gap
         SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
+          (SELECT t_start FROM lane_bounds) AS start_ts,
           (SELECT MIN(start_ts) FROM app_segments) AS end_ts,
           'UNKNOWN' AS state
         WHERE EXISTS (SELECT 1 FROM app_segments)
-          AND (SELECT MIN(start_ts) FROM app_segments) > (SELECT t_start FROM trace_bounds)
+          AND (SELECT MIN(start_ts) FROM app_segments) > (SELECT t_start FROM lane_bounds)
 
         UNION ALL
 
@@ -691,10 +327,10 @@ steps:
         -- Trailing gap
         SELECT
           (SELECT MAX(end_ts) FROM app_segments) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
+          (SELECT t_end FROM lane_bounds) AS end_ts,
           'UNKNOWN' AS state
         WHERE EXISTS (SELECT 1 FROM app_segments)
-          AND (SELECT MAX(end_ts) FROM app_segments) < (SELECT t_end FROM trace_bounds)
+          AND (SELECT MAX(end_ts) FROM app_segments) < (SELECT t_end FROM lane_bounds)
       ),
       all_segments AS (
         SELECT start_ts, end_ts, state FROM app_segments
@@ -717,8 +353,8 @@ steps:
       FROM all_segments
       WHERE end_ts > start_ts
       ORDER BY start_ts
-      LIMIT 200
-
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # -- App fallback: table missing → single UNKNOWN covering entire trace
   - id: app_state_lane_fallback
     type: atomic
@@ -739,13 +375,9 @@ steps:
         - { name: dur_ms, label: "时长(ms)", type: number }
         - { name: source_status, label: "数据源", type: string, hidden: true }
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
+      WITH lane_bounds AS (
+        SELECT start_ts AS t_start, end_ts AS t_end FROM trace_bounds
       )
       SELECT
         'app' AS lane,
@@ -756,8 +388,9 @@ steps:
         t_end - t_start AS dur_ns,
         CAST((t_end - t_start) / 1000000 AS INT) AS dur_ms,
         'table_missing' AS source_status
-      FROM trace_bounds
-
+      FROM lane_bounds
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # ==========================================================================
   # Step 4: 系统状态泳道 (系统事件)
   # ==========================================================================
@@ -779,13 +412,9 @@ steps:
         - { name: source_status, label: "数据源", type: string, hidden: true }
         - { name: confidence, label: "置信度", type: string, hidden: true }
     sql: |
-      WITH trace_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
+      WITH lane_bounds AS (
+        SELECT start_ts AS t_start, end_ts AS t_end FROM trace_bounds
       ),
       -- Detect system events from known patterns in system_server / SurfaceFlinger
       system_events AS (
@@ -914,8 +543,8 @@ steps:
       gaps AS (
         -- Leading gap
         SELECT
-          (SELECT t_start FROM trace_bounds) AS start_ts,
-          COALESCE((SELECT MIN(start_ts) FROM deduped), (SELECT t_end FROM trace_bounds)) AS end_ts,
+          (SELECT t_start FROM lane_bounds) AS start_ts,
+          COALESCE((SELECT MIN(start_ts) FROM deduped), (SELECT t_end FROM lane_bounds)) AS end_ts,
           'UNKNOWN' AS state
 
         UNION ALL
@@ -934,10 +563,10 @@ steps:
         -- Trailing gap (only when deduped has events; otherwise leading gap covers full trace)
         SELECT
           (SELECT MAX(end_ts) FROM deduped) AS start_ts,
-          (SELECT t_end FROM trace_bounds) AS end_ts,
+          (SELECT t_end FROM lane_bounds) AS end_ts,
           'UNKNOWN' AS state
         WHERE EXISTS (SELECT 1 FROM deduped)
-          AND (SELECT MAX(end_ts) FROM deduped) < (SELECT t_end FROM trace_bounds)
+          AND (SELECT MAX(end_ts) FROM deduped) < (SELECT t_end FROM lane_bounds)
       ),
       all_segments AS (
         SELECT start_ts, end_ts, state FROM deduped
@@ -967,8 +596,8 @@ steps:
       FROM all_segments
       WHERE end_ts > start_ts
       ORDER BY start_ts
-      LIMIT 500
-
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
   # ==========================================================================
   # Step 5: 泳道汇总
   # ==========================================================================
@@ -988,35 +617,27 @@ steps:
     sql: |
       -- Summary: aggregate stats per lane
       -- This step always succeeds (uses slice table which always exists)
-      WITH trace_bounds AS (
-        SELECT
-          MIN(ts) AS t_start,
-          MAX(ts) AS t_end,
-          ROUND((MAX(ts) - MIN(ts)) / 1e9, 2) AS duration_sec
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+      WITH lane_bounds AS (
+        SELECT ROUND((end_ts - start_ts) / 1e9, 2) AS duration_sec FROM trace_bounds
       ),
       table_status AS (
         SELECT
           CASE WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_screen_state') THEN 'available' ELSE 'table_missing' END AS device_status,
           CASE
             WHEN NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_input_events') THEN 'table_missing'
-            WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='actual_frame_timeline_slice') THEN 'available_frame_based'
-            ELSE 'available_heuristic'
+            WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='actual_frame_timeline_slice') THEN 'partial'
+            ELSE 'partial'
           END AS input_status,
           CASE WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_battery_stats_event_slices') THEN 'available' ELSE 'table_missing' END AS app_status,
           'available' AS system_status
       )
-      SELECT 'device' AS lane, 0 AS segment_count, (SELECT duration_sec FROM trace_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT device_status FROM table_status) AS source_status
+      SELECT 'device' AS lane, 0 AS segment_count, (SELECT duration_sec FROM lane_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT device_status FROM table_status) AS source_status
       UNION ALL
-      SELECT 'input' AS lane, 0 AS segment_count, (SELECT duration_sec FROM trace_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT input_status FROM table_status) AS source_status
+      SELECT 'input' AS lane, 0 AS segment_count, (SELECT duration_sec FROM lane_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT input_status FROM table_status) AS source_status
       UNION ALL
-      SELECT 'app' AS lane, 0 AS segment_count, (SELECT duration_sec FROM trace_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT app_status FROM table_status) AS source_status
+      SELECT 'app' AS lane, 0 AS segment_count, (SELECT duration_sec FROM lane_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT app_status FROM table_status) AS source_status
       UNION ALL
-      SELECT 'system' AS lane, 0 AS segment_count, (SELECT duration_sec FROM trace_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT system_status FROM table_status) AS source_status
+      SELECT 'system' AS lane, 0 AS segment_count, (SELECT duration_sec FROM lane_bounds) AS total_dur_sec, '-' AS dominant_state, (SELECT system_status FROM table_status) AS source_status
 
 output:
   format: layered

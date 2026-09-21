@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const {randomUUID} = require('node:crypto');
 const {spawnSync} = require('node:child_process');
 
 const {loadCatalog, resolveCaseTrace} = require('./catalog.cjs');
@@ -173,4 +174,64 @@ function materializeCatalogCases(repoRoot, options = {}) {
   return results;
 }
 
-module.exports = {buildCatalogCases, materializeCatalogCases, safeCaseFile, safeGeneratedPath};
+/** Regenerate only the authored expectations projection; trace gold and overlays stay untouched. */
+function updateCaseExpectations(repoRoot, options = {}) {
+  const caseId = options.caseId;
+  if (typeof caseId !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(caseId)) {
+    throw new Error('--case requires one lowercase kebab-case constructed case id');
+  }
+  const root = fs.realpathSync(repoRoot);
+  let caseDir = root;
+  for (const segment of ['Trace', 'constructed', caseId]) {
+    caseDir = path.join(caseDir, segment);
+    const stat = fs.lstatSync(caseDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`constructed case directory must not be a symlink: ${caseDir}`);
+  }
+  const manifestPath = path.join(caseDir, 'case.json');
+  if (!fs.lstatSync(manifestPath).isFile()) throw new Error(`case manifest must be a regular file: ${manifestPath}`);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (manifest.schema_version !== 1 || manifest.id !== caseId || manifest.kind !== 'constructed' ||
+      !Array.isArray(manifest.coverage?.expectations)) {
+    throw new Error(`invalid constructed expectations source: ${manifestPath}`);
+  }
+  const analysisDir = path.join(caseDir, 'analysis');
+  let analysisExists = false;
+  try {
+    const stat = fs.lstatSync(analysisDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`analysis directory must not be a symlink: ${analysisDir}`);
+    analysisExists = true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const outputPath = path.join(analysisDir, 'expected.json');
+  let previous;
+  let extras = {};
+  try {
+    if (!fs.lstatSync(outputPath).isFile()) throw new Error(`expectations must be a regular file: ${outputPath}`);
+    previous = fs.readFileSync(outputPath, 'utf8');
+    const current = JSON.parse(previous);
+    if (!current || typeof current !== 'object' || Array.isArray(current)) throw new Error(`invalid expectations document: ${outputPath}`);
+    // Preserve independently generated truth such as source_trace_ground_truth and native_oracle.
+    const {schema_version, case_id, marker, expectations, ...additionalFields} = current;
+    extras = additionalFields;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const content = `${JSON.stringify({schema_version: 1, case_id: caseId,
+    marker: `SmartPerfetto::CASE::${caseId}`, expectations: manifest.coverage.expectations, ...extras}, null, 2)}\n`;
+  const changed = previous !== content;
+  if (options.check && changed) throw new Error(`stale expectations file: ${outputPath}`);
+  if (!options.check && changed) {
+    if (!analysisExists) fs.mkdirSync(analysisDir);
+    const temporary = path.join(analysisDir, `.expected-${randomUUID()}.tmp`);
+    try {
+      fs.writeFileSync(temporary, content, {flag: 'wx'});
+      fs.renameSync(temporary, outputPath);
+    } finally {
+      fs.rmSync(temporary, {force: true});
+    }
+  }
+  return {case_id: caseId, output: path.relative(root, outputPath).split(path.sep).join('/'), changed};
+}
+
+module.exports = {buildCatalogCases, materializeCatalogCases, updateCaseExpectations, safeCaseFile, safeGeneratedPath};

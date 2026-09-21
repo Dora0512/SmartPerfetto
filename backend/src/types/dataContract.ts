@@ -3,6 +3,7 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import { copyScopeProvenance, scopeMetadata, type EvidenceScopeMetadata, type EvidenceScopeProvenanceV1 } from './identityContract';
+import type {SceneTimelineView, SceneReportReference} from './sceneTimeline';
 
 /**
  * SmartPerfetto Data Contract
@@ -1175,6 +1176,8 @@ export interface AnalysisCompletedEvent {
     analysisReceipt?: AnalysisReceipt;
     uiActionProposals?: UiActionProposalV1[];
     smartScenePreview?: import('../agent/scene/types').SmartScenePreviewPayload;
+    sceneTimeline?: SceneTimelineView;
+    sceneReport?: SceneReportReference;
     /** Primary result is terminal, but a separate source supplement is still running. */
     sourceEnrichmentPending?: boolean;
     terminalRunStatus?: 'completed' | 'failed' | 'cancelled' | 'quota_exceeded';

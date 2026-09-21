@@ -18,6 +18,7 @@ import { loadSession, turnReportPath } from '../io/sessionStore';
 import { openPath } from '../io/openFile';
 import {parseOutputLanguage} from '../../agentv3/outputLanguage';
 import {loadCliAnalysisEvidence, renderCliAnalysisEvidence} from '../services/analysisResultPresentation';
+import {cliSceneReportMetadata, loadCliSceneReport, renderCliSceneReport} from '../services/sceneReportReference';
 
 export interface ReportCommandArgs {
   sessionId: string;
@@ -44,6 +45,10 @@ export async function runReportCommand(args: ReportCommandArgs): Promise<number>
     console.error(`Error: no session found at ${sp.dir}`);
     return 1;
   }
+
+  const scene = readStoredScene(sp, config, args.turn);
+  const sceneText = renderCliSceneReport(scene, parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE));
+  if (sceneText) console.log(sceneText);
 
   const reportPath = args.turn ? turnReportPath(sp, args.turn) : sp.report;
   if (!fs.existsSync(reportPath)) {
@@ -188,7 +193,7 @@ function formatStoredEvidence(
   conclusion?: string,
   latest = false,
 ): string {
-  return renderCliAnalysisEvidence(loadCliAnalysisEvidence({
+  const evidence = renderCliAnalysisEvidence(loadCliAnalysisEvidence({
     sp,
     sessionId,
     turn,
@@ -196,11 +201,15 @@ function formatStoredEvidence(
     ...(conclusion !== undefined ? {conclusion} : {}),
     latest,
   }), parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE));
+  const scene = renderCliSceneReport(loadCliSceneReport({sp, sessionId, turn, turnMarkdown, conclusion, latest}),
+    parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE));
+  return [evidence, scene].filter(Boolean).join('\n\n');
 }
 
 function buildJsonExport(sp: ReturnType<typeof loadSession>['sp'], config: NonNullable<ReturnType<typeof loadSession>['config']>): Record<string, unknown> {
   return {
     ok: true,
+    ...cliSceneReportMetadata(readStoredScene(sp, config)),
     config,
     conclusion: readIfExists(sp.conclusion),
     claimSupport: readJsonIfExists(sp.claimSupport, []),
@@ -231,6 +240,7 @@ function buildTurnJsonExport(
   const transcript = readTranscript(sp.transcript);
   return {
     ok: true,
+    ...cliSceneReportMetadata(readStoredScene(sp, config, turn)),
     config,
     turn,
     turnMarkdown: readIfExists(mdPath),
@@ -248,6 +258,13 @@ function buildTurnJsonExport(
       transcript: fs.existsSync(sp.transcript) ? sp.transcript : null,
     },
   };
+}
+
+function readStoredScene(sp: ReturnType<typeof loadSession>['sp'], config: NonNullable<ReturnType<typeof loadSession>['config']>, turn?: number) {
+  const selectedTurn = turn ?? config.turnCount;
+  return loadCliSceneReport({sp, sessionId: config.sessionId, turn: selectedTurn,
+    turnMarkdown: readIfExists(path.join(sp.turnsDir, `${String(selectedTurn).padStart(3, '0')}.md`)),
+    ...(turn === undefined ? {traceId: config.traceId, conclusion: readIfExists(sp.conclusion), latest: true} : {})});
 }
 
 function listTurnReports(sp: ReturnType<typeof loadSession>['sp']): string[] {

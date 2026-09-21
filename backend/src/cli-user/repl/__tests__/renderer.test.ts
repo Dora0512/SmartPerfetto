@@ -5,6 +5,28 @@
 import { createRenderer, parseOutputFormat, parseTextJsonFormat } from '../renderer';
 
 describe('CLI renderer', () => {
+  test.each(['json', 'ndjson'] as const)('preserves scene report references in %s completion', format => {
+    const sceneReport = {schemaVersion: 'scene_report_ref@1' as const, reportId: 'scene-v3-cli', sessionId: 'session',
+      traceId: 'trace', runId: 'run', revision: 2, expiresAt: Date.now() + 60_000, manifestSha256: 'a'.repeat(64)};
+    const output = captureStdout(() => {
+      const renderer = createRenderer({verbose: false, useColor: false, format});
+      renderer.printConclusion('body', {});
+      renderer.printCompletion({sessionId: 'session', sessionDir: '/tmp/session', reportPath: '/tmp/session/report.html',
+        sceneReport, sceneReportStatus: 'partial'});
+    });
+    const records = output.trim().split('\n').map(line => JSON.parse(line));
+    expect(records[records.length - 1]).toMatchObject({sceneReport, sceneReportStatus: 'partial'});
+  });
+  test('text completion calls a scene result partial and links the authorized report endpoint', () => {
+    const output = captureStdout(() => {
+      const renderer = createRenderer({verbose: false, useColor: false, format: 'text'});
+      renderer.printCompletion({sessionId: 'session', sessionDir: '/tmp/session', reportPath: '/tmp/session/report.html',
+        sceneReportStatus: 'partial', sceneReport: {schemaVersion: 'scene_report_ref@1', reportId: 'scene-v3-cli', sessionId: 'session',
+          traceId: 'trace', runId: 'run', revision: 2, expiresAt: Date.now() + 60_000, manifestSha256: 'a'.repeat(64)}});
+    });
+    expect(output).toMatch(/部分结果|partial result/);
+    expect(output).toContain('/api/agent/v1/scene-reconstruct/report/scene-v3-cli');
+  });
   test('renders one JSON object after completion', () => {
     const analysisEvidence = evidenceBundle();
     const output = captureStdout(() => {

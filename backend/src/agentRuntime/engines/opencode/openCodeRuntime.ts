@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {snapshotSceneCoverageRegistry} from '../../../agent/scene/sceneCoveragePlan';
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
 import type {ChildProcess} from 'child_process';
@@ -29,6 +30,7 @@ import {
 } from '../../../services/selfEvolution/evaluationRuntimeHooks';
 import { ArtifactStore } from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
+import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
 import {
   buildNegativePatternSection,
   buildPatternContextSection,
@@ -2704,6 +2706,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       }
     };
     const resolver = createAnalysisTurnIntentResolver({
+      productRun: {options, runId: executionLease.key.runId!, sessionId, traceId},
       context: buildComplexityClassifierInput({
         query, sceneType: 'general', selectionContext: options.selectionContext,
         hasReferenceTrace: Boolean(options.referenceTraceId), previousTurns: [], history: analysisHistoryReader.getTurns(),
@@ -2738,11 +2741,20 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     executionLease.throwIfAborted();
     const closeoutTape = createRuntimeTurnCloseoutTape();
     let toolAdmissionsOpen = true;
+    const quickBudget = resolveQuickTurnBudget({env: this.env, enforcement: 'timeout_only'});
+    const maxSteps = turnPolicy.budgetMode === 'quick' ? quickBudget.hardCapTurns : resolveAgentRuntimeBudgetConfig(this.env).maxTurns;
+    const turnBudget = resolveRuntimeTurnBudget(maxSteps);
+    const promptTimeout = Math.min(
+      numericEnv(this.env[OPENCODE_PROMPT_TIMEOUT_MS_ENV]) ?? DEFAULT_PROMPT_TIMEOUT_MS,
+      turnPolicy.budgetMode === 'quick' ? maxSteps * (numericEnv(this.env.OPENCODE_QUICK_PER_TURN_MS) ?? 30_000) : DEFAULT_PROMPT_TIMEOUT_MS,
+    );
+    const sceneDeadlineMs = resolveSceneProductScope(options, {runId: executionLease.key.runId!, sessionId, traceId})
+      ? Date.now() + promptTimeout : undefined;
     const prep = await this.prepareAnalysis(
       query, sessionId, traceId, options,
       `${modelConfig.model.providerID}/${modelConfig.model.modelID}`,
       turnIntent, turnPolicy, resolver.strategyRegistry, analysisHistoryReader, closeoutTape.observe,
-      () => toolAdmissionsOpen,
+      () => toolAdmissionsOpen && !executionLease.signal.aborted, sceneDeadlineMs, executionLease.signal,
     );
     executionLease.throwIfAborted();
     const resolveFinalReportSceneType = () => prep.sceneType;
@@ -2777,15 +2789,8 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     const port = numericEnv(this.env[OPENCODE_SERVER_PORT_ENV]);
     const timeout = numericEnv(this.env[OPENCODE_SERVER_TIMEOUT_MS_ENV]) ?? DEFAULT_SERVER_TIMEOUT_MS;
     // SDK maxSteps forces a text-only iteration; it does not guarantee a total call cap.
-    const quickBudget = resolveQuickTurnBudget({env: this.env, enforcement: 'timeout_only'});
-    const maxSteps = prep.quickMode ? quickBudget.hardCapTurns : resolveAgentRuntimeBudgetConfig(this.env).maxTurns;
-    const turnBudget = resolveRuntimeTurnBudget(maxSteps);
-    const promptTimeout = Math.min(
-      numericEnv(this.env[OPENCODE_PROMPT_TIMEOUT_MS_ENV]) ?? DEFAULT_PROMPT_TIMEOUT_MS,
-      prep.quickMode ? maxSteps * (numericEnv(this.env.OPENCODE_QUICK_PER_TURN_MS) ?? 30_000) : DEFAULT_PROMPT_TIMEOUT_MS,
-    );
     // The native answer and final semantic review share one absolute budget.
-    const deadlineMs = Date.now() + promptTimeout;
+    const deadlineMs = sceneDeadlineMs ?? Date.now() + promptTimeout;
     const runId = options.runId ?? crypto.randomUUID();
     let attemptId = crypto.randomUUID();
     let turnLimitReached = false;
@@ -3172,6 +3177,8 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     analysisHistoryReader: AnalysisHistoryReader,
     toolObserver?: RuntimeToolObserver,
     canInvokeTool?: () => boolean,
+    sceneDeadlineMs?: number,
+    sceneSignal?: AbortSignal,
   ): Promise<OpenCodeAnalysisPreparation> {
     const outputLanguage = options.outputLanguage
       ?? parseOutputLanguage(this.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
@@ -3199,9 +3206,11 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     const skillExecutor = createSkillExecutor(this.input.traceProcessorService);
     const effectiveSkillRegistry =
       resolveEffectiveSkillRegistryForRuntime(skillRegistry);
-    skillExecutor.registerSkills(effectiveSkillRegistry.getAllSkills());
+    const sceneCoverageRegistry = resolveSceneProductScope(options, {sessionId, traceId, runId: options.runId ?? ''})
+      ? snapshotSceneCoverageRegistry(effectiveSkillRegistry, strategyRegistry, turnIntent.sceneId) : undefined;
+    skillExecutor.registerSkills(sceneCoverageRegistry ? [...sceneCoverageRegistry.skills] : effectiveSkillRegistry.getAllSkills());
     skillExecutor.setFragmentRegistry(
-      effectiveSkillRegistry.getFragmentCache(),
+      sceneCoverageRegistry ? new Map(sceneCoverageRegistry.fragments) : effectiveSkillRegistry.getFragmentCache(),
     );
 
     let architecture = getLruCacheEntry(this.architectureCache, traceId);
@@ -3287,7 +3296,11 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     ) || normalizeOptionalString(this.env[OPENCODE_SYSTEM_PROMPT_ENV]);
     const withConfiguredSystemPrompt = (prompt: string): string => extraSystemPrompt
       ? `${prompt}\n\n${extraSystemPrompt}` : prompt;
+    const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
+      deadlineMs: sceneDeadlineMs ?? 0, traceProcessorService: this.input.traceProcessorService,
+      artifactStore, sceneCoverageRegistry, signal: sceneSignal, canInvokeTool});
     const { toolDefinitions, sourceUse } = createClaudeMcpServer({
+      sceneRunContext,
       toolObserver, canInvokeTool, analysisHistoryReader,
       strategyRegistry,
       conversationTraceAttached: options.assistantSurface === 'conversation'

@@ -7,6 +7,10 @@ const path = require('node:path');
 const cache = new Map();
 const OPTIONAL_TRACE_PACKET_EXTENSIONS = [
   {
+    fieldNumber: 112,
+    path: 'protos/third_party/android/frameworks/native/tracing/winscope/frameworks_native_winscope.proto',
+  },
+  {
     fieldNumber: 76,
     path: 'protos/third_party/android/frameworks/native/tracing/frameworks_native_trace_packet.proto',
   },
@@ -20,6 +24,9 @@ function loadTraceType(repoRoot) {
   const perfettoRoot = path.join(normalizedRoot, 'perfetto');
   const root = new protobuf.Root();
   root.resolvePath = (origin, target) => {
+    if (target === 'google/protobuf/descriptor.proto') {
+      return require.resolve('protobufjs/google/protobuf/descriptor.proto');
+    }
     if (target.startsWith('protos/')) return path.join(perfettoRoot, target);
     return protobuf.util.path.resolve(origin, target);
   };
@@ -41,15 +48,19 @@ function loadTraceType(repoRoot) {
 }
 
 function resolveTracePacketFieldName(repoRoot, fieldNumber) {
+  return resolveMessageFieldName(repoRoot, 'perfetto.protos.TracePacket', fieldNumber);
+}
+
+function resolveMessageFieldName(repoRoot, messageType, fieldNumber) {
   if (!Number.isInteger(fieldNumber) || fieldNumber <= 0) {
     throw new Error(`TracePacket field number must be a positive integer: ${fieldNumber}`);
   }
   const traceType = loadTraceType(repoRoot);
-  const tracePacketType = traceType.root.lookupType('perfetto.protos.TracePacket');
+  const tracePacketType = traceType.root.lookupType(messageType);
   const matches = tracePacketType.fieldsArray.filter((field) => field.id === fieldNumber);
   if (matches.length !== 1) {
     throw new Error(
-      `Perfetto TracePacket field ${fieldNumber} resolved to ${matches.length} schema fields; ` +
+      `Perfetto ${messageType} field ${fieldNumber} resolved to ${matches.length} schema fields; ` +
       'load the required core or extension proto before encoding',
     );
   }
@@ -79,4 +90,5 @@ module.exports = {
   encodeTrace,
   loadTraceType,
   resolveTracePacketFieldName,
+  resolveMessageFieldName,
 };

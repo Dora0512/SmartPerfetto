@@ -14,6 +14,7 @@ import { loadSession } from '../io/sessionStore';
 import { openPath } from '../io/openFile';
 import {parseOutputLanguage} from '../../agentv3/outputLanguage';
 import {loadCliAnalysisEvidence, renderCliAnalysisEvidence} from '../services/analysisResultPresentation';
+import {loadCliSceneReport, renderCliSceneReport} from '../services/sceneReportReference';
 
 export interface ShowCommandArgs {
   sessionId: string;
@@ -40,13 +41,10 @@ export async function runShowCommand(args: ShowCommandArgs): Promise<number> {
 
   // Body: latest conclusion. Session folder always has conclusion.md after
   // the first turn — if it's missing the session is corrupt or mid-analysis.
+  const conclusion = readIfExists(sp.conclusion);
+  const turnMarkdown = readIfExists(path.join(sp.turnsDir, `${String(config.turnCount).padStart(3, '0')}.md`));
   if (fs.existsSync(sp.conclusion)) {
-    const conclusion = fs.readFileSync(sp.conclusion, 'utf-8');
     console.log(conclusion);
-    const turnMarkdown = readIfExists(path.join(
-      sp.turnsDir,
-      `${String(config.turnCount).padStart(3, '0')}.md`,
-    ));
     const evidence = loadCliAnalysisEvidence({
       sp,
       sessionId: config.sessionId,
@@ -63,6 +61,10 @@ export async function runShowCommand(args: ShowCommandArgs): Promise<number> {
   } else {
     console.log('(no conclusion yet — session is pending or incomplete)');
   }
+  const sceneText = renderCliSceneReport(loadCliSceneReport({sp, sessionId: config.sessionId,
+    traceId: config.traceId, turn: config.turnCount, conclusion, turnMarkdown, latest: true}),
+  parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE));
+  if (sceneText) console.log(`\n${sceneText}`);
 
   // Footer: report pointer. Surface always, even without --open, so the user
   // can copy it into a browser manually.

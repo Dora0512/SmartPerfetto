@@ -7,11 +7,11 @@
     "authoredNarrativeRemainsVerbatim": true
   },
   "inventory": {
-    "skillCount": 240,
+    "skillCount": 242,
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
-    "stepCount": 1270,
-    "explicitColumnCount": 4373
+    "stepCount": 1280,
+    "explicitColumnCount": 4391
   },
   "skills": {
     "ams_module": {
@@ -27400,6 +27400,100 @@
         }
       }
     },
+    "scene_device_state_changes": {
+      "displayName": {
+        "zh-CN": "场景设备状态变化",
+        "en": "Scene Device State Changes"
+      },
+      "description": {
+        "zh-CN": "查询屏幕、充电和已提交 DeviceState 的瞬时事件与派生持续状态；保留厂商状态原值，不凭状态编号猜测折叠姿态。",
+        "en": "Analyzes Scene Device State Changes using trace metrics and supporting evidence."
+      },
+      "type": "composite",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "场景设备状态变化",
+            "en": "Scene Device State Changes"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "state_intervals": {
+          "title": {
+            "zh-CN": "设备状态变化",
+            "en": "State Intervals"
+          },
+          "columns": {
+            "start_ts": {
+              "label": {
+                "zh-CN": "开始",
+                "en": "Start Ts"
+              }
+            },
+            "end_ts": {
+              "label": {
+                "zh-CN": "结束",
+                "en": "End Ts"
+              }
+            },
+            "dur_ns": {
+              "label": {
+                "zh-CN": "持续",
+                "en": "Dur ns"
+              }
+            },
+            "dimension": {
+              "label": {
+                "zh-CN": "维度",
+                "en": "Dimension"
+              }
+            },
+            "fact_kind": {
+              "label": {
+                "zh-CN": "事实类型",
+                "en": "Fact Kind"
+              }
+            },
+            "state_value": {
+              "label": {
+                "zh-CN": "状态原值",
+                "en": "State Value"
+              }
+            },
+            "source_status": {
+              "label": {
+                "zh-CN": "证据状态",
+                "en": "Source Status"
+              }
+            },
+            "boundary_basis": {
+              "label": {
+                "zh-CN": "边界依据",
+                "en": "Boundary Basis"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "state_sources": {
+          "title": {
+            "zh-CN": "设备状态数据来源",
+            "en": "State Sources"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        }
+      }
+    },
     "scene_reconstruction": {
       "displayName": {
         "zh-CN": "场景还原",
@@ -27802,10 +27896,16 @@
         },
         "idle_periods": {
           "title": {
-            "zh-CN": "空闲区间",
-            "en": "Idle Periods"
+            "zh-CN": "未观测到输入的区间（采集完整性未确认）",
+            "en": "Intervals with no observed input (capture completeness unconfirmed)"
           },
           "columns": {
+            "end_ts": {
+              "label": {
+                "zh-CN": "结束时间",
+                "en": "End Ts"
+              }
+            },
             "ts": {
               "label": {
                 "zh-CN": "开始时间",
@@ -27927,6 +28027,14 @@
               }
             }
           },
+          "synthesizeLabels": {}
+        },
+        "input_coverage": {
+          "title": {
+            "zh-CN": "输入事实覆盖范围",
+            "en": "Input Coverage"
+          },
+          "columns": {},
           "synthesizeLabels": {}
         },
         "jank_events": {
@@ -28148,7 +28256,7 @@
         },
         "scroll_initiation": {
           "title": {
-            "zh-CN": "滑动启动",
+            "zh-CN": "滚动处理",
             "en": "Scroll Initiation"
           },
           "columns": {
@@ -28398,6 +28506,106 @@
               }
             }
           },
+          "synthesizeLabels": {}
+        }
+      }
+    },
+    "scene_response_markers": {
+      "displayName": {
+        "zh-CN": "场景响应原始标记",
+        "en": "Scene Response Markers"
+      },
+      "description": {
+        "zh-CN": "读取 Scroll、FlingStart 原始 slice 及线程或进程 track 归属；持续时间仅表示标记执行区间，不解释 name 内 duration，也不证明完整滚动、惯性或呈现。",
+        "en": "Analyzes Scene Response Markers using trace metrics and supporting evidence."
+      },
+      "type": "composite",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "response_markers": {
+          "title": {
+            "zh-CN": "响应标记原始区间",
+            "en": "Response Markers"
+          },
+          "columns": {
+            "slice_id": {
+              "label": {
+                "zh-CN": "SliceId",
+                "en": "Slice ID"
+              }
+            },
+            "ts": {
+              "label": {
+                "zh-CN": "标记开始",
+                "en": "Ts"
+              }
+            },
+            "dur": {
+              "label": {
+                "zh-CN": "标记持续",
+                "en": "Dur"
+              }
+            },
+            "end_ts": {
+              "label": {
+                "zh-CN": "标记结束",
+                "en": "End Ts"
+              }
+            },
+            "raw_name": {
+              "label": {
+                "zh-CN": "标记原文",
+                "en": "Raw Name"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "所属进程",
+                "en": "Process Name"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "所属线程",
+                "en": "Thread Name"
+              }
+            },
+            "identity_basis": {
+              "label": {
+                "zh-CN": "归属来源",
+                "en": "Identity Basis"
+              }
+            },
+            "source_status": {
+              "label": {
+                "zh-CN": "观测状态",
+                "en": "Source Status"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "response_sources": {
+          "title": {
+            "zh-CN": "响应标记扫描范围",
+            "en": "Response Sources"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "场景响应原始标记",
+            "en": "Scene Response Markers"
+          },
+          "columns": {},
           "synthesizeLabels": {}
         }
       }
@@ -36918,6 +37126,14 @@
               }
             }
           },
+          "synthesizeLabels": {}
+        },
+        "input_coverage": {
+          "title": {
+            "zh-CN": "输入事实覆盖范围",
+            "en": "Input Coverage"
+          },
+          "columns": {},
           "synthesizeLabels": {}
         },
         "input_state_lane_fallback": {

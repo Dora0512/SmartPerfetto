@@ -45,6 +45,10 @@ export interface CompletedAnalysisSnapshotInput extends AnalysisDeliveryFields {
   sessionId: string;
   runId?: string;
   reportId?: string;
+  /** Product-issued archive locator, never a copy of the canonical timeline. */
+  sceneReport?: AnalysisResult['sceneReport'];
+  /** Current finalized timeline revision supplied independently of its archive locator. */
+  sceneTimelineRevision?: number;
   query: string;
   traceLabel?: string;
   conclusion?: string;
@@ -437,6 +441,23 @@ function extractStandardMetrics(envelopes: DataEnvelope[] = []): NormalizedMetri
   return [...byKey.values()];
 }
 
+/** Historical identity validation only; a persisted JSON reference grants no live proof or archive access. */
+function validatedSceneReportReference(input: CompletedAnalysisSnapshotInput): AnalysisResult['sceneReport'] {
+  const ref = input.sceneReport;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref) ||
+    Object.keys(ref).some(key => !['schemaVersion', 'reportId', 'traceId', 'sessionId', 'runId',
+      'revision', 'expiresAt', 'manifestSha256'].includes(key)) ||
+    ref.schemaVersion !== 'scene_report_ref@1' || typeof ref.reportId !== 'string' ||
+    !/^scene-v3-[A-Za-z0-9_-]+$/.test(ref.reportId) ||
+    ref.traceId !== input.traceId || ref.sessionId !== input.sessionId || ref.runId !== input.runId ||
+    !Number.isSafeInteger(ref.revision) || ref.revision < 0 || ref.revision !== input.sceneTimelineRevision ||
+    !Number.isSafeInteger(ref.expiresAt) || ref.expiresAt <= 0 ||
+    typeof ref.manifestSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(ref.manifestSha256)) return undefined;
+  return {schemaVersion: ref.schemaVersion, reportId: ref.reportId, traceId: ref.traceId,
+    sessionId: ref.sessionId, runId: ref.runId, revision: ref.revision,
+    expiresAt: ref.expiresAt, manifestSha256: ref.manifestSha256};
+}
+
 export function buildCompletedAnalysisResultSnapshot(
   input: CompletedAnalysisSnapshotInput,
 ): AnalysisResultSnapshot | null {
@@ -501,6 +522,7 @@ export function buildCompletedAnalysisResultSnapshot(
     claimSupport: input.claimSupport, claimVerificationResult: input.claimVerificationResult,
     sourceUseDecision: input.sourceUseDecision, sourceClaimVerificationResult: input.sourceClaimVerificationResult,
     identityResolutions: input.identityResolutions, analysisReceipt,
+    sceneReport: validatedSceneReportReference(input),
   });
   const conclusionContract = storedResult.conclusionContract;
 
@@ -521,6 +543,7 @@ export function buildCompletedAnalysisResultSnapshot(
     traceMetadata: {},
     summary: {
       headline,
+      ...(storedResult.sceneReport ? {sceneReport: storedResult.sceneReport} : {}),
       ...(input.conclusion !== undefined ? {conclusion: input.conclusion} : {}),
       ...copyAnalysisDeliveryFields(storedResult),
       ...(storedResult.sourceUseDecision ? {sourceUseDecision: storedResult.sourceUseDecision} : {}),
@@ -642,6 +665,7 @@ export function persistCompletedAnalysisResultSnapshot(
     sourceUseDecision: input.sourceUseDecision, sourceClaimVerificationResult: input.sourceClaimVerificationResult,
     identityResolutions: input.identityResolutions,
     analysisReceipt: input.analysisReceipt,
+    sceneReport: validatedSceneReportReference(input),
   }, outputLanguage) : undefined;
   const {turnIntent: _intent, completion: _completion, outputOrigin: _origin, runtimeAppendix: _appendix,
     reportAssessment: _assessment, investigationAssessment: _investigation, deliveryAssurance: _assurance, ...inputWithoutDelivery} = input;
@@ -661,6 +685,7 @@ export function persistCompletedAnalysisResultSnapshot(
         terminationReason: projectPrivateTerminationReason(input.terminationReason),
         terminationMessage: projectOwnerTerminationMessage(input.terminationMessage, outputLanguage, privateResult ?? input),
         analysisReceipt: privateResult?.analysisReceipt,
+        sceneReport: privateResult?.sceneReport,
         uiActionProposals: projectOwnerUiActionProposals(
           input.sessionId,
           input.uiActionProposals,

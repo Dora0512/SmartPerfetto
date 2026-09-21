@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {snapshotSceneCoverageRegistry} from '../../../agent/scene/sceneCoveragePlan';
 import { EventEmitter } from 'events';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp, rm} from 'node:fs/promises';
@@ -25,6 +26,7 @@ import {
 } from '../../../services/selfEvolution/evaluationRuntimeHooks';
 import { ArtifactStore } from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
+import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
 import {
   buildNegativePatternSection,
   buildPatternContextSection,
@@ -630,6 +632,7 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
       });
     });
     const intentResolver = createAnalysisTurnIntentResolver({
+      productRun: {options, runId: executionLease.key.runId!, sessionId, traceId},
       context: buildComplexityClassifierInput({
         query, sceneType: 'general', selectionContext: options.selectionContext,
         hasReferenceTrace: Boolean(options.referenceTraceId), previousTurns: [],
@@ -847,9 +850,11 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
     const skillExecutor = createSkillExecutor(traceProcessorService);
     const effectiveSkillRegistry =
       resolveEffectiveSkillRegistryForRuntime(skillRegistry);
-    skillExecutor.registerSkills(effectiveSkillRegistry.getAllSkills());
+    const sceneCoverageRegistry = resolveSceneProductScope(normalizedOptions, {sessionId, traceId, runId: normalizedOptions.runId ?? ''})
+      ? snapshotSceneCoverageRegistry(effectiveSkillRegistry, intentResolver.strategyRegistry, turnIntent.sceneId) : undefined;
+    skillExecutor.registerSkills(sceneCoverageRegistry ? [...sceneCoverageRegistry.skills] : effectiveSkillRegistry.getAllSkills());
     skillExecutor.setFragmentRegistry(
-      effectiveSkillRegistry.getFragmentCache(),
+      sceneCoverageRegistry ? new Map(sceneCoverageRegistry.fragments) : effectiveSkillRegistry.getFragmentCache(),
     );
 
     const artifactStore = resolveRuntimeEvidenceStore(normalizedOptions, {sessionId, traceId},
@@ -977,13 +982,18 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
       });
     };
 
+    const canInvokeTool = () => acquisitionOpen && isRunDeliverable();
+    const sceneRunContext = await activateSceneRuntime(normalizedOptions, {sessionId, traceId,
+      runId: executionLease.key.runId!, deadlineMs: sessionState.deadlineMs ?? 0,
+      traceProcessorService, artifactStore, sceneCoverageRegistry, signal: executionLease.signal, canInvokeTool});
     const mcp = createClaudeMcpServer({
+      sceneRunContext,
       allowNewEvidence: policy.allowNewEvidence,
       strategyRegistry: intentResolver.strategyRegistry,
       lightweight: isQuickMode,
       toolObserver,
       analysisHistoryReader,
-      canInvokeTool: () => acquisitionOpen && isRunDeliverable(),
+      canInvokeTool,
       conversationTraceAttached: options?.assistantSurface === 'conversation'
         ? options.conversationTraceAttached === true
         : undefined,

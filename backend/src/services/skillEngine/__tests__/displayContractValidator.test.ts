@@ -4,10 +4,39 @@
 
 import { describe, expect, it } from '@jest/globals';
 import {
+  isDisplayTitleTranslations,
   sanitizeDisplayConfigForRuntime,
   validateSkillDisplayContract,
 } from '../displayContractValidator';
 import type { SkillDefinition } from '../types';
+
+describe('authored display title translations', () => {
+  it.each([null, [], 'title', {en: ''}, {en: '  '}, {en: 7}, {fr: 'Titre'}])('rejects malformed overrides: %p', value => {
+    expect(isDisplayTitleTranslations(value)).toBe(false);
+    expect(validateSkillDisplayContract(baseSkill({steps: [{id: 'step', type: 'atomic',
+      display: {title_i18n: value}} as any]})).some(issue => issue.field.endsWith('title_i18n'))).toBe(true);
+  });
+  it('accepts partial locale overrides and removes authoring metadata from runtime display', () => {
+    expect(isDisplayTitleTranslations({en: 'Observed interval'})).toBe(true);
+    expect(sanitizeDisplayConfigForRuntime({title: 'Observed interval', title_i18n: {en: 'Observed interval'}}).config.title_i18n)
+      .toBeUndefined();
+  });
+  it.each(['root', 'output', 'then', 'else', 'conditions', 'unnamed'])('rejects title overrides at unsupported %s locations', location => {
+    const display = {title_i18n: {en: 'Explicit title'}};
+    const child = {id: 'child', type: 'atomic', display};
+    const branch = location === 'conditions' ? {conditions: [{then: child}]} : {[location]: child};
+    const definition = location === 'root' ? {display} : location === 'output' ? {output: {display}}
+      : location === 'unnamed' ? {steps: [{type: 'atomic', display}]}
+      : {steps: [{id: 'parent', type: 'conditional', ...branch}]};
+    expect(validateSkillDisplayContract(baseSkill(definition as any)).some(issue => issue.field.endsWith('title_i18n'))).toBe(true);
+  });
+  it('accepts overrides on recursively nested named steps without changing ordinary branch titles', () => {
+    const definition = baseSkill({steps: [{id: 'parent', type: 'parallel', steps: [{id: 'child', type: 'atomic',
+      display: {title_i18n: {en: 'Explicit title'}}}]}, {id: 'branch', type: 'conditional',
+      then: {id: 'then', type: 'atomic', display: {title: 'Ordinary title'}}}] as any});
+    expect(validateSkillDisplayContract(definition)).toEqual([]);
+  });
+});
 
 const baseSkill = (overrides: Partial<SkillDefinition> & Record<string, unknown> = {}): SkillDefinition & Record<string, unknown> => ({
   name: 'display_contract_test',

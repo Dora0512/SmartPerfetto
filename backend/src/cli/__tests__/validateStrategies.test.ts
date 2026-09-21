@@ -37,6 +37,27 @@ function validationContext(): StrategyFrontmatterValidationContext {
   };
 }
 
+describe('semantic final report requirements', () => {
+  const contract = (extra: string) => frontmatter(`scene: startup
+final_report_contract:
+  required_sections:
+    - id: observations
+      label: Observations
+      ${extra}`);
+  it('accepts a semantic requirement without inert legacy heading patterns', () => {
+    expect(validateStrategyFrontmatter(contract('description: Explain observed actions and their uncertainty'), 'semantic.strategy.md')).toEqual([]);
+  });
+  it.each(['description: "   "', 'description: 42'])('rejects an empty or invalid semantic declaration: %s', extra => {
+    expect(validateStrategyFrontmatter(contract(extra), 'bad.strategy.md').length).toBeGreaterThan(0);
+  });
+  it('still validates supplied legacy regex and description types', () => {
+    expect(validateStrategyFrontmatter(contract('description: Explain observations\n      patterns: ["["]'), 'bad.strategy.md'))
+      .toEqual(expect.arrayContaining([expect.stringContaining('not a valid JavaScript regex')]));
+    expect(validateStrategyFrontmatter(contract('description: 42\n      patterns: ["observed"]'), 'bad.strategy.md'))
+      .toEqual(expect.arrayContaining([expect.stringContaining('description must be a string')]));
+  });
+});
+
 describe('validateStrategyFrontmatter investigation contracts', () => {
   it('requires explicit contracts in the builtin validation gate while reading legacy fixtures', () => {
     const content = frontmatter('scene: startup');

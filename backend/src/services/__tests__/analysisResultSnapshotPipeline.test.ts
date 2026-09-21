@@ -1304,3 +1304,43 @@ test('persists bound system investigation without new acquisition and preserves 
   expect(snapshot?.summary.deliveryAssurance?.investigationEvidence).toBe('coverage_incomplete');
   expect(buildCompletedAnalysisResultSnapshot(input)?.summary.investigationAssessment).toBeUndefined();
 });
+
+describe('scene archive references in comparison snapshots', () => {
+  const reference = () => ({schemaVersion: 'scene_report_ref@1' as const, reportId: 'scene-v3-report',
+    traceId: 'trace-scene', sessionId: 'session-scene', runId: 'run-scene', revision: 7,
+    expiresAt: 1_800_000_000_000, manifestSha256: 'a'.repeat(64)});
+  const input = () => ({tenantId: 'tenant-scene', workspaceId: 'workspace-scene',
+    traceId: 'trace-scene', sessionId: 'session-scene', runId: 'run-scene', query: 'reconstruct',
+    sceneType: 'scene_reconstruction', sceneReport: reference(), sceneTimelineRevision: 7});
+
+  test('keeps the bound historical locator in summary JSON without another timeline copy', () => {
+    const snapshot = buildCompletedAnalysisResultSnapshot(input());
+    expect(snapshot?.summary.sceneReport).toEqual(reference());
+    expect(snapshot?.sceneType).toBe('scene_reconstruction');
+    expect(JSON.stringify(snapshot)).not.toContain('sceneTimeline');
+    expect(snapshot?.summary.sceneReport).not.toHaveProperty('verified');
+  });
+
+  test.each([
+    ['traceId', 'other-trace'], ['sessionId', 'other-session'], ['runId', 'other-run'],
+    ['revision', 6], ['schemaVersion', 'forged'], ['manifestSha256', 'not-a-digest'],
+    ['expiresAt', -1], ['reportId', 'legacy-report'], ['verified', true],
+  ])('drops an invalid or mismatched %s without changing the ordinary result', (field, value) => {
+    const source = input();
+    source.sceneReport = {...source.sceneReport, [field]: value} as typeof source.sceneReport;
+    const snapshot = buildCompletedAnalysisResultSnapshot(source);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.summary.sceneReport).toBeUndefined();
+  });
+
+  test('requires the independently supplied revision pin', () => {
+    const {sceneTimelineRevision: _revision, ...source} = input();
+    expect(buildCompletedAnalysisResultSnapshot(source)?.summary.sceneReport).toBeUndefined();
+  });
+
+  test('retains an expired locator as historical metadata without claiming archive availability', () => {
+    const source = input();
+    source.sceneReport.expiresAt = 1;
+    expect(buildCompletedAnalysisResultSnapshot(source)?.summary.sceneReport?.expiresAt).toBe(1);
+  });
+});

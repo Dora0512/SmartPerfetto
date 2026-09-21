@@ -680,6 +680,14 @@ export class AgentAnalyzeSessionService<TSession extends AnalyzeManagedSession> 
                 }
               : undefined;
             const restoredRun = stateSnapshot?.lastRun || stateSnapshot?.activeRun || fallbackRestoredRun;
+            const sceneSnapshotResult = stateSnapshot?.finalResult;
+            const restoredResult = sceneSnapshotResult?.sceneTimeline &&
+              stateSnapshot?.sessionId === requestedSessionId && stateSnapshot.traceId === traceId &&
+              sceneSnapshotResult.sessionId === requestedSessionId &&
+              sceneSnapshotResult.sceneTimeline.sessionId === requestedSessionId &&
+              sceneSnapshotResult.sceneTimeline.traceId === traceId &&
+              sceneSnapshotResult.sceneTimeline.runId === restoredRun?.runId
+              ? sceneSnapshotResult : recoveredResult;
             const restoredContinuityBreaks = snapshotProviderHashMismatch && typeof snapshotProviderHash === 'string'
               ? appendProviderContinuityBreak(stateSnapshot?.continuityBreaks, snapshotProviderHash)
               : normalizeContinuityBreaks(stateSnapshot?.continuityBreaks);
@@ -736,7 +744,7 @@ export class AgentAnalyzeSessionService<TSession extends AnalyzeManagedSession> 
               orchestrator: restoredOrchestrator,
               sessionId: requestedSessionId,
               sseClients: [],
-              result: recoveredResult || undefined,
+              result: restoredResult || undefined,
               status: 'pending',
               traceId,
               query,

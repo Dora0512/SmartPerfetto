@@ -5,8 +5,11 @@
 /**
  * sceneStoryService — the entry point for the Scene Story pipeline.
  *
- * Drives the four stages of /scene-reconstruct end-to-end without ever
- * touching runAgentDrivenAnalysis or session.orchestrator.analyze:
+ * Keeps the legacy deterministic/Smart pipeline and adapts finalized v3 scene
+ * investigations. V3 acquisition and terminal publication belong to the shared
+ * analysis runner; its archive adapter below emits no events or session status.
+ *
+ * Legacy stages:
  *
  *   Stage 1  scene_reconstruction skill (no LLM)
  *   Stage 2  per-interval Agent deep-dive via SceneAnalysisJobRunner
@@ -29,6 +32,9 @@
  */
 
 import { uuidv4 } from '../../utils/uuid';
+import {acceptFinalizedSceneTimeline, loadFinalizedSceneReport, projectSceneTimelineReport,
+  type AcceptFinalizedTimelineInput, type FinalizedTimelineReport, type SceneTimelineArchive} from './sceneTimelineReportAdapter';
+import type {SceneTimelineReport, SceneTimelineReportView} from './types';
 import { SkillExecutor } from '../../services/skillEngine/skillExecutor';
 import { SkillExecutionResult } from '../../services/skillEngine/types';
 import { DataEnvelope } from '../../types/dataContract';
@@ -110,6 +116,10 @@ export function projectSceneReport(
   report: SceneReport,
   outputLanguage: OutputLanguage,
 ): SceneReport {
+  if (report.generatedBy.pipelineVersion === 'v3') {
+    if (!report.sceneTimeline) throw new Error('scene_report_canonical_missing');
+    return projectSceneTimelineReport(report as SceneTimelineReport | SceneTimelineReportView, outputLanguage);
+  }
   return {
     ...report,
     summary: projectedReportSummary(report, outputLanguage),
@@ -151,6 +161,8 @@ export interface SceneStorySession {
 }
 
 export interface SceneStoryServiceDeps {
+  /** Canonical v3 report/assessment archive; never shared with the v2 cache. */
+  evidenceArchive?: SceneTimelineArchive;
   /** Per-session SSE broadcast (sessionId, update) → void. */
   broadcast: (sessionId: string, update: StreamingUpdate, runId?: string) => void;
   /** Session lookup. */
@@ -243,6 +255,18 @@ export class SceneStoryService {
       traceId,
       traceSide: 'current',
     }));
+  }
+
+  /** Pure product adapter: the caller retains session and terminal publication ownership. */
+  async acceptFinalizedTimeline(input: AcceptFinalizedTimelineInput): Promise<FinalizedTimelineReport> {
+    if (!this.deps.evidenceArchive) throw new Error('scene_evidence_archive_not_configured');
+    return acceptFinalizedSceneTimeline(this.deps.evidenceArchive, input);
+  }
+
+  /** Historical v3 read. The route must also authorize access to the report's trace. */
+  async getFinalizedReport(ownerKey: string, reportId: string): Promise<SceneTimelineReportView | null> {
+    if (!this.deps.evidenceArchive) return null;
+    return loadFinalizedSceneReport(this.deps.evidenceArchive, ownerKey, reportId);
   }
 
   private runKey(sessionId: string, runId?: string): string {
@@ -375,6 +399,8 @@ export class SceneStoryService {
       sceneVerification = await runSceneStage1Verifier({
         scenes,
         traceDurationSec,
+        traceBounds: stage1.traceBounds,
+        inputCoverage: stage1.inputCoverage,
         enableLlm: routeProfile === 'smart' && options?.verifyWithLlm === true,
       });
       options?.cancelToken?.throwIfAborted();
@@ -1153,7 +1179,8 @@ function buildSceneReport(args: {
   phase?: SceneReport['phase'];
 }): SceneReport {
   const failedCount = args.jobs.filter((j) => j.state === 'failed').length;
-  const partial = args.cancelled || failedCount > 0;
+  const partial = args.cancelled || failedCount > 0 ||
+    args.sceneVerification?.status === 'needs_review' || args.sceneVerification?.status === 'failed';
   const totalDurationMs = Date.now() - args.createdAt;
 
   const insights: SceneInsight[] = [];

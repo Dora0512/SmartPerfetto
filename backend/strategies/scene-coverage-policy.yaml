@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Required query populations. Missing producers remain unknown; no source is waived by absent rows.
+profileId: scene_reconstruction
+profileVersion: 1
+requiredTargets:
+  - id: input_observations
+    domain: scene_input
+    source: all
+    producer: {skillId: scene_reconstruction, summaryStepId: input_coverage, resultStepId: user_gestures}
+  - {id: input_device_state, domain: scene_input_device, source: all}
+  - id: screen
+    domain: scene_device
+    source: screen
+    producer: {skillId: scene_device_state_changes, summaryStepId: state_sources, resultStepId: state_intervals}
+  - id: charging
+    domain: scene_device
+    source: charging
+    producer: {skillId: scene_device_state_changes, summaryStepId: state_sources, resultStepId: state_intervals}
+  - id: device_state
+    domain: scene_device
+    source: device_state
+    producer: {skillId: scene_device_state_changes, summaryStepId: state_sources, resultStepId: state_intervals}
+  - {id: keyguard, domain: scene_device, source: keyguard}
+  - {id: suspend, domain: scene_device, source: suspend}
+  - {id: display_rotation, domain: scene_device, source: display_rotation}
+  - {id: app_window, domain: scene_window, source: all}
+  - {id: application_response, domain: scene_response, source: all}
+  - id: response_markers
+    domain: scene_response
+    source: all
+    producer: {skillId: scene_response_markers, summaryStepId: response_sources, resultStepId: response_markers}

@@ -11,6 +11,8 @@ import {projectPrivateDataEnvelope, projectPrivateStructuredValue} from './priva
 import {validateDataEnvelope} from '../../types/dataContract';
 import {formatToolCallNarration, formatToolResultNarration, readPrivateToolResultNarrationReceipt} from '../../agentv3/toolNarration';
 import {sanitizeCandidateProtocolDiagnostic} from '../canonicalAnalysisResult';
+import {projectSceneTimelineForOwner} from '../../agent/scene/sceneTimelineProjection';
+import type {SceneTimelineView} from '../../types/sceneTimeline';
 
 type PrivateEventPolicy =
   | 'deterministic'
@@ -68,6 +70,7 @@ const PRIVATE_EVENT_POLICIES: Record<StreamingUpdate['type'], PrivateEventPolicy
   scene_story_dropped: 'suppress',
   scene_story_report_ready: 'suppress',
   scene_story_smart_eta_refined: 'suppress',
+  scene_timeline_updated: 'suppress',
   analysis_source_enrichment_started: 'deterministic',
   analysis_source_enrichment_completed: 'source_supplement',
   analysis_source_enrichment_failed: 'deterministic',
@@ -292,6 +295,14 @@ export function projectOwnerCodeAwareStreamingUpdate(
     return privateExecutionUpdate(update, language);
   }
   return withOwnerCodeAwareProjection(() => {
+    if (update.type === 'scene_timeline_updated') {
+      // The shared scene tool emits only a committed, bounded display view. Guard
+      // segments separately; a whole-object cap must not silently erase later scenes.
+      const value = update.content as SceneTimelineView;
+      if (value?.sessionId !== sessionId || !Array.isArray(value.segments) || !Array.isArray(value.unresolved) ||
+          !Array.isArray(value.diagnostics)) return null;
+      return {...update, content: projectSceneTimelineForOwner(value)};
+    }
     if (update.type === 'data') return projectCodeAwareStreamingUpdate(sessionId, update, true, language);
     // Tool acquisition payloads belong to evidence artifacts, not the process timeline.
     if (update.type === 'skill_data' || update.type === 'skill_layered_result' ||

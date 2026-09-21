@@ -39,7 +39,7 @@ import {
   SceneEvidenceRef,
   SceneAnalysisSelection,
 } from './types';
-import {displaySceneType} from './scenePresentation';
+import {displaySceneType, isKnownSceneType} from './scenePresentation';
 
 // ---------------------------------------------------------------------------
 // Threshold table — drives priority and severity for each scene category.
@@ -57,44 +57,14 @@ const PROBLEM_THRESHOLDS: Record<string, SceneThreshold> = {
   hot_start: { durationMs: 200 },
   scroll: { fps: 50 },
   inertial_scroll: { fps: 50 },
-  tap: { durationMs: 200 },
-  long_press: { durationMs: 500 },
   navigation: { durationMs: 500 },
   anr: { durationMs: 5000 },
   window_transition: { durationMs: 500 },
 };
 
-const SCENE_DEDUPE_TOLERANCE_NS = 150_000_000n;
 const SCROLL_CHAIN_TOLERANCE_NS = 250_000_000n;
 const CONTEXT_WINDOW_NS = 750_000_000n;
 const MAX_CONTEXT_ROWS_PER_GROUP = 6;
-
-const CLEAN_TIMELINE_SCENE_TYPES = new Set([
-  'cold_start',
-  'warm_start',
-  'hot_start',
-  'scroll',
-  'inertial_scroll',
-  'tap',
-  'long_press',
-  'idle',
-  'app_foreground',
-  'home_screen',
-  'screen_on',
-  'screen_off',
-  'screen_sleep',
-  'screen_unlock',
-  'notification',
-  'split_screen',
-  'pip',
-  'back_key',
-  'home_key',
-  'recents_key',
-  'anr',
-  'ime_show',
-  'ime_hide',
-  'window_transition',
-]);
 
 /** Known launcher / home-screen package patterns */
 const LAUNCHER_PATTERNS = [
@@ -115,6 +85,8 @@ export interface BuildDisplayedScenesResult {
   scenes: DisplayedScene[];
   /** From the trace_time_range step, used by callers to size the analysis cap. */
   traceDurationSec: number;
+  traceBounds?: {startTs: string; endTs: string};
+  inputCoverage?: Record<string, unknown>;
 }
 
 export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedScenesResult {
@@ -123,6 +95,8 @@ export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedS
   const rowsByStep = new Map<string, Array<Record<string, any>>>();
   let hasGestureLikeScene = false;
   let traceDurationSec = 0;
+  let traceBounds: BuildDisplayedScenesResult['traceBounds'];
+  let inputCoverage: BuildDisplayedScenesResult['inputCoverage'];
 
   for (const env of envelopes) {
     if (env?.meta?.skillId !== 'scene_reconstruction') continue;
@@ -135,6 +109,15 @@ export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedS
     if (stepId === 'trace_time_range') {
       const first = rows[0];
       if (first?.duration_sec) traceDurationSec = Number(first.duration_sec) || 0;
+      const start = safeBigInt(first?.start_ts_str ?? first?.start_ts);
+      const end = safeBigInt(first?.end_ts_str ?? first?.end_ts);
+      if (start !== null && end !== null && start >= 0n && end >= start) {
+        traceBounds = {startTs: start.toString(), endTs: end.toString()};
+      }
+      continue;
+    }
+    if (stepId === 'input_coverage') {
+      inputCoverage = rows[0];
       continue;
     }
 
@@ -255,7 +238,7 @@ export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedS
     return 0;
   });
 
-  return { scenes, traceDurationSec };
+  return { scenes, traceDurationSec, traceBounds, inputCoverage };
 }
 
 // ---------------------------------------------------------------------------
@@ -410,10 +393,7 @@ function sceneFromUserGesture(row: Record<string, any>, index: number): Displaye
   if (!Number.isFinite(durationMs)) return null;
 
   const gestureType = String(row.gesture_type ?? '').toLowerCase();
-  const sceneType =
-    gestureType === 'scroll' ? 'scroll'
-    : gestureType === 'long_press' ? 'long_press'
-    : 'tap';
+  const sceneType = isKnownSceneType(gestureType) ? gestureType : 'input_unknown';
 
   return {
     id: `user_gestures-${index}`,
@@ -425,6 +405,7 @@ function sceneFromUserGesture(row: Record<string, any>, index: number): Displaye
     processName: resolveProcessName(row),
     label: `${displayNameOf(sceneType)} (${durationMs}ms)`,
     metadata: {
+      ...row,
       confidence: row.confidence,
       moveCount: row.move_count,
     },
@@ -451,6 +432,7 @@ function sceneFromInertialScroll(row: Record<string, any>, index: number): Displ
     processName: resolveProcessName(row),
     label: `${displayNameOf('inertial_scroll')} (${durationMs}ms)`,
     metadata: {
+      ...row,
       frameCount: row.frame_count,
       jankFrames: row.jank_frames,
     },
@@ -466,20 +448,24 @@ function sceneFromIdlePeriod(row: Record<string, any>, index: number): Displayed
   if (!startTs || !dur || !endTs) return null;
   const durationMs = nsToMs(dur);
   if (!Number.isFinite(durationMs)) return null;
+  const sceneType = row.category === 'unknown' || row.source_status === 'unknown'
+    ? 'input_unknown' : 'idle';
 
   return {
     id: `idle_periods-${index}`,
-    sceneType: 'idle',
+    sceneType,
     sourceStepId: 'idle_periods',
     startTs,
     endTs,
     durationMs,
     processName: 'system',
-    label: `${displayNameOf('idle')} (${durationMs}ms)`,
+    label: `${displayNameOf(sceneType)} (${durationMs}ms)`,
     metadata: {
+      ...row,
       confidence: row.confidence,
     },
-    severity: 'good',
+    sceneRole: 'context',
+    severity: 'unknown',
     analysisState: 'not_planned',
   };
 }
@@ -525,20 +511,24 @@ function sceneFromScrollInitiation(row: Record<string, any>, index: number): Dis
   const endTs = safeAddNs(startTs, dur) ?? startTs;
   const durationMs = nsToMs(dur);
   const safeDurationMs = Number.isFinite(durationMs) ? durationMs : 0;
+  const sceneType = row.event_type === 'scroll_processing' ? 'scroll_processing' : 'scroll_start';
 
   return {
     id: `scroll_initiation-${index}`,
-    sceneType: 'scroll_start',
+    sceneType,
     sourceStepId: 'scroll_initiation',
     startTs,
     endTs,
     durationMs: safeDurationMs,
     processName: resolveProcessName(row),
-    label: `${displayNameOf('scroll_start')} (${safeDurationMs}ms)`,
+    label: `${displayNameOf(sceneType)} (${safeDurationMs}ms)`,
     metadata: {
+      ...row,
       latencyMs: numericOrUndefined(row.latency_ms ?? row.latencyMs),
     },
-    severity: 'good',
+    sceneRole: 'marker',
+    analysisEligible: false,
+    severity: 'unknown',
     analysisState: 'not_planned',
   };
 }
@@ -551,14 +541,13 @@ function sceneFromScreenStateChange(row: Record<string, any>, index: number): Di
   const durationMs = nsToMs(dur);
   const safeDurationMs = Number.isFinite(durationMs) ? durationMs : 0;
 
-  // The skill emits Chinese event labels (`点亮` / `熄灭` / `休眠`) on the
-  // `event` column; mirror agentRoutes.ts:mapScreenStateEventToSceneType so
-  // we map them to the same scene types.
   const eventText = String(row.event ?? row.state ?? row.screen_state ?? '').trim();
+  const state = String(row.simple_screen_state ?? row.state ?? '').toLowerCase();
   const sceneType: string | null =
-    eventText.includes('点亮') ? 'screen_on'
-    : eventText.includes('熄灭') ? 'screen_off'
-    : eventText.includes('休眠') ? 'screen_sleep'
+    state === 'on' || eventText.includes('点亮') ? 'screen_on'
+    : state === 'off' || eventText.includes('熄灭') ? 'screen_off'
+    : state === 'doze' || eventText.includes('休眠') ? 'screen_sleep'
+    : state === 'unknown' ? 'screen_unknown'
     : null;
   if (!sceneType) return null;
 
@@ -572,9 +561,10 @@ function sceneFromScreenStateChange(row: Record<string, any>, index: number): Di
     processName: 'system',
     label: displayNameOf(sceneType),
     metadata: {
+      ...row,
       event: eventText,
     },
-    severity: 'good',
+    severity: 'unknown',
     analysisState: 'not_planned',
   };
 }
@@ -806,7 +796,7 @@ function sceneFromCleanTimeline(row: Record<string, any>, index: number): Displa
       timeOffset: row.time_offset,
       rating: row.rating,
     },
-    severity: severityFromRating(row.rating) ?? severityFor(sceneType, safeDurationMs, row),
+    severity: severityFor(sceneType, safeDurationMs, row),
     sceneRole,
     analysisEligible: sceneRole === 'action',
     analysisState: 'not_planned',
@@ -817,7 +807,7 @@ function normalizeCleanTimelineSceneType(value: any): string | null {
   const sceneType = String(value ?? '').trim();
   if (!sceneType) return null;
   if (sceneType === 'system') return null;
-  return CLEAN_TIMELINE_SCENE_TYPES.has(sceneType) ? sceneType : null;
+  return isKnownSceneType(sceneType) ? sceneType : null;
 }
 
 function findMatchingSceneForRow(
@@ -830,10 +820,14 @@ function findMatchingSceneForRow(
   const rowEnd = rowStart + (safeBigInt(row.dur) ?? 0n);
   return scenes.find((scene) => {
     if (!areSceneTypesEquivalent(scene.sceneType, sceneType)) return false;
+    const rowProcess = String(row.app_package ?? '').trim();
+    if (rowProcess !== (scene.processName ?? '') &&
+      (isMeaningfulProcess(rowProcess) || isMeaningfulProcess(scene.processName))) return false;
     const sceneStart = safeBigInt(scene.startTs);
     const sceneEnd = safeBigInt(scene.endTs);
     if (sceneStart === null || sceneEnd === null) return false;
-    return rangesOverlapOrClose(sceneStart, sceneEnd, rowStart, rowEnd, SCENE_DEDUPE_TOLERANCE_NS);
+    // Similar time ranges are not event identity: two taps can be very close.
+    return sceneStart === rowStart && sceneEnd === rowEnd;
   }) ?? null;
 }
 
@@ -1007,13 +1001,13 @@ function finalizeSceneContracts(scenes: DisplayedScene[]): void {
 
 function computeConfidenceScore(scene: DisplayedScene): number {
   const sourceBase = baseConfidenceForSource(scene.sourceStepId);
-  const evidenceCount = scene.evidenceRefs?.length ?? 0;
-  const supportBonus = Math.min(0.12, Math.max(0, evidenceCount - 1) * 0.04);
   const metadataScore = confidenceScoreFromMetadata(scene.metadata?.confidence);
   const conflictPenalty = Math.min(0.25, (scene.conflicts ?? []).length * 0.08);
   const rolePenalty = scene.sceneRole === 'marker' ? 0.08 : scene.sceneRole === 'context' ? 0.05 : 0;
-  const raw = Math.max(sourceBase, metadataScore ?? 0) + supportBonus - conflictPenalty - rolePenalty;
-  return Math.max(0.35, Math.min(0.95, Number(raw.toFixed(2))));
+  // Derived rows/context may repeat the same input. Their count is not
+  // independent corroboration, and a source default must not raise a low score.
+  const raw = Math.min(sourceBase, metadataScore ?? sourceBase) - conflictPenalty - rolePenalty;
+  return Math.max(0, Math.min(0.95, Number(raw.toFixed(2))));
 }
 
 function baseConfidenceForSource(sourceStepId: string): number {
@@ -1077,15 +1071,6 @@ function defaultProcessNameForSceneType(sceneType: string): string {
     return 'system';
   }
   return 'unknown';
-}
-
-function severityFromRating(value: any): DisplayedScene['severity'] | null {
-  const text = String(value ?? '');
-  if (!text) return null;
-  if (text.includes('🔴')) return 'bad';
-  if (text.includes('🟡')) return 'warning';
-  if (text.includes('🟢')) return 'good';
-  return null;
 }
 
 function evidenceRefForScene(
@@ -1383,9 +1368,15 @@ function severityFor(
   if (!threshold) return 'unknown';
   if (threshold.durationMs != null && durationMs > threshold.durationMs) return 'bad';
   if (threshold.fps != null && row) {
-    const avgFps = Number(row.averageFps ?? row.average_fps);
-    if (Number.isFinite(avgFps) && avgFps < threshold.fps) return 'bad';
+    const frames = numericOrUndefined(row.frame_count);
+    const janks = numericOrUndefined(row.jank_frames);
+    if (frames !== undefined && frames > 0 && janks !== undefined && janks > 0 && janks <= frames) return 'bad';
+    const avgFps = numericOrUndefined(row.averageFps ?? row.average_fps);
+    if (avgFps !== undefined && avgFps < threshold.fps) return 'bad';
+    return row.frame_coverage_complete === 1 && frames !== undefined && frames > 0 && janks === 0
+      ? 'good' : 'unknown';
   }
+  if (threshold.fps != null) return 'unknown';
   return 'good';
 }
 
@@ -1399,7 +1390,8 @@ function displayNameOf(sceneType: string): string {
 
 function nsToMs(ns: string): number {
   try {
-    return Number(BigInt(ns) / 1_000_000n);
+    const value = BigInt(ns);
+    return Number(value / 1_000_000n) + Number(value % 1_000_000n) / 1_000_000;
   } catch {
     return NaN;
   }
@@ -1415,9 +1407,9 @@ function safeAddNs(startTs: string, durNs: string): string | null {
 
 function safeBigInt(value: any): bigint | null {
   if (typeof value === 'bigint') return value;
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
     try {
-      return BigInt(Math.trunc(value));
+      return BigInt(value);
     } catch {
       return null;
     }
@@ -1435,6 +1427,7 @@ function safeBigInt(value: any): bigint | null {
 }
 
 function numericOrUndefined(value: any): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
 }

@@ -11,6 +11,8 @@ export interface CapturedFieldSemantics {
   unit?: string;
   timeRole?: 'start' | 'end' | 'duration';
   clock?: 'trace_monotonic';
+  /** Issued by a validated producer declaration, never inferred from a column name. */
+  identityRole?: 'upid' | 'utid' | 'cpu' | 'ucpu' | 'machine_id';
   metricId?: string;
   aggregation?: string;
   populationKey?: string;

@@ -62,6 +62,7 @@ import {
 import type {RunManifestAttributionSink} from '../../types/selfEvolution';
 import {renderConclusionContractSidecar} from '../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
+import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
 
 function declaredCandidate(body: string): string {
   return `${body}\n${renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
@@ -271,6 +272,33 @@ afterEach(async () => {
 });
 
 describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
+  it('scene runtime matrix: runs the pinned Claude provider through shared proposal and private seal', async () => {
+    const f = createSceneRuntimeMatrixFixture('claude');
+    const runtime = new ClaudeRuntime(f.traceProcessorService, {model: 'scene-pinned-claude',
+      enableVerification: false, enableSubAgents: false});
+    let tool: any;
+    let response: any;
+    claudeSdkMock.__setQueryImplementation(async function* (params: any) {
+      tool = params.options.mcpServers.smartperfetto.instance.tools.find((item: any) => item.name === 'propose_scene_timeline');
+      expect(params.options.model).toBe('scene-pinned-claude');
+      response = await tool.handler(f.proposal(), {});
+      yield {type: 'result', subtype: 'success', num_turns: 1, result: 'Scene candidates submitted.'};
+    });
+    try {
+      const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
+      expect(result.turnIntent).toMatchObject({source: 'product', sceneId: 'scene_reconstruction'});
+      expect(rawClaudeSdkMock.__getQueryCalls().some(isClassifierCall)).toBe(false);
+      expect(response.structuredContent).toMatchObject({accepted: true, revision: 1});
+      expect(f.boundsQueries).toEqual([f.scope.traceId]);
+      const snapshot = f.seal();
+      expect(snapshot).toMatchObject({runId: f.scope.runId, sessionId: f.scope.sessionId, traceId: f.scope.traceId, revision: 1});
+      expect(snapshot.segments[0].evidence[0].source.originRunId).toBe(f.scope.runId);
+      f.controller.abort();
+      const late = await tool.handler(f.proposal(), {}).catch((error: Error) => ({error: error.message}));
+      expect(late.structuredContent?.accepted).not.toBe(true);
+    } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
+    expect((runtime as any).artifactStores.has(f.scope.sessionId)).toBe(false);
+  });
   it.each([
     [{type: 'result', subtype: 'success', is_error: false, stop_reason: null}, 'completed', undefined],
     [{type: 'result', subtype: 'success', is_error: false}, 'completed', undefined],

@@ -59,10 +59,17 @@ import {
   successfulCodeLookupToolCounts,
 } from './agentSseVerificationEvidence';
 
+import {createSceneSseObservation, recordSceneSseEvent, evaluateSceneSseVerification, parseSceneOracleSpecs, collectSceneOracleRows, evaluateSceneOracleRows, type SceneOracleSpec, type SceneOracleObservation, type SceneSseObservation} from './sceneSseVerification';
+
 type CodeAwareMode = 'off' | 'metadata_only' | 'provider_send';
 type SmartAction = 'preview' | 'analyze';
 
 export interface VerifyOptions {
+  entry?: 'analyze' | 'scene-reconstruction';
+  sceneScenario?: 'complete' | 'partial' | 'cancel';
+  sceneMinRevision?: number;
+  sceneObservationMs?: number;
+  sceneOracles?: SceneOracleSpec[];
   /** Optional task facts; literal text checks are transport diagnostics only. */
   expectation?: AgentSseExpectation;
   tracePath: string;
@@ -1043,6 +1050,11 @@ function printUsage(): void {
   console.log('Usage: npx tsx src/scripts/verifyAgentSseScrolling.ts [options]');
   console.log('');
   console.log('Options:');
+  console.log('  --entry <analyze|scene-reconstruction> Dedicated product route; analyze is the default');
+  console.log('  --scene-oracle-json <json|@file> Authored independent exact trace interval/object oracles');
+  console.log('  --scene-scenario <complete|partial|cancel> Scene lifecycle case; default complete');
+  console.log('  --scene-min-revision <integer>    Explicit correction case only; default 1');
+  console.log('  --scene-observation-ms <integer>  Post-terminal late/replay observation, 1..30000 ms; default 2000');
   console.log('  --trace <path>                    Trace path (default: ../Trace/real/android-scroll-customer/trace.pftrace)');
   console.log('  --reference-trace <path>          Reference trace path for raw dual-trace comparison');
   console.log('  --query <text>                    Analyze query (default: 分析滑动性能)');
@@ -1200,6 +1212,27 @@ export function parseArgs(argv: string[]): VerifyOptions {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
+
+    if (arg === '--scene-oracle-json') {
+      if (!next) throw new Error('--scene-oracle-json requires a value');
+      options.sceneOracles = parseSceneOracleSpecs(JSON.parse(next.startsWith('@') ? fs.readFileSync(path.resolve(process.cwd(), next.slice(1)), 'utf8') : next));
+      i += 1; continue;
+    }
+    if (arg === '--entry') {
+      if (next !== 'analyze' && next !== 'scene-reconstruction') throw new Error('--entry requires analyze or scene-reconstruction');
+      options.entry = next; i += 1; continue;
+    }
+    if (arg === '--scene-scenario') {
+      if (next !== 'complete' && next !== 'partial' && next !== 'cancel') throw new Error('--scene-scenario requires complete, partial or cancel');
+      options.sceneScenario = next; i += 1; continue;
+    }
+    if (arg === '--scene-min-revision' || arg === '--scene-observation-ms') {
+      const value = Number(next);
+      if (!next || !Number.isSafeInteger(value) || value < 1 || value > (arg === '--scene-min-revision' ? 64 : 30000)) throw new Error(`${arg} out of range`);
+      if (arg === '--scene-min-revision') options.sceneMinRevision = value;
+      else options.sceneObservationMs = value;
+      i += 1; continue;
+    }
 
     if (arg === '--expectation-json') {
       if (!next) throw new Error('--expectation-json requires a value');
@@ -1723,6 +1756,13 @@ export function parseArgs(argv: string[]): VerifyOptions {
     throw new VerificationSliceSelectionError('SLICE_SELECTION_INVALID');
   }
 
+  if (options.entry !== 'scene-reconstruction' && (options.sceneScenario || options.sceneMinRevision !== undefined || options.sceneObservationMs !== undefined || options.sceneOracles)) {
+    throw new Error('Scene flags require --entry scene-reconstruction');
+  }
+  if (options.entry === 'scene-reconstruction' && (options.preset || options.followUpQuery || options.referenceTracePath ||
+      options.requireNonPartial || options.requireQuickRun || options.requireExternalIssueTriage || options.expectation)) {
+    throw new Error('Scene entry cannot borrow ordinary analysis, quick, non-partial or fact-claim gates');
+  }
   return options;
 }
 
@@ -2426,7 +2466,7 @@ export async function collectSseSummary(
   sessionId: string,
   timeoutMs: number,
   textChecks: TextChecks,
-  options: { runId?: string } = {},
+  options: { runId?: string; observeEvent?: (event: string, payload: unknown) => void | Promise<void>; readUntilClose?: boolean; terminalObservationMs?: number } = {},
 ): Promise<SseSummary> {
   const summary: SseSummary = {
     candidateProtocolDiagnostics: [],
@@ -2478,6 +2518,8 @@ export async function collectSseSummary(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let observationFinished = false;
+  let terminalObservation: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const streamPath = options.runId
@@ -2537,6 +2579,11 @@ export async function collectSseSummary(
 
           const parsedRecord = asRecord(parsed);
           const payload = asRecord(parsedRecord?.data) ?? parsedRecord;
+
+          await options.observeEvent?.(event, event === 'data' ? parsed : payload);
+          if (options.readUntilClose && !terminalObservation && ['analysis_completed', 'analysis_cancelled', 'analysis_failed', 'end'].includes(event)) {
+            terminalObservation = setTimeout(() => {observationFinished = true; controller.abort();}, options.terminalObservationMs ?? 2000);
+          }
 
           // --- agentv3 event counting ---
           switch (event) {
@@ -2807,7 +2854,7 @@ export async function collectSseSummary(
             }
           }
 
-          if (event === 'analysis_completed' || event === 'end') {
+          if (!options.readUntilClose && (event === 'analysis_completed' || event === 'end')) {
             shouldStop = true;
             break;
           }
@@ -2818,9 +2865,12 @@ export async function collectSseSummary(
     }
 
   } catch (error) {
-    if (controller.signal.aborted) throw new VerificationSseTimeoutError();
-    throw error;
+    if (!observationFinished) {
+      if (controller.signal.aborted) throw new VerificationSseTimeoutError();
+      throw error;
+    }
   } finally {
+    clearTimeout(terminalObservation);
     clearTimeout(timeout);
     try { await reader?.cancel(); } catch {}
   }
@@ -3086,6 +3136,9 @@ async function main(): Promise<void> {
   let sessionId = '';
   let ownedRunId = '';
   let phase = 'context_setup';
+  let sceneObservation: SceneSseObservation | undefined;
+  let sceneBounds: {startNs: string; endNs: string} | undefined;
+  let sceneOracles: SceneOracleObservation[] = [];
   let selectionResolution: ResolvedVerificationSliceSelection | undefined;
   const startedAt = Date.now();
   const outputPath = options.outputPath ?? path.resolve(process.cwd(), `test-output/verify-agent-sse-scrolling-${startedAt}.json`);
@@ -3117,6 +3170,18 @@ async function main(): Promise<void> {
       options.selectionContext = selectionResolution.selectionContext;
     }
     phase = 'trace_oracle';
+    if (options.entry === 'scene-reconstruction') {
+      const bounds = await traceProcessorService.query(traceId,
+        'SELECT CAST(start_ts AS TEXT) AS start_ns, CAST(end_ts AS TEXT) AS end_ns FROM trace_bounds');
+      const start = bounds.rows?.[0]?.[bounds.columns.indexOf('start_ns')];
+      const end = bounds.rows?.[0]?.[bounds.columns.indexOf('end_ns')];
+      if (bounds.error || typeof start !== 'string' || typeof end !== 'string' || !/^\d+$/.test(start) || !/^\d+$/.test(end)) {
+        throw new Error('SCENE_ORACLE_BOUNDS_UNAVAILABLE');
+      }
+      sceneBounds = {startNs: start, endNs: end};
+      sceneOracles = await collectSceneOracleRows(options.sceneOracles || [], sql => traceProcessorService.query(traceId, sql));
+    }
+
     const oracleEvidence = options.expectation ? await collectAgentSseOracleEvidence({
       expectation: options.expectation, traceId, referenceTraceId, service: traceProcessorService, deadlineMs: startedAt + options.timeoutMs,
       scope: {tenantId: DEFAULT_TENANT_ID, workspaceId: DEFAULT_WORKSPACE_ID, userId: DEFAULT_DEV_USER_ID},
@@ -3155,7 +3220,7 @@ async function main(): Promise<void> {
     }
 
     phase = 'analysis_start';
-    const startResponse = await fetch(`${baseUrl}/api/agent/v1/analyze`, {
+    const startResponse = await fetch(`${baseUrl}/api/agent/v1/${options.entry === 'scene-reconstruction' ? 'scene-reconstruct' : 'analyze'}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3190,11 +3255,64 @@ async function main(): Promise<void> {
     if (!ownedRunId) throw new Error('Analyze request did not identify the owned run');
 
     phase = 'analysis_stream';
+    const sceneScope = {traceId, sessionId, runId: ownedRunId};
+    const persistSceneObservation = () => {
+      if (!sceneObservation) return;
+      fs.mkdirSync(path.dirname(outputPath), {recursive: true});
+      fs.writeFileSync(`${outputPath}.scene-events.json`, JSON.stringify({scope: sceneScope, observation: sceneObservation}, null, 2));
+    };
+    if (options.entry === 'scene-reconstruction') {sceneObservation = createSceneSseObservation(); persistSceneObservation();}
+    const observeSceneEvent = sceneObservation ? async (event: string, payload: unknown) => {
+      const observed = sceneObservation!;
+      recordSceneSseEvent(observed, event, payload, sceneScope);
+      if (['scene_timeline_updated', 'analysis_completed', 'analysis_cancelled', 'analysis_failed'].includes(event)) persistSceneObservation();
+      if (options.sceneScenario === 'cancel' && event === 'scene_timeline_updated' && observed.cancelRequestedAt === undefined) {
+        observed.cancelRequestedAt = observed.events;
+        persistSceneObservation();
+        const response = await fetch(`${baseUrl}/api/agent/v1/scene-reconstruct/${sessionId}/cancel`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({runId: ownedRunId}), signal: AbortSignal.timeout(10000)});
+        const cancelled = asRecord(await response.json());
+        observed.cancelConfirmed = response.ok && cancelled?.success === true && cancelled.runId === ownedRunId;
+        persistSceneObservation();
+      }
+    } : undefined;
     const sse = await collectSseSummary(baseUrl, sessionId, options.timeoutMs, {
       requiredText: options.requiredText,
       forbiddenText: options.forbiddenText,
-    }, {runId: ownedRunId});
+    }, {runId: ownedRunId, ...(observeSceneEvent ? {observeEvent: observeSceneEvent, readUntilClose: true, terminalObservationMs: options.sceneObservationMs ?? 2000} : {})});
     phase = 'analysis_verification';
+    if (sceneObservation && sceneBounds) {
+      const observationMs = options.sceneObservationMs ?? 2000;
+      await new Promise(resolve => setTimeout(resolve, observationMs));
+      const replay = createSceneSseObservation();
+      await collectSseSummary(baseUrl, sessionId, Math.min(options.timeoutMs, 30000), {requiredText: [], forbiddenText: []},
+        {runId: ownedRunId, readUntilClose: true, terminalObservationMs: observationMs, observeEvent: (event, payload) => recordSceneSseEvent(replay, event, payload, sceneScope)});
+      const statusResponse = await fetch(`${baseUrl}/api/agent/v1/${sessionId}/status`, {signal: AbortSignal.timeout(10000)});
+      const status: unknown = statusResponse.ok ? await statusResponse.json() : {httpStatus: statusResponse.status};
+      let report: unknown;
+      if (sceneObservation.reportRef) {
+        const response = await fetch(`${baseUrl}/api/agent/v1/scene-reconstruct/report/${encodeURIComponent(sceneObservation.reportRef.reportId)}`, {signal: AbortSignal.timeout(10000)});
+        report = response.ok ? await response.json() : {httpStatus: response.status};
+      }
+      const verified = evaluateSceneSseVerification({observation: sceneObservation, replay, scope: sceneScope, status, report,
+        start: startJson, bounds: sceneBounds, scenario: options.sceneScenario ?? 'complete', minRevision: options.sceneMinRevision ?? 1,
+        runtime: runtimeSelection.kind, providerId: options.providerId, observationMs});
+      const oracleChecks = evaluateSceneOracleRows(sceneObservation.finalTimeline, sceneOracles);
+      Object.assign(verified.checks, oracleChecks);
+      verified.passed = verified.passed && Object.values(oracleChecks).every(Boolean);
+      if (!sceneOracles.length) verified.uncoveredFacets.push('independent_scene_interval_and_object_oracles_not_configured');
+      const output = {schemaVersion: 'scene_sse_verification@1', timestamp: new Date().toISOString(), tracePath: options.tracePath,
+        runtime: runtimeSelection.kind, providerId: options.providerId, ...sceneScope, bounds: sceneBounds, sceneOracles, ...verified,
+        passedMeaning: 'scene_route_runtime_revision_and_public_report_checks_only',
+        ...taskAcceptanceStatus(verified.passed, verified.uncoveredFacets), observation: sceneObservation, replay, status, report,
+        ...preserveVerificationSessionLog(outputPath, sessionId)};
+      fs.mkdirSync(path.dirname(outputPath), {recursive: true});
+      fs.writeFileSync(outputPath, `${JSON.stringify(output, null, 2)}\n`);
+      console.log(JSON.stringify({outputPath, passed: verified.passed, checks: verified.checks, uncoveredFacets: verified.uncoveredFacets}, null, 2));
+      if (!verified.passed) process.exitCode = 1;
+      return;
+    }
+
     const taskVerification = options.expectation ? evaluateAgentSseExpectation({
       terminal: sse.terminalAnalysis, expectation: options.expectation, traceId, referenceTraceId, oracleRows,
       oracleNativeSchemas: oracleEvidence?.schemas,

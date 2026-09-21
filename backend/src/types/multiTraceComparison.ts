@@ -120,6 +120,8 @@ export interface TraceComparisonMetadata {
 
 export interface AnalysisSummary {
   headline: string;
+  /** Historical locator only; its owner archive remains authoritative for availability. */
+  sceneReport?: import('../agent/core/orchestratorTypes').AnalysisResult['sceneReport'];
   /** Full accepted body, kept separately from the one-line comparison headline. */
   conclusion?: string;
   turnIntent?: import('../agent/core/orchestratorTypes').AnalysisResult['turnIntent'];

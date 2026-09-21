@@ -32,6 +32,14 @@ no narrative from narrative that failed quality checks. A limited summary after
 the investigation turn cap remains `partial` / `max_turns`; review unfinished
 questions before continuing with `smp ask`. See the [CLI reference](../reference/cli.en.md#global-options).
 
+## Scene Reconstruction
+
+After loading a Trace, select a Provider and click **Scene Reconstruction**. The investigation examines actions and state changes across the Trace, showing what the user was doing, the device state and the application's response for each interval. Auto mode's scene inventory remains available for selecting a deep-dive scope.
+
+Read unknowns, evidence checks and coverage gaps alongside the timeline. Missing input does not mean the device was idle, and a finished investigation does not mean every action was confirmed. Cancelled, failed and partial results retain their status so you can decide whether to investigate further or record a Trace with the missing data.
+
+Scene reports are retained for 7 days by default and require continued access to the original Trace. Deleting the Trace makes its reports unavailable. See the [Scene Reconstruction Architecture Contract](../architecture/scene-reconstruction.en.md) for implementation and evidence boundaries.
+
 ## Converse Before Starting Analysis
 
 At the investigation turn limit, the remaining budget can produce one no-tool

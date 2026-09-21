@@ -145,6 +145,8 @@ export interface DisplayConfig {
   level?: DisplayLevel;
   layer?: DisplayLayer;         // 分层展示层级
   title?: string;
+  /** Catalog titles for named steps[] (including nested steps[]); other display locations are rejected. */
+  title_i18n?: Partial<Record<'zh-CN' | 'en', string>>;
   format?: DisplayFormat;
   columns?: Array<string | Partial<ColumnDefinition>>; // 指定展示哪些列（支持简写或完整列定义）
   aggregate?: boolean;          // 是否汇总迭代结果

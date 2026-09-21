@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {snapshotSceneCoverageRegistry} from '../../../agent/scene/sceneCoveragePlan';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import {resolveAgentRuntimeBudgetConfig} from '../../../config';
@@ -68,6 +69,7 @@ import { extractFindingsFromText } from '../../../agentv3/claudeFindingExtractor
 import { detectFocusApps, focusAppTimeRangeFromSelection } from '../../../agentv3/focusAppDetector';
 import { ArtifactStore } from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
+import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
 import {
   buildNegativePatternSection,
   buildPatternContextSection,
@@ -1661,6 +1663,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     const providerPromise = this.getProviderRuntime(modelConfig);
     const classifierTimeoutMs = positiveIntegerEnv(this.env, ['AGENT_CLASSIFIER_TIMEOUT_MS'], 30_000);
     const intentResolver = createAnalysisTurnIntentResolver({
+      productRun: {options, runId: executionLease.key.runId!, sessionId, traceId},
       context: buildComplexityClassifierInput({
         query, sceneType: 'general', selectionContext: options.selectionContext,
         hasReferenceTrace: Boolean(options.referenceTraceId), previousTurns: [], history: analysisHistoryReader.getTurns(),
@@ -1694,7 +1697,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     const prep = await this.prepareAnalysis(
       query, sessionId, traceId, options, providerRuntime.model.id,
       executionLease, turnIntent, policy, intentResolver.strategyRegistry, analysisHistoryReader, closeoutTape.observe,
-      () => toolAdmissionsOpen,
+      () => toolAdmissionsOpen && !executionLease.signal.aborted, getRunDeadlineMs(),
     );
     onPreparationReady({sourceUse: prep.sourceUse, artifactStore: prep.artifactStore,
       selection: prep.analysisRunSpec.selection});
@@ -2059,6 +2062,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     analysisHistoryReader: AnalysisHistoryReader,
     toolObserver?: RuntimeToolObserver,
     canInvokeTool?: () => boolean,
+    sceneDeadlineMs?: number,
   ): Promise<PiAnalysisPreparation> {
     executionLease.throwIfAborted();
     const outputLanguage = options.outputLanguage
@@ -2100,9 +2104,11 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     const skillExecutor = createSkillExecutor(this.traceProcessorService);
     const effectiveSkillRegistry =
       resolveEffectiveSkillRegistryForRuntime(skillRegistry);
-    skillExecutor.registerSkills(effectiveSkillRegistry.getAllSkills());
+    const sceneCoverageRegistry = resolveSceneProductScope(options, {sessionId, traceId, runId: options.runId ?? ''})
+      ? snapshotSceneCoverageRegistry(effectiveSkillRegistry, strategyRegistry, turnIntent.sceneId) : undefined;
+    skillExecutor.registerSkills(sceneCoverageRegistry ? [...sceneCoverageRegistry.skills] : effectiveSkillRegistry.getAllSkills());
     skillExecutor.setFragmentRegistry(
-      effectiveSkillRegistry.getFragmentCache(),
+      sceneCoverageRegistry ? new Map(sceneCoverageRegistry.fragments) : effectiveSkillRegistry.getFragmentCache(),
     );
 
     let architecture = getLruCacheEntry(this.architectureCache, traceId);
@@ -2208,7 +2214,11 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     const uncertaintyFlags = this.sessionUncertaintyFlags.get(sessionId)!;
     uncertaintyFlags.splice(0);
 
+    const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
+      deadlineMs: sceneDeadlineMs ?? 0, traceProcessorService: this.traceProcessorService,
+      artifactStore, sceneCoverageRegistry, signal: executionLease.signal, canInvokeTool});
     const { toolDefinitions, sourceUse } = createClaudeMcpServer({
+      sceneRunContext,
       toolObserver, canInvokeTool, analysisHistoryReader,
       conversationTraceAttached: options.assistantSurface === 'conversation'
         ? options.conversationTraceAttached === true

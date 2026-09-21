@@ -3,6 +3,9 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import type { DataEnvelope } from '../../types/dataContract';
+import type {OutputLanguage} from '../../agentv3/outputLanguage';
+import type {SceneTimelineAssessment} from './sceneTimelineContract';
+import type {SceneTimelineView} from './sceneTimelineProjection';
 
 /**
  * Scene Story Pipeline — Data Contract Types.
@@ -73,6 +76,9 @@ export interface SceneRuntimeContext {
 
 export interface SceneReconstructionVerification {
   status: 'passed' | 'needs_review' | 'skipped' | 'failed';
+  /** Stage1 checks structure; it cannot attest raw evidence or whole-trace coverage. */
+  scope?: 'structure';
+  evidenceStatus?: 'not_checked';
   verifier: 'deterministic' | 'llm' | 'deterministic+llm';
   summary: string;
   checkedSceneCount: number;
@@ -279,8 +285,8 @@ export interface SceneReport {
   /** Determines cache strategy */
   traceOrigin: 'file' | 'external_rpc';
   /** 'disk_7d' for file-backed, 'memory_session' for external RPC */
-  cachePolicy: 'disk_7d' | 'memory_session';
-  /** null for memory_session (expires on process restart) */
+  cachePolicy: 'disk_7d' | 'memory_session' | 'evidence_archive';
+  /** v3 archive expiry is provided by its authoritative manifest; null until archived. */
   expiresAt: number | null;
   createdAt: number;
   /** Structural pipeline phase; avoids overloading localized summary text. */
@@ -324,6 +330,13 @@ export interface SceneReport {
     en?: string;
   };
 
+  /** v3 preserves the actual narrative language; UI localization never translates its meaning. */
+  outputLanguage?: OutputLanguage;
+  /** v3 canonical run/revision; browser projection omits original audit evidence rows. */
+  sessionId?: string;
+  runId?: string;
+  sceneTimeline?: SceneTimelineAssessment | SceneTimelineView;
+
   /** Cross-scene structured insights (optional, empty array if Stage3 skipped) */
   insights: SceneInsight[];
 
@@ -334,11 +347,36 @@ export interface SceneReport {
   totalCostUsd?: number;
 
   generatedBy: {
-    runtime: 'claude-sdk' | 'legacy';
+    runtime: 'claude-sdk' | 'legacy' | 'agent-runtime';
+    runtimeKind?: string;
+    providerId?: string | null;
+    registryFingerprint?: string;
     model?: string;
-    pipelineVersion: 'v2';
+    pipelineVersion: 'v2' | 'v3';
   };
 }
+
+/** Canonical v3 archive report; it is a historical record, never a live proof capability. */
+export interface SceneTimelineReport extends SceneReport {
+  cachePolicy: 'evidence_archive';
+  sessionId: string;
+  runId: string;
+  outputLanguage: OutputLanguage;
+  summary: string;
+  sceneTimeline: SceneTimelineAssessment;
+  generatedBy: {
+    runtime: 'agent-runtime';
+    runtimeKind?: string;
+    providerId?: string | null;
+    registryFingerprint?: string;
+    model?: string;
+    pipelineVersion: 'v3';
+  };
+}
+
+export type SceneTimelineReportView = Omit<SceneTimelineReport, 'sceneTimeline'> & {
+  sceneTimeline: SceneTimelineView;
+};
 
 /**
  * 跨场景洞察 — Stage3 产出 (可选)

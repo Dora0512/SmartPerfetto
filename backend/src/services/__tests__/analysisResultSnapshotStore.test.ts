@@ -589,3 +589,25 @@ describe('AnalysisResultSnapshotRepository', () => {
     }, 'snapshot-a', 'workspace')?.visibility).toBe('workspace');
   });
 });
+
+describe('scene report reference JSON round-trip', () => {
+  test('stores the historical reference in the existing summary column and preserves owner access', () => {
+    const db = new Database(':memory:');
+    try {
+      applyEnterpriseMinimalSchema(db);
+      seedGraph(db);
+      const repo = createAnalysisResultSnapshotRepository(db);
+      const sceneReport = {schemaVersion: 'scene_report_ref@1' as const, reportId: 'scene-v3-round-trip',
+        traceId: 'trace-a', sessionId: 'session-a', runId: 'run-a', revision: 601,
+        expiresAt: 1, manifestSha256: 'b'.repeat(64)};
+      const value = snapshot({id: 'scene-reference-snapshot', summary: {headline: 'A historical scene result', sceneReport}});
+      repo.createSnapshot(value);
+      const loaded = repo.getSnapshot({tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'}, value.id);
+      expect(loaded?.summary.sceneReport).toEqual(sceneReport);
+      expect(JSON.stringify(loaded)).not.toContain('sceneTimeline');
+      expect(repo.getSnapshot({tenantId: 'tenant-b', workspaceId: 'workspace-c', userId: 'user-c'}, value.id)).toBeNull();
+      const row = db.prepare('SELECT summary_json FROM analysis_result_snapshots WHERE id = ?').get(value.id) as {summary_json: string};
+      expect(JSON.parse(row.summary_json).sceneReport).toEqual(sceneReport);
+    } finally {db.close();}
+  });
+});

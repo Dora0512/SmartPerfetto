@@ -10,6 +10,8 @@ const {
   collectPacketSequenceIds,
   encodeTrace,
   resolveTracePacketFieldName,
+  resolveMessageFieldName,
+  loadTraceType,
 } = require('./perfetto-proto.cjs');
 const {sha256Buffer} = require('./hash.cjs');
 
@@ -26,6 +28,7 @@ const SUPPORTED_SIGNAL_TYPES = new Set([
   'gpu-work-period', 'gpu-compute-kernel', 'gpu-frequency', 'gpu-power-state',
   'cpu-frequency', 'cpu-idle', 'irq-span', 'frame-timeline', 'lmk-kill',
   'managed-heap-graph', 'anr-event', 'perf-sample', 'android-log',
+  'atrace-track-instant', 'android-input-motion', 'android-input-dispatch',
 ]);
 const ANDROID_LOG_IDS = new Map([
   ['MAIN', 'LID_MAIN'],
@@ -426,6 +429,62 @@ function validateGpuComputeKernel(signal, process, signalIndex) {
   };
 }
 
+function int32(value, field) {
+  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+    throw new Error(`${field} must be a signed 32-bit integer`);
+  }
+  return value;
+}
+
+function uint32(value, field) {
+  if (!Number.isInteger(value) || value < 0 || value > 4294967295) {
+    throw new Error(`${field} must be an unsigned 32-bit integer`);
+  }
+  return value;
+}
+
+function int64String(value, field) {
+  const validated = signedDecimalString(value, field);
+  const numeric = BigInt(validated);
+  if (numeric < -9223372036854775808n || numeric > 9223372036854775807n) {
+    throw new Error(`${field} must fit in a signed 64-bit integer`);
+  }
+  return validated;
+}
+
+function atraceComponent(value, field) {
+  const text = nonEmptyString(value, field);
+  if (/[|\r\n\0]/.test(text)) throw new Error(`${field} contains an atrace delimiter`);
+  return text;
+}
+
+function androidInputPacket(repoRoot, timestamp, event) {
+  const packetType = loadTraceType(repoRoot).root.lookupType('perfetto.protos.TracePacket');
+  const legacy = packetType.fieldsArray.find(field =>
+    field.id === 106 && /AndroidInputEvent$/.test(field.type));
+  if (legacy) return {timestamp, timestampClockId: 6, [legacy.name]: event};
+  // Current official schema: TracePacket.112 -> WinscopeExtensions.5.
+  // Resolve both extensions from the loaded schema; a missing field is fatal.
+  const umbrella = resolveTracePacketFieldName(repoRoot, 112);
+  const inputField = resolveMessageFieldName(repoRoot, 'com.android.internal.WinscopeExtensions', 5);
+  return {timestamp, timestampClockId: 6, [umbrella]: {[inputField]: event}};
+}
+
+function isolatedInputEventIds(scenario, usedIds) {
+  const used = new Set(usedIds ?? []);
+  const mapping = {};
+  for (const signal of scenario.signals) {
+    if (!['android-input-motion', 'android-input-dispatch'].includes(signal.type)) continue;
+    const requested = uint32(signal.event_id, `${signal.type} event_id`);
+    if (Object.hasOwn(mapping, requested)) continue;
+    let candidate = requested;
+    while (used.has(candidate)) candidate = (candidate + 1) >>> 0;
+    used.add(candidate);
+    mapping[requested] = candidate;
+  }
+  return mapping;
+}
+
 function printEvent(timestamp, tid, buf) {
   return {timestamp, pid: tid, print: {buf}};
 }
@@ -477,6 +536,7 @@ function encodeScenarioOverlay(repoRoot, scenario, options) {
   const identities = buildIdentities(scenario, usedPids);
   const ftraceByCpu = new Map();
   const dataPackets = [];
+  const inputEventIds = isolatedInputEventIds(scenario, options.usedInputEventIds);
 
   function eventsForCpu(cpu) {
     if (!Number.isInteger(cpu) || cpu < 0) throw new Error(`invalid cpu: ${cpu}`);
@@ -492,6 +552,29 @@ function encodeScenarioOverlay(repoRoot, scenario, options) {
       const events = eventsForCpu(signal.cpu ?? 0);
       events.push(printEvent(timestamp, thread.tid, `B|${process.pid}|${nonEmptyString(signal.name, 'signal.name')}`));
       events.push(printEvent(end, thread.tid, `E|${process.pid}`));
+    } else if (signal.type === 'atrace-track-instant') {
+      const {process, thread} = actorForSignal(signal, identities);
+      const track = atraceComponent(signal.track_name, 'atrace-track-instant track_name');
+      const name = atraceComponent(signal.name, 'atrace-track-instant name');
+      eventsForCpu(signal.cpu ?? 0).push(printEvent(timestamp, thread.tid,
+        `N|${process.pid}|${track}|${name}`));
+    } else if (signal.type === 'android-input-motion') {
+      const event = {
+        eventId: inputEventIds[signal.event_id],
+        eventTimeNanos: timestamp,
+        source: uint32(signal.source, 'android-input-motion source'),
+        action: int32(signal.action, 'android-input-motion action'),
+        deviceId: int32(signal.device_id, 'android-input-motion device_id'),
+        displayId: int32(signal.display_id, 'android-input-motion display_id'),
+      };
+      dataPackets.push(androidInputPacket(repoRoot, timestamp, {dispatcherMotionEvent: event}));
+    } else if (signal.type === 'android-input-dispatch') {
+      const event = {
+        eventId: inputEventIds[signal.event_id],
+        vsyncId: int64String(signal.vsync_id, 'android-input-dispatch vsync_id'),
+        windowId: int32(signal.window_id, 'android-input-dispatch window_id'),
+      };
+      dataPackets.push(androidInputPacket(repoRoot, timestamp, {dispatcherWindowDispatchEvent: event}));
     } else if (signal.type === 'atrace-counter') {
       const {process, thread} = actorForSignal(signal, identities);
       if (typeof signal.value !== 'number' || !Number.isFinite(signal.value)) {
@@ -867,6 +950,7 @@ function encodeScenarioOverlay(repoRoot, scenario, options) {
       anchor_ns: anchorNs,
       realtime_anchor_ns: realtimeAnchorNs,
       sequence_id: options.sequenceId,
+      ...(Object.keys(inputEventIds).length > 0 ? {input_event_ids: inputEventIds} : {}),
       overlay_sha256: sha256Buffer(buffer),
     },
   };
@@ -1026,6 +1110,20 @@ function isolateScenarioCpus(scenario, usedCpus) {
   };
 }
 
+function probeInputEventIds(repoRoot, tracePath) {
+  const sql = `INCLUDE PERFETTO MODULE android.input;
+    SELECT CAST(event_id AS TEXT) AS event_id FROM android_motion_events
+    UNION SELECT CAST(event_id AS TEXT) FROM android_key_events
+    UNION SELECT CAST(event_id AS TEXT) FROM android_input_event_dispatch
+    UNION SELECT input_event_id FROM android_input_events WHERE input_event_id IS NOT NULL`;
+  const result = spawnSync(resolveTraceProcessor(repoRoot), ['-Q', sql, tracePath], {
+    cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`input identity probe failed: ${result.stderr}`);
+  return new Set(parseProbeCsv(result.stdout).map(([id]) => Number(id)).filter(Number.isInteger));
+}
+
 function buildConstructedTrace(repoRoot, options) {
   const base = fs.readFileSync(options.basePath);
   const scenario = JSON.parse(fs.readFileSync(options.scenarioPath, 'utf8'));
@@ -1039,6 +1137,8 @@ function buildConstructedTrace(repoRoot, options) {
     anchorNs,
     realtimeAnchorNs: (BigInt(anchorNs) + BigInt(probe.realtime_offset_ns)).toString(),
     usedPids: probe.used_pids,
+    usedInputEventIds: scenario.signals.some(signal => signal.type.startsWith('android-input-'))
+      ? probeInputEventIds(repoRoot, options.basePath) : [],
     sequenceId,
   });
   fs.mkdirSync(path.dirname(options.overlayPath), {recursive: true});
@@ -1057,6 +1157,7 @@ function buildConstructedTrace(repoRoot, options) {
       anchor_ns: anchorNs,
       sequence_id: sequenceId,
       cpu_map: isolated.cpuMap,
+      ...(overlay.provenance.input_event_ids ? {input_event_ids: overlay.provenance.input_event_ids} : {}),
       base_sha256: materialization.base_sha256,
       overlay_sha256: materialization.overlay_sha256,
       output_sha256: materialization.output_sha256,

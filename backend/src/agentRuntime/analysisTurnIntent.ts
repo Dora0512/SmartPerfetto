@@ -14,6 +14,8 @@ import {
   type ReadonlyStrategyRegistrySnapshot,
 } from '../services/selfEvolution/effectiveRuntimeRegistryContext';
 import type {IntentTransportInput, IntentTransportResult, IntentTransportUnavailableReason} from './intentTransport';
+import type {AnalysisOptions} from '../agent/core/orchestratorTypes';
+import {resolveSceneProductScope} from '../agent/scene/sceneRuntimeBinding';
 
 const TASK_KINDS = ['acknowledgement', 'fact', 'investigation', 'comparison'] as const;
 const SCOPES = ['bounded_question', 'scene_wide'] as const;
@@ -35,7 +37,7 @@ export interface AnalysisTurnIntentDecision {
 
 export type AnalysisTurnIntent = Readonly<AnalysisTurnIntentDecision & {
   status: 'resolved' | 'unavailable';
-  source: 'semantic' | 'fallback';
+  source: 'semantic' | 'fallback' | 'product';
   registryFingerprint: string;
   unavailableReason?: IntentTransportUnavailableReason | 'prompt_unavailable' | 'context_limit';
   actualModel?: string;
@@ -103,6 +105,8 @@ export interface AnalysisTurnIntentResolverInput {
   template?: string;
   /** A pre-existing backend restriction may narrow, never widen, model intent. */
   evidenceAccessLimit?: 'existing_only';
+  /** Internal options capability; serialized product labels confer no authority. */
+  productRun?: {options: AnalysisOptions; runId: string; sessionId: string; traceId: string};
 }
 
 /** One resolver per run. Calls made by preparation/recovery reuse its promise. */
@@ -157,6 +161,15 @@ export function createAnalysisTurnIntentResolver(input: AnalysisTurnIntentResolv
     throwIfCancelled();
     if (!Number.isFinite(deadlineMs)) return unavailable('invalid_configuration');
     if (Date.now() >= deadlineMs) return unavailable('timeout');
+    const product = input.productRun;
+    if (product && resolveSceneProductScope(product.options, product)) {
+      const scene = strategyRegistry.getStrategy('scene_reconstruction');
+      if (!scene || scene.strategyKind === 'contract_only') throw new Error('scene_investigation_strategy_unavailable');
+      return Object.freeze({schemaVersion: 1, status: 'resolved', source: 'product',
+        taskKind: 'investigation', sceneId: scene.scene, scope: 'scene_wide', recommendedComplexity: 'full',
+        deliverable: 'report', evidenceAccess: evidenceAccessLimit ?? 'read_new',
+        registryFingerprint: strategyRegistry.registryFingerprint} satisfies AnalysisTurnIntent);
+    }
     if (!template) return unavailable('prompt_unavailable');
     const prompt = buildAnalysisTurnIntentPrompt({context, strategyRegistry, template, decisionSchema: schema});
     if (Buffer.byteLength(prompt, 'utf8') > PROMPT_BYTE_LIMIT) return unavailable('context_limit');

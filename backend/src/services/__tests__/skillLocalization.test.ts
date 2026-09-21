@@ -19,6 +19,21 @@ import {
 } from '../skillLocalization';
 
 describe('Skill localization catalog', () => {
+  it('uses authored titles instead of the legacy stable identifier while preserving that identifier', async () => {
+    await ensureSkillRegistryInitialized();
+    const skill = skillRegistry.getSkill('scene_reconstruction')!;
+    for (const [locale, title] of [['en', 'Intervals with no observed input (capture completeness unconfirmed)'],
+      ['zh-CN', '未观测到输入的区间（采集完整性未确认）']] as const) {
+      const localized = localizeSkillDefinition(skill, locale);
+      const step = localized.steps!.find(value => value.id === 'idle_periods') as any;
+      expect(step.id).toBe('idle_periods');
+      expect(step.name).toBe(title);
+      expect(step.display.title).toBe(title);
+      expect(step.display.title_i18n).toBeUndefined();
+    }
+    expect((skill.steps!.find(value => value.id === 'idle_periods') as any).display.title_i18n.en)
+      .toBe('Intervals with no observed input (capture completeness unconfirmed)');
+  });
   it('strictly covers every built-in Skill and rendering pipeline', async () => {
     await ensureSkillRegistryInitialized();
     const skills = skillRegistry.getAllSkills();

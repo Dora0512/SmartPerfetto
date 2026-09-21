@@ -577,6 +577,8 @@ export async function countTraceMetadataForContext(context: RequestContext): Pro
 
 export async function deleteTraceMetadata(traceId: string): Promise<void> {
   if (!isSafeTraceId(traceId)) return;
+  const {invalidateSceneEvidenceForTrace} = await import('./sceneReport/sceneEvidenceArchiveService');
+  await invalidateSceneEvidenceForTrace(traceId);
   if (enterpriseTraceDbWritesEnabled()) {
     withEnterpriseTraceDb((db) => {
       db.prepare('DELETE FROM trace_assets WHERE id = ?').run(traceId);
@@ -597,6 +599,9 @@ export async function deleteTraceMetadataForContext(
   context: RequestContext,
 ): Promise<void> {
   if (!isSafeTraceId(traceId)) return;
+  if (!await readTraceMetadataForContext(traceId, context)) return;
+  const {invalidateSceneEvidenceForTrace} = await import('./sceneReport/sceneEvidenceArchiveService');
+  await invalidateSceneEvidenceForTrace(traceId);
   if (enterpriseTraceDbWritesEnabled()) {
     withEnterpriseTraceDb((db) => {
       createEnterpriseWorkspaceRepository<TraceAssetRow>(db, 'trace_assets')

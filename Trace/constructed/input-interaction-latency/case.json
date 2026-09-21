@@ -451,6 +451,7 @@
           "trace_id": 1
         },
         "required_steps": [
+          "input_coverage",
           "trace_time_range",
           "table_availability",
           "screen_state_changes",
@@ -477,6 +478,7 @@
           "merged_timeline"
         ],
         "required_sql_steps": [
+          "input_coverage",
           "trace_time_range",
           "table_availability",
           "screen_state_changes",
@@ -504,43 +506,31 @@
         ],
         "forced_sql_steps": [
           "screen_state_changes",
+          "user_gestures",
+          "scroll_initiation",
           "navigation_keys",
+          "inertial_scrolls",
           "idle_periods",
-          "jank_events"
+          "jank_events",
+          "merged_timeline"
         ],
         "isolated_sql_probes": [],
         "expected_condition_skips": [
           {
             "step": "top_app_changes",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-          },
-          {
-            "step": "user_gestures",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-          },
-          {
-            "step": "scroll_initiation",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+            "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
           },
           {
             "step": "anr_events",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-          },
-          {
-            "step": "inertial_scrolls",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+            "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
           },
           {
             "step": "app_launches",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+            "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
           },
           {
             "step": "clean_timeline",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-          },
-          {
-            "step": "merged_timeline",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+            "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
           }
         ],
         "semantic_step": "trace_time_range",
@@ -561,6 +551,7 @@
           "trace_id": 1
         },
         "required_steps": [
+          "input_coverage",
           "timeline_bounds",
           "device_state_lane",
           "device_state_lane_fallback",
@@ -572,6 +563,7 @@
           "lane_summary"
         ],
         "required_sql_steps": [
+          "input_coverage",
           "timeline_bounds",
           "device_state_lane",
           "device_state_lane_fallback",
@@ -593,7 +585,7 @@
         "expected_condition_skips": [
           {
             "step": "app_state_lane",
-            "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+            "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
           }
         ],
         "semantic_step": "device_state_lane",

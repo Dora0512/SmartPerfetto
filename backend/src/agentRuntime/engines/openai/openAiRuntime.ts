@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {snapshotSceneCoverageRegistry} from '../../../agent/scene/sceneCoveragePlan';
 import {EventEmitter} from 'events';
 import {Agent, MaxTurnsExceededError, OpenAIProvider, Runner, setTracingDisabled, type AgentInputItem, type RunStreamEvent} from '@openai/agents';
 import OpenAI from 'openai';
@@ -34,6 +35,7 @@ import {recordPlanOrPrePlanToolCall, resetPrePlanToolCallsForNewRun, readToolRes
 import {buildComplexityClassifierInput} from '../../../agentv3/queryComplexityContext';
 import {ArtifactStore} from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
+import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
 import {createOpenAISnapshotEngineState, getOpenAISnapshotEngineState, projectSessionFieldsForDurableSnapshot, type SessionFieldsForSnapshot, sessionFieldsUsePrivateKnowledge, type SessionStateSnapshot} from '../../../agentv3/sessionStateSnapshot';
 import {extractTraceFeatures, extractKeyInsights, saveAnalysisPattern, saveQuickPathPattern} from '../../../agentv3/analysisPatternMemory';
 import {probeTraceCompleteness} from '../../../agentv3/traceCompletenessProber';
@@ -712,6 +714,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         },
       });
       const intentResolver = createAnalysisTurnIntentResolver({
+        productRun: {options, runId, sessionId, traceId},
         context: buildComplexityClassifierInput({
           query, sceneType: 'general', selectionContext: options.selectionContext,
           hasReferenceTrace: Boolean(options.referenceTraceId), previousTurns: [], history: historyReader.getTurns(),
@@ -759,11 +762,20 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         hardCapTurns: maxTurns, targetTurns: config.quickTargetTurns, enforcement: 'turn_cap',
       }) : undefined;
       runtimePerformance.finishClassification(turnIntent.status === 'resolved' ? 'ok' : 'error');
+      const timeoutMs = quickMode ? config.quickPathPerTurnMs * maxTurns
+        : resolveFullRequestTimeoutMs(config.fullPathPerTurnMs, maxTurns, config.fullRequestTimeoutMs);
+      const perTurnMs = quickMode ? config.quickPathPerTurnMs : config.fullPathPerTurnMs;
+      // Only scene dispatch needs a fixed acquisition ceiling during preparation.
+      const sceneRunDeadline = resolveSceneProductScope(options, {runId, sessionId, traceId})
+        ? createProgressAwareRunDeadline({baseBudgetMs: timeoutMs, perTurnMs, maxRunMs: config.maxRunTimeoutMs})
+        : undefined;
       const context = await this.prepareAnalysisContext(query, sessionId, traceId, options, {
         config, sceneType, policy, turnIntent, strategyRegistry: intentResolver.strategyRegistry,
         analysisRunSpec, sessionContext, previousTurns, executionLease, runtimePerformance,
         historyReader, toolObserver: closeoutTape.observe,
-        isActive: () => acceptsToolUpdates && !analysisAbortScope.signal.aborted,
+        isActive: () => acceptsToolUpdates && !analysisAbortScope.signal.aborted &&
+          (!sceneRunDeadline || Date.now() < sceneRunDeadline.current()),
+        sceneDeadlineMs: sceneRunDeadline?.hardDeadlineAt,
       });
       sourceUse = context.sourceUse;
       analysisAbortScope.throwIfAborted();
@@ -803,12 +815,9 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         ...(turnIntent.status === 'unavailable' ? {modelFallback: 'configured_primary'} : {}),
         message: localize(config.outputLanguage, `AI 分析引擎分析中 (${selectedModel})...`, `AI analysis engine is running (${selectedModel})...`),
       }, timestamp: Date.now()});
-      const timeoutMs = quickMode ? config.quickPathPerTurnMs * maxTurns
-        : resolveFullRequestTimeoutMs(config.fullPathPerTurnMs, maxTurns, config.fullRequestTimeoutMs);
       // The base budget stays the initial deadline; completed tool rounds move it
       // forward on slow endpoints, never past the hard ceiling fixed here.
-      const perTurnMs = quickMode ? config.quickPathPerTurnMs : config.fullPathPerTurnMs;
-      const runDeadline = createProgressAwareRunDeadline({baseBudgetMs: timeoutMs, perTurnMs,
+      const runDeadline = sceneRunDeadline ?? createProgressAwareRunDeadline({baseBudgetMs: timeoutMs, perTurnMs,
         maxRunMs: config.maxRunTimeoutMs});
       // Set only for the single no-tool delivery call admitted after a timeout.
       let deliveryDeadlineAt: number | undefined;
@@ -1407,6 +1416,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       historyReader?: AnalysisHistoryReader;
       toolObserver?: RuntimeToolObserver;
       isActive?: () => boolean;
+      sceneDeadlineMs?: number;
     },
   ) {
     const {config, sceneType, policy, analysisRunSpec, sessionContext, executionLease} = runtime;
@@ -1460,12 +1470,19 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
     const entityStore = sessionContext.getEntityStore();
     const skillExecutor = createSkillExecutor(this.traceProcessorService);
     const effectiveSkillRegistry = resolveEffectiveSkillRegistryForRuntime(skillRegistry);
-    skillExecutor.registerSkills(effectiveSkillRegistry.getAllSkills());
-    skillExecutor.setFragmentRegistry(effectiveSkillRegistry.getFragmentCache());
+    const sceneCoverageRegistry = resolveSceneProductScope(options, {sessionId, traceId, runId: options.runId ?? ''})
+      ? snapshotSceneCoverageRegistry(effectiveSkillRegistry, runtime.strategyRegistry, runtime.turnIntent.sceneId) : undefined;
+    skillExecutor.registerSkills(sceneCoverageRegistry ? [...sceneCoverageRegistry.skills] : effectiveSkillRegistry.getAllSkills());
+    skillExecutor.setFragmentRegistry(sceneCoverageRegistry ? new Map(sceneCoverageRegistry.fragments) : effectiveSkillRegistry.getFragmentCache());
+    const canInvokeTool = () => runtime.isActive?.() !== false && !executionLease?.signal.aborted;
+    const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
+      deadlineMs: runtime.sceneDeadlineMs ?? 0, traceProcessorService: this.traceProcessorService,
+      artifactStore, sceneCoverageRegistry, signal: executionLease?.signal, canInvokeTool});
     const mcp = createClaudeMcpServer({
+      sceneRunContext,
       analysisHistoryReader: runtime.historyReader,
       toolObserver: runtime.toolObserver,
-      canInvokeTool: () => runtime.isActive?.() !== false && !executionLease?.signal.aborted,
+      canInvokeTool,
       conversationTraceAttached: options.assistantSurface === 'conversation' ? options.conversationTraceAttached === true : undefined,
       runManifestAttributionSink: options.runManifestAttributionSink,
       sessionId, traceId, userQuery: query, traceProcessorService: this.traceProcessorService, skillExecutor,

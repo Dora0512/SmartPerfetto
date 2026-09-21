@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import {snapshotSceneCoverageRegistry} from '../../../agent/scene/sceneCoveragePlan';
 import { EventEmitter } from 'events';
 import {randomUUID} from 'node:crypto';
 import {tmpdir} from 'node:os';
@@ -92,6 +93,7 @@ import {
 import type { AnalysisNote, AnalysisPlanV3, ClaudeAnalysisContext, FailedApproach, Hypothesis, UncertaintyFlag } from '../../../agentv3/types';
 import { ArtifactStore } from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
+import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
 import {
   recordPlanOrPrePlanToolCall,
   resetPrePlanToolCallsForNewRun,
@@ -877,6 +879,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       outputLanguage = resolvedConfig.outputLanguage;
       const sdkEnv = createSdkEnv(options.providerId, providerScope);
       const intentResolver = createAnalysisTurnIntentResolver({
+        productRun: {options, runId, sessionId, traceId},
         context: buildComplexityClassifierInput({
           query, sceneType: 'general', selectionContext: options.selectionContext,
           hasReferenceTrace: !!options.referenceTraceId, previousTurns: [],
@@ -988,6 +991,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         runtimePerformance,
         turnIntent, turnPolicy, strategyRegistry: intentResolver.strategyRegistry, runActivity,
         toolObserver: closeoutTape.observe, analysisHistoryReader, acquisition,
+        sceneDeadlineMs: requestDeadline,
       });
       sourceUse = ctx.sourceUse;
       executionLease.throwIfAborted();
@@ -2332,6 +2336,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       toolObserver?: RuntimeToolObserver;
       analysisHistoryReader?: ReturnType<typeof createRuntimeAnalysisHistoryReader>;
       acquisition?: {open: boolean};
+      sceneDeadlineMs?: number;
     },
   ) {
     const {turnIntent, turnPolicy, strategyRegistry} = precomputed;
@@ -2671,16 +2676,23 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     await skillRegistryReady;
     const effectiveSkillRegistry =
       resolveEffectiveSkillRegistryForRuntime(skillRegistry);
-    skillExecutor.registerSkills(effectiveSkillRegistry.getAllSkills());
+    const sceneCoverageRegistry = resolveSceneProductScope(options, {sessionId, traceId, runId: options.runId ?? ''})
+      ? snapshotSceneCoverageRegistry(effectiveSkillRegistry, strategyRegistry, turnIntent.sceneId) : undefined;
+    skillExecutor.registerSkills(sceneCoverageRegistry ? [...sceneCoverageRegistry.skills] : effectiveSkillRegistry.getAllSkills());
     skillExecutor.setFragmentRegistry(
-      effectiveSkillRegistry.getFragmentCache(),
+      sceneCoverageRegistry ? new Map(sceneCoverageRegistry.fragments) : effectiveSkillRegistry.getFragmentCache(),
     );
     const notesBudget = createRuntimeSkillNotesBudget(turnPolicy.onDemandContext);
+    const canInvokeTool = () => precomputed.acquisition?.open !== false &&
+      precomputed.runActivity?.active !== false && !executionLease?.signal.aborted;
+    const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
+      deadlineMs: precomputed.sceneDeadlineMs ?? 0, traceProcessorService: this.traceProcessorService,
+      artifactStore, sceneCoverageRegistry, signal: executionLease?.signal, canInvokeTool});
     const { server: mcpServer, allowedTools, toolDefinitions, sourceUse } = createClaudeMcpServer({
+      sceneRunContext,
       toolObserver: precomputed.toolObserver,
       analysisHistoryReader: precomputed.analysisHistoryReader,
-      canInvokeTool: () => precomputed.acquisition?.open !== false &&
-        precomputed.runActivity?.active !== false && !executionLease?.signal.aborted,
+      canInvokeTool,
       conversationTraceAttached: options.assistantSurface === 'conversation'
         ? options.conversationTraceAttached === true
         : undefined,

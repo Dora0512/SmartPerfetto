@@ -15,6 +15,7 @@
  * escape hatch since the builder emits the exact typed shape.
  */
 
+import {projectSceneTimelineForClient} from '../agent/scene/sceneTimelineProjection';
 import type { Finding } from '../agent/types';
 import type { AgentDrivenReportData } from './htmlReportGenerator';
 import type { AnalyzeManagedSession } from '../assistant/application/agentAnalyzeSessionService';
@@ -131,6 +132,8 @@ interface ReportResultLike {
   findings: Finding[];
   hypotheses: AgentDrivenReportData['hypotheses'];
   conclusion: string;
+  sceneTimeline?: import('../agent/core/orchestratorTypes').AnalysisResult['sceneTimeline'];
+  sceneReport?: import('../agent/core/orchestratorTypes').AnalysisResult['sceneReport'];
   turnIntent?: AgentDrivenReportData['result']['turnIntent'];
   completion?: AgentDrivenReportData['result']['completion'];
   outputOrigin?: AgentDrivenReportData['result']['outputOrigin'];
@@ -157,6 +160,8 @@ interface ReportResultLike {
 export interface BuildAgentReportDataInput {
   session: AnalyzeManagedSession;
   result: ReportResultLike;
+  /** Optional server origin for downloaded HTML's authenticated detail links. */
+  backendBaseUrl?: string;
 }
 
 export function buildAgentDrivenReportData(
@@ -242,7 +247,11 @@ export function buildAgentDrivenReportData(
     outputLanguage,
     traceStartNs:
       traceStartNs !== undefined && traceStartNs !== null ? String(traceStartNs) : undefined,
-    result: cumulativeResult as AgentDrivenReportData['result'],
+    result: {...cumulativeResult,
+      ...(cumulativeResult.sceneTimeline
+        ? {sceneTimeline: projectSceneTimelineForClient(cumulativeResult.sceneTimeline)} : {}),
+    } as AgentDrivenReportData['result'],
+    ...(input.backendBaseUrl ? {backendBaseUrl: input.backendBaseUrl} : {}),
     hypotheses: hypotheses as AgentDrivenReportData['hypotheses'],
     dialogue: privateKnowledge ? [] : session.agentDialogue as AgentDrivenReportData['dialogue'],
     conversationTimeline: privateKnowledge

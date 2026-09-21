@@ -3,10 +3,10 @@
  *
  * Validates the state_timeline composite skill (V2) across canonical traces:
  * 1) All 4 lanes produce data or gracefully degrade
- * 2) input_state_lane selects frame-based vs heuristic path correctly
+ * 2) Legacy input lane paths consume the same normalized input facts
  * 3) system_state_lane produces non-overlapping segments (sweep-line)
  * 4) lane_summary source_status matches actual data availability
- * 5) FLING durations are within expected bounds
+ * 5) Missing actions remain visible; unsupported fling boundaries are explicit
  */
 
 import { createSkillEvaluator, getTestTracePath, findStepInLayers } from './runner';
@@ -91,30 +91,6 @@ function checkNoOverlap(segments: any[]): string | null {
   return null;
 }
 
-/** Check FLING duration bounds */
-function checkFlingDurations(segments: any[], isFrameBased: boolean): string[] {
-  const errors: string[] = [];
-  const flings = segments.filter((s: any) => s.state === 'FLING');
-
-  for (const fling of flings) {
-    const durMs = Number(fling.dur_ms || 0);
-    if (durMs <= 0) {
-      errors.push(`FLING with invalid duration: ${durMs}ms`);
-      continue;
-    }
-    // Frame-based FLING should be precise (< 3000ms); heuristic can go up to 3000ms
-    const maxDurMs = 3100; // 3s + 100ms tolerance
-    if (durMs > maxDurMs) {
-      errors.push(`FLING duration ${durMs}ms exceeds max ${maxDurMs}ms`);
-    }
-    // Minimum FLING duration should be 80ms (from SQL filter)
-    if (durMs < 16) {
-      errors.push(`FLING duration ${durMs}ms below minimum threshold`);
-    }
-  }
-  return errors;
-}
-
 async function runCase(testCase: TimelineCase): Promise<void> {
   const evaluator = createSkillEvaluator('state_timeline');
 
@@ -169,10 +145,10 @@ async function runCase(testCase: TimelineCase): Promise<void> {
 
     // Verify lane_summary input status matches actual path
     const inputStatus = summaryByLane['input'] || '';
-    if (hasFrames && inputStatus !== 'available_frame_based') {
+    if (hasFrames && inputStatus !== 'partial') {
       console.warn(`[WARN] input lane used frames but summary says ${inputStatus}`);
     }
-    if (hasFallback && inputStatus !== 'available_heuristic') {
+    if (hasFallback && inputStatus !== 'partial') {
       console.warn(`[WARN] input lane used fallback but summary says ${inputStatus}`);
     }
 
@@ -194,11 +170,22 @@ async function runCase(testCase: TimelineCase): Promise<void> {
       }
     }
 
-    // ---- 5. Check FLING durations ----
+    // ---- 5. Check input facts and capability limits ----
     const inputData = hasFrames ? framesStep!.data! : hasFallback ? fallbackStep!.data! : [];
-    const flingErrors = checkFlingDurations(inputData, hasFrames);
-    if (flingErrors.length > 0) {
-      throw new Error(`FLING validation: ${flingErrors.join('; ')}`);
+    const coverage = findStep(result.layers, 'input_coverage')?.data?.[0];
+    if (!coverage || coverage.source_status !== 'partial') {
+      throw new Error('missing input collection/coverage status');
+    }
+    if (inputData.some((row: any) => row.state === 'IDLE')) {
+      throw new Error('acknowledged input delivery absence cannot prove IDLE');
+    }
+    if (testCase.file === 'Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace' &&
+        !inputData.some((row: any) => row.state === 'INPUT_UNKNOWN' && row.event_count > 0)) {
+      throw new Error('missing-action motion must remain visible as observed input activity');
+    }
+    if (inputData.some((row: any) => row.state === 'FLING') ||
+        coverage.inertial_source_status !== 'inertial_boundary_unavailable') {
+      throw new Error('input contacts/frames must not invent a verified fling interval');
     }
 
     // ---- Summary ----

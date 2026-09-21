@@ -117,6 +117,7 @@ jest.mock('../../../../services/skillEngine/skillExecutor', () => ({
   createSkillExecutor: jest.fn<(...args: any[]) => any>().mockReturnValue({
     registerSkills: mockRegisterSkills,
     setFragmentRegistry: mockSetFragmentRegistry,
+    setRunManifestAttributionSink: jest.fn(),
     executeSkill: jest.fn(),
   }),
 }));
@@ -126,7 +127,7 @@ jest.mock('../../../../services/skillEngine/skillLoader', () => ({
   skillRegistry: {
     isInitialized: jest.fn<(...args: any[]) => any>().mockReturnValue(false),
     getAllSkills: jest.fn<(...args: any[]) => any>().mockReturnValue([]),
-    getFragmentCache: jest.fn<(...args: any[]) => any>().mockReturnValue({}),
+    getFragmentCache: jest.fn<(...args: any[]) => any>().mockReturnValue(new Map()),
   },
 }));
 
@@ -226,6 +227,7 @@ import {getSourceLookupCodeReferences} from '../../../../services/codebase/sourc
 import {projectCodeAwareStreamingUpdate} from '../../../../services/security/codeAwareStreamingUpdateProjection';
 import {renderConclusionContractSidecar, type ConclusionContract} from '../../../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../../../services/canonicalAnalysisResult';
+import {createSceneRuntimeMatrixFixture} from '../../../../../tests/helpers/sceneRuntimeMatrixFixture';
 
 function createRuntime(
   env: Record<string, string | undefined> = {},
@@ -291,6 +293,39 @@ describe('QoderRuntime', () => {
       allowedTools: ['mcp__smartperfetto__query_trace'],
       toolDefinitions: [],
     });
+  });
+
+  it('scene runtime matrix: runs the pinned Qoder provider through shared proposal and private seal', async () => {
+    const f = createSceneRuntimeMatrixFixture('qoder');
+    const runtime = createRuntime({QODER_MODEL: 'scene-pinned-qoder'}, f.traceProcessorService);
+    const actualMcp = jest.requireActual<typeof import('../../../../agentv3/claudeMcpServer')>('../../../../agentv3/claudeMcpServer');
+    mockCreateClaudeMcpServer.mockImplementationOnce((options: any) => actualMcp.createClaudeMcpServer(options));
+    let sceneTool: any;
+    let response: any;
+    mockQuery.mockImplementationOnce((params: any) => ({
+      async *[Symbol.asyncIterator]() {
+        expect(params.options.model).toBe('scene-pinned-qoder');
+        sceneTool = params.options.mcpServers.smartperfetto.instance.tools.find((item: any) => item.name === 'propose_scene_timeline');
+        response = await sceneTool.handler(f.proposal(), {});
+        yield {type: 'result', subtype: 'success', is_error: false, result: 'Scene candidates submitted.'};
+      }, close: mockClose, interrupt: mockInterrupt,
+    }));
+    try {
+      const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
+      expect(result.turnIntent).toMatchObject({source: 'product', sceneId: 'scene_reconstruction'});
+      expect(mockIntentTransport.mock.calls.filter(([input]) => input.systemPrompt === '')).toHaveLength(0);
+      if (!response) throw new Error(`Scene mock provider did not execute: ${result.conclusion}`);
+      expect(response.structuredContent).toMatchObject({accepted: true, revision: 1});
+      const snapshot = f.seal();
+      expect(snapshot.revision).toBe(1);
+      expect(snapshot.runId).toBe(f.scope.runId);
+      expect(snapshot.segments[0].evidence[0].source.originRunId).toBe(f.scope.runId);
+      expect(f.boundsQueries).toEqual([f.scope.traceId]);
+      f.controller.abort();
+      const late = await sceneTool.handler(f.proposal(), {}).catch((error: Error) => ({error: error.message}));
+      expect(late.structuredContent?.accepted).not.toBe(true);
+    } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
+    expect((runtime as any).artifactStores.has(f.scope.sessionId)).toBe(false);
   });
 
   describe('shared tool observation', () => {

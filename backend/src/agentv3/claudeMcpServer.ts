@@ -3,6 +3,11 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import {createRuntimeToolResult, runtimeToolReceiptMetadata} from '../agentRuntime/runtimeToolResult';
+import {assertSceneRuntimeCapability} from '../agent/scene/sceneRuntimeBinding';
+import {sceneRunState, type SceneRunContext} from '../agent/scene/sceneRunContext';
+import {projectSceneRunCandidate} from '../agent/scene/sceneTimelineProjection';
+import {proposeSceneTimeline} from '../agent/scene/sceneTimelineProposal';
+import {sceneTimelineProposalSchema} from '../agent/scene/sceneTimelineContract';
 import type {RuntimeToolObserver} from '../agentRuntime/runtimeToolObserver';
 import type {AnalysisHistoryReader} from '../agentRuntime/analysisHistory';
 import {renderRequiredLocalizedStrategyTemplate} from './localizedStrategyTemplate';
@@ -1203,6 +1208,8 @@ export interface ClaudeMcpServerOptions {
   allowNewEvidence?: boolean;
   /** Runtime lease: no tool body may execute after acquisition closes. */
   canInvokeTool?: () => boolean;
+  /** In-process, product-issued scene capability. Never reconstructed from tool JSON. */
+  sceneRunContext?: SceneRunContext;
   /** Issued session-bound reader, never accepted from HTTP/SDK tool arguments. */
   analysisHistoryReader?: AnalysisHistoryReader;
   strategyRegistry?: ReadonlyStrategyRegistrySnapshot;
@@ -7379,6 +7386,50 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
   });
   const sourceOnlyPhase = sourceUsePolicy?.phase === 'automatic_enrichment' ||
     sourceUsePolicy?.phase === 'deep_enrichment';
+
+  if (options.sceneRunContext) {
+    const context = options.sceneRunContext;
+    assertSceneRuntimeCapability(context, options);
+    const description = loadPromptTemplate('scene-tool-guidance');
+    if (!description?.trim()) throw new Error('scene_tool_guidance_unavailable');
+    registry.registerShared({
+      name: 'propose_scene_timeline', description, exposure: 'internal',
+      inputSchema: sceneTimelineProposalSchema.shape, evidenceEffect: 'read_existing',
+      handler: async (input, extra) => {
+        extra.signal?.throwIfAborted();
+        assertSceneRuntimeCapability(context, options);
+        const previousRevision = sceneRunState(context).revision;
+        const result = await proposeSceneTimeline(context, input);
+        extra.signal?.throwIfAborted();
+        const candidate = result.accepted && result.revision === sceneRunState(context).revision
+          ? projectSceneRunCandidate(context) : undefined;
+        if (result.accepted && result.revision > previousRevision) {
+          emitUpdate?.({type: 'scene_timeline_updated', content: candidate, timestamp: Date.now()});
+        }
+        const changedIds = result.segments?.filter(item => item.issuedRevision === result.revision)
+          .map(item => item.segment.id) ?? [];
+        const removedIds = result.accepted && Array.isArray(input.removeSegmentIds)
+          ? input.removeSegmentIds.filter((id): id is string => typeof id === 'string') : [];
+        const diagnostics = result.diagnostics.slice(0, 24).map(item => ({...item,
+          ...(item.detail ? {detail: item.detail.slice(0, 256)} : {})}));
+        return createRuntimeToolResult({accepted: result.accepted, revision: result.revision,
+          changedSegmentIds: changedIds.slice(0, 32), omittedChangedSegmentCount: Math.max(0, changedIds.length - 32),
+          removedSegmentIds: removedIds.slice(0, 32), omittedRemovedSegmentCount: Math.max(0, removedIds.length - 32),
+          diagnostics, omittedDiagnosticCount: result.diagnostics.length - diagnostics.length,
+          ...(candidate ? {coverage: {
+            status: candidate.coverage.status, captureStatus: candidate.coverage.captureStatus,
+            reason: candidate.coverage.reason,
+            targets: (candidate.coverage.targets ?? []).slice(0, 16).map(target => ({
+              id: target.id, capabilityStatus: target.capabilityStatus, scanStatus: target.scanStatus,
+              unscannedWindowCount: target.unscannedWindows.length,
+              issues: target.issues.slice(0, 3), omittedIssueCount: Math.max(0, target.issues.length - 3),
+            })),
+            omittedTargetCount: Math.max(0, (candidate.coverage.targets?.length ?? 0) - 16),
+          }} : {}),
+        }, {isError: !result.accepted});
+      },
+    });
+  }
 
   if (sourceOnlyPhase) {
     registry.registerSdk(listCodebases, 'list_codebases', 'requires_codebase_permission', {evidenceEffect: 'none'});

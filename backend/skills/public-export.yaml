@@ -23,6 +23,21 @@ runtime_perfetto:
   rpc_api_version: 14
   stdlib_tree: 54fc9f0b5c8dedb8772283b6786753fbb918da0d
 sql_fragments:
+  backend/skills/fragments/scene_response_marker_facts.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/scene_response_marker_facts.sql
+  backend/skills/fragments/scene_input_window.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/scene_input_window.sql
+  backend/skills/fragments/scene_device_state_facts.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/scene_device_state_facts.sql
+  backend/skills/fragments/scene_input_facts.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/scene_input_facts.sql
+  backend/skills/fragments/scene_screen_facts.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/scene_screen_facts.sql
   backend/skills/fragments/system_thread_state_spans.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/system_thread_state_spans.sql
@@ -62,6 +77,9 @@ sql_fragments:
   backend/skills/fragments/vsync_config.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/vsync_config.sql
+  backend/skills/fragments/thermal_sample_quality.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/thermal_sample_quality.sql
 vendor_overrides:
   backend/skills/vendors/honor/startup.override.yaml:
     disposition: exported
@@ -321,6 +339,16 @@ skills:
     workflow: trace-overview
     disposition: exported
     destination: references/generated/skills/device_state_timeline.md
+  scene_device_state_changes:
+    source: backend/skills/atomic/scene_device_state_changes.skill.yaml
+    workflow: scene-reconstruction
+    disposition: exported
+    destination: references/generated/skills/scene_device_state_changes.md
+  scene_response_markers:
+    source: backend/skills/atomic/scene_response_markers.skill.yaml
+    workflow: scene-reconstruction
+    disposition: exported
+    destination: references/generated/skills/scene_response_markers.md
   fence_wait_decomposition:
     source: backend/skills/atomic/fence_wait_decomposition.skill.yaml
     workflow: gpu-rendering
@@ -1297,6 +1325,21 @@ skills:
     disposition: exported
     destination: references/generated/skills/pipeline_webview_textureview_custom.md
 strategies:
+  backend/strategies/scene-reconstruction.strategy.md:
+    disposition: product-only
+    reason: SmartPerfetto issued scene-run proposal and verification lifecycle
+  backend/strategies/scene-tool-guidance.template.md:
+    disposition: product-only
+    reason: SmartPerfetto structured scene proposal protocol
+  backend/strategies/scene-coverage-policy.yaml:
+    disposition: product-only
+    reason: SmartPerfetto issued run required-source scan policy and producer bindings
+  backend/strategies/prompt-scene-reconstruction-query-zh.template.md:
+    disposition: product-only
+    reason: SmartPerfetto scene button task input
+  backend/strategies/prompt-scene-reconstruction-query-en.template.md:
+    disposition: product-only
+    reason: SmartPerfetto scene button task input
   backend/strategies/prompt-analysis-correction-en.template.md:
     disposition: product-only
     reason: SmartPerfetto structured candidate recovery protocol

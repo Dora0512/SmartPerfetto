@@ -3,7 +3,7 @@
 # This file is part of SmartPerfetto. See LICENSE for details.
 
 name: scene_reconstruction
-version: "1.0"
+version: "1.1"
 type: composite
 category: interaction
 tier: S
@@ -34,11 +34,53 @@ triggers:
     - ".*用户.*操作.*"
 
 inputs:
+  - {name: start_ts, type: timestamp, required: false}
+  - {name: end_ts, type: timestamp, required: false}
   - name: trace_id
     type: string
     required: true
 
+  - name: scene_row_limit
+    type: number
+    required: false
+    default: 4096
+
 steps:
+  - id: input_coverage
+    type: atomic
+    name: "输入事实覆盖范围"
+    display:
+      level: hidden
+      layer: overview
+    investigation_evidence:
+      window: {start: start_ts, end: end_ts}
+      metrics: []
+      scan:
+        domain: scene_input
+        resultStepId: user_gestures
+        totalRowsColumn: gesture_count
+        outputTruncatedColumn: output_truncated
+        cursorClosedColumn: cursor_closed
+        parseFailuresColumn: missing_timestamp_count
+    sql_fragments: [fragments/scene_input_facts.sql, fragments/scene_input_window.sql]
+    sql: |
+      SELECT printf('%d', b.start_ts) AS start_ts, printf('%d', b.end_ts) AS end_ts,
+        (SELECT COUNT(*) FROM scene_input_facts WHERE ts >= b.start_ts AND ts <= b.end_ts) AS observed_event_count,
+        (SELECT COUNT(*) FROM scene_primary_input WHERE ts >= b.start_ts AND ts <= b.end_ts) AS physical_event_count,
+        (SELECT COUNT(*) FROM scene_primary_input WHERE event_action = 'UNKNOWN' AND ts >= b.start_ts AND ts <= b.end_ts) AS physical_missing_action_count,
+        (SELECT COUNT(*) FROM scene_input_facts WHERE event_action = 'UNKNOWN' AND ts >= b.start_ts AND ts <= b.end_ts) AS missing_action_count,
+        (SELECT COUNT(*) FROM scene_raw_input WHERE ts IS NULL) AS missing_timestamp_count, 'whole_trace_unlocatable' AS timestamp_failure_scope,
+        (SELECT COUNT(*) FROM scene_windowed_gestures) AS gesture_count,
+        (SELECT COUNT(*) FROM scene_input_gaps WHERE end_ts > ts AND ts < b.end_ts AND end_ts > b.start_ts) AS gap_count,
+        MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096) AS output_row_limit,
+        CASE WHEN (SELECT COUNT(*) FROM scene_windowed_gestures) > MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
+          THEN 1 ELSE 0 END AS output_truncated,
+        'partial' AS source_status, 'capture_completeness_unproven' AS reason,
+        'inertial_boundary_unavailable' AS inertial_source_status,
+        1 AS cursor_closed, 'scene_input_v1' AS normalization_version FROM scene_requested_bounds b
+    save_as: input_coverage
+    optional: true
+
   # ==========================================================================
   # L1: Trace 时间范围
   # ==========================================================================
@@ -64,17 +106,9 @@ steps:
           label: "时长(秒)"
           type: number
     sql: |
-      SELECT
-        MIN(ts) AS start_ts,
-        MAX(ts) AS end_ts,
-        printf('%d', MIN(ts)) AS start_ts_str,
-        printf('%d', MAX(ts)) AS end_ts_str,
-        ROUND((MAX(ts) - MIN(ts)) / 1e9, 2) AS duration_sec
-      FROM (
-        SELECT ts FROM slice WHERE dur > 0
-        UNION ALL
-        SELECT ts FROM counter WHERE value IS NOT NULL
-      )
+      SELECT printf('%d', start_ts) AS start_ts, printf('%d', end_ts) AS end_ts,
+        printf('%d', start_ts) AS start_ts_str, printf('%d', end_ts) AS end_ts_str,
+        ROUND((end_ts - start_ts) / 1e9, 2) AS duration_sec FROM trace_bounds
     save_as: time_range
 
   # ==========================================================================
@@ -149,24 +183,16 @@ steps:
         - name: category
           label: "类别"
           type: string
+    sql_fragments: [fragments/scene_screen_facts.sql]
     sql: |
-      WITH RECURSIVE screen_data AS (
-        SELECT 1 AS dummy WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_screen_state')
-      )
-      SELECT
-        printf('%d', ts) AS ts,
-        printf('%d', dur) AS dur,
-        CASE screen_state
-          WHEN 1 THEN '屏幕熄灭'
-          WHEN 2 THEN '屏幕点亮'
-          WHEN 3 THEN '屏幕休眠'
-          ELSE '屏幕状态 ' || screen_state
-        END AS event,
-        'screen' AS category
-      FROM android_screen_state
-      WHERE dur > 0
-      ORDER BY ts
-      LIMIT 100
+      SELECT printf('%d', ts) AS ts, printf('%d', end_ts - ts) AS dur,
+        CASE state WHEN 'SCREEN_ON' THEN '屏幕点亮' WHEN 'SCREEN_OFF' THEN '屏幕熄灭'
+          WHEN 'SCREEN_DOZE' THEN '屏幕低功耗显示（DOZE）' ELSE '屏幕状态未知' END AS event,
+        'screen' AS category, state, raw_state, short_screen_state, source_status, boundary_kind,
+        'android_screen_state' AS source_table, CAST(source_id AS TEXT) AS source_id,
+        COUNT(*) OVER () AS total_rows
+      FROM scene_screen_facts WHERE end_ts >= ts ORDER BY ts
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: screen_events
     optional: true
 
@@ -202,6 +228,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH RECURSIVE battery_check AS (
         SELECT 1 AS dummy WHERE EXISTS (
           SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_battery_stats_event_slices'
@@ -217,7 +244,8 @@ steps:
       WHERE track_name = 'battery_stats.top'
         AND safe_dur > 50000000
       ORDER BY ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: app_switches
     optional: true
 
@@ -247,6 +275,7 @@ steps:
           label: "耗时(ms)"
           type: number
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH lifecycle_slices AS (
         SELECT
           s.ts,
@@ -321,7 +350,8 @@ steps:
         SELECT ts, activity_name, lifecycle_event, dur FROM startup_activities
       )
       ORDER BY ts
-      LIMIT 200
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: activity_lifecycle
     optional: true
 
@@ -331,7 +361,12 @@ steps:
   - id: user_gestures
     type: atomic
     name: "用户手势识别"
-    condition: table_availability.data[0]?.has_input_events === 1 && table_availability.data[0]?.has_startups === 1 && table_availability.data[0]?.has_frame_timeline === 1
+    investigation_evidence:
+      window: {start: ts, end: end_ts}
+      identity: {upid: upid}
+      metrics:
+        - {domain: scene_input, metric_id: scene.input.event_count, value: event_count, status: source_status}
+    condition: table_availability.data[0]?.has_input_events === 1
     display:
       level: hidden
       layer: list
@@ -366,187 +401,19 @@ steps:
         - name: category
           label: "类别"
           type: string
+    sql_fragments: [fragments/scene_input_facts.sql, fragments/scene_input_window.sql]
     sql: |
-      WITH RECURSIVE input_check AS (
-        SELECT 1 AS dummy WHERE EXISTS (
-          SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_input_events'
-        )
-      ),
-      startup_check AS (
-        SELECT 1 AS dummy WHERE EXISTS (
-          SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_startups'
-        )
-      ),
-      frame_check AS (
-        SELECT 1 AS dummy WHERE EXISTS (
-          SELECT 1 FROM sqlite_master WHERE type='table' AND name='actual_frame_timeline_slice'
-        )
-      ),
-      startup_spans AS (
-        SELECT
-          ts AS start_ts,
-          ts + dur AS end_ts,
-          package AS app_package
-        FROM android_startups
-        WHERE dur > 0
-      ),
-      frame_apps AS (
-        SELECT
-          a.ts,
-          a.ts + a.dur AS end_ts,
-          COALESCE(
-            NULLIF(p.name, ''),
-            CASE
-              WHEN a.layer_name IS NOT NULL AND instr(a.layer_name, '/') > 1
-              THEN substr(a.layer_name, 1, instr(a.layer_name, '/') - 1)
-              ELSE NULL
-            END
-          ) AS app_package
-        FROM actual_frame_timeline_slice a
-        LEFT JOIN process p ON p.upid = a.upid
-        WHERE a.dur > 0
-          AND a.surface_frame_token IS NOT NULL
-      ),
-      gesture_events AS (
-        SELECT
-          read_time AS ts,
-          event_action,
-          process_name,
-          CASE WHEN event_action = 'DOWN' THEN 1 ELSE 0 END AS is_start
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-          AND process_name NOT IN ('system_server', '/system/bin/inputflinger')
-          AND process_name NOT GLOB 'com.android.systemui*'
-      ),
-      gesture_groups AS (
-        SELECT ts, event_action, process_name,
-               SUM(is_start) OVER (ORDER BY ts) AS gesture_id
-        FROM gesture_events
-      ),
-      gestures AS (
-        SELECT
-          gesture_id,
-          MIN(ts) AS ts,
-          MAX(ts) AS end_ts,
-          MAX(ts) - MIN(ts) AS dur,
-          MAX(CASE WHEN event_action = 'UP' THEN ts END) AS up_ts,
-          COUNT(*) AS event_count,
-          COUNT(CASE WHEN event_action = 'MOVE' THEN 1 END) AS move_count,
-          MAX(process_name) AS raw_process_name
-        FROM gesture_groups
-        WHERE gesture_id > 0
-        GROUP BY gesture_id
-      ),
-      gesture_with_app AS (
-        SELECT
-          g.*,
-          (SELECT MIN(g2.ts) FROM gestures g2 WHERE g2.ts > g.ts) AS next_gesture_ts,
-          CASE
-            WHEN g.raw_process_name GLOB 'com.*'
-              OR g.raw_process_name GLOB 'org.*'
-              OR g.raw_process_name GLOB 'io.*'
-              OR g.raw_process_name GLOB 'net.*'
-            THEN g.raw_process_name
-            ELSE COALESCE(
-              (SELECT f.app_package
-               FROM frame_apps f
-               WHERE f.app_package IS NOT NULL
-                 AND f.app_package != ''
-                 AND f.app_package NOT GLOB 'surfaceflinger*'
-                 AND f.app_package NOT GLOB 'system_server*'
-                 AND f.app_package NOT GLOB 'com.android.systemui*'
-                 AND f.ts >= g.ts - 300000000
-                 AND f.end_ts <= g.end_ts + 800000000
-               GROUP BY f.app_package
-               ORDER BY COUNT(*) DESC
-               LIMIT 1),
-              (SELECT s.app_package
-               FROM startup_spans s
-               WHERE g.ts BETWEEN s.start_ts AND s.end_ts
-               ORDER BY s.start_ts DESC
-               LIMIT 1),
-              g.raw_process_name
-            )
-          END AS app_package
-        FROM gestures g
-      ),
-      gesture_with_window AS (
-        SELECT
-          g.*,
-          CASE
-            WHEN g.up_ts IS NOT NULL THEN
-              MIN(
-                COALESCE(g.next_gesture_ts, g.up_ts + 3000000000),
-                g.up_ts + 3000000000
-              )
-            ELSE g.end_ts
-          END AS scroll_window_end
-        FROM gesture_with_app g
-      ),
-      gesture_with_duration AS (
-        SELECT
-          g.*,
-          CASE
-            -- For scroll gestures, extend duration to the last rendered frame after UP
-            -- (bounded by next gesture or 3s) to match user-perceived scroll length.
-            WHEN g.move_count >= 3 AND g.up_ts IS NOT NULL THEN
-              MAX(
-                g.dur,
-                COALESCE(
-                  (SELECT MAX(f.end_ts)
-                   FROM frame_apps f
-                   WHERE f.ts >= g.up_ts
-                     AND f.ts < g.scroll_window_end
-                     AND (
-                       g.app_package IS NULL
-                       OR g.app_package = ''
-                       OR f.app_package = g.app_package
-                     )),
-                  (SELECT MAX(f.end_ts)
-                   FROM frame_apps f
-                   WHERE f.ts >= g.up_ts
-                     AND f.ts < g.scroll_window_end),
-                  MIN(
-                    COALESCE(g.next_gesture_ts, g.up_ts + 1800000000),
-                    g.up_ts + 1800000000
-                  )
-                ) - g.ts
-              )
-            ELSE g.dur
-          END AS scene_dur
-        FROM gesture_with_window g
-      )
-      SELECT
-        printf('%d', ts) AS ts,
-        printf('%d', scene_dur) AS dur,
-        CASE
-          WHEN move_count >= 3 THEN '滑动 (' || move_count || '次移动, ' || CAST(scene_dur / 1000000 AS INT) || 'ms)'
-          WHEN dur > 500000000 AND move_count <= 2 THEN '长按 (' || CAST(dur / 1000000 AS INT) || 'ms)'
-          ELSE '点击'
-        END ||
-        CASE
-          WHEN app_package IS NOT NULL AND app_package != ''
-          THEN ' [' || REPLACE(REPLACE(app_package, 'com.', ''), 'android.', '') || ']'
-          ELSE ''
-        END AS event,
-        CASE
-          WHEN move_count >= 3 THEN 'scroll'
-          WHEN dur > 500000000 AND move_count <= 2 THEN 'long_press'
-          ELSE 'tap'
-        END AS gesture_type,
-        CASE
-          WHEN move_count >= 10 THEN '高'
-          WHEN move_count >= 5 THEN '中'
-          WHEN move_count >= 3 THEN '低'
-          ELSE '高'
-        END AS confidence,
-        move_count,
-        app_package,
-        'gesture' AS category
-      FROM gesture_with_duration
-      WHERE event_count >= 2
-      ORDER BY ts
-      LIMIT 200
+      SELECT printf('%d', clipped_ts) AS ts, printf('%d', clipped_end_ts) AS end_ts, printf('%d', clipped_end_ts - clipped_ts) AS dur,
+        printf('%d', ts) AS source_start_ts, printf('%d', end_ts) AS source_end_ts,
+        CASE WHEN ts != clipped_ts OR end_ts != clipped_end_ts THEN 1 ELSE 0 END AS window_clipped,
+        CASE gesture_type WHEN 'touch_move' THEN '连续触摸移动' WHEN 'touch_hold' THEN '持续触摸（长按识别未确认）' WHEN 'tap' THEN '点击接触' WHEN 'cancelled' THEN '触摸取消' WHEN 'key' THEN '按键输入' WHEN 'scroll_input' THEN '滚动轴输入（ACTION_SCROLL）' WHEN 'wheel' THEN '滚轮输入' ELSE '输入活动（动作信息不完整）' END AS event, gesture_type, 'MEDIUM' AS confidence,
+        move_count, app_package, 'gesture' AS category, CASE WHEN ts != clipped_ts OR end_ts != clipped_end_ts THEN 'partial' ELSE source_status END AS source_status,
+        source_table, source_id, source_ids, stream_key, upid, event_channel,
+        device_id, display_id, input_source, CASE WHEN ts = clipped_ts AND end_ts = clipped_end_ts THEN boundary_complete ELSE 0 END AS boundary_complete, event_count, missing_action_count, 'original_gesture' AS event_count_scope,
+        first_physical_event_id, last_physical_event_id, dispatch_count, receiver_count, identity_status,
+        COUNT(*) OVER () AS total_rows
+      FROM scene_windowed_gestures ORDER BY ts, stream_key, gesture_id
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: gestures
     optional: true
 
@@ -555,12 +422,12 @@ steps:
   # ==========================================================================
   - id: scroll_initiation
     type: atomic
-    name: "滑动启动时刻"
+    name: "滚动处理区间"
     condition: table_availability.data[0]?.has_input_events === 1
     display:
       level: hidden
       layer: list
-      title: "滑动启动"
+      title: "滚动处理"
       columns:
         - name: ts
           label: "时间"
@@ -583,65 +450,17 @@ steps:
           label: "说明"
           type: string
     sql: |
-      -- 此 step 检测滑动开始的精确时刻
-      -- 原理：当手指 DOWN 后连续出现 2 个 MOVE 事件时，认为滑动启动
-      WITH RECURSIVE input_check AS (
-        SELECT 1 AS dummy WHERE EXISTS (
-          SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_input_events'
-        )
-      ),
-      motion_base AS (
-        SELECT
-          event_action,
-          read_time AS ts,
-          process_name,
-          SUM(CASE WHEN event_action = 'DOWN' THEN 1 ELSE 0 END)
-            OVER (ORDER BY read_time) AS gesture_id
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-          AND event_action IN ('DOWN', 'MOVE', 'UP')
-      ),
-      motion_with_seq AS (
-        SELECT
-          event_action,
-          ts,
-          process_name,
-          gesture_id,
-          SUM(CASE WHEN event_action = 'MOVE' THEN 1 ELSE 0 END)
-            OVER (
-              PARTITION BY gesture_id
-              ORDER BY ts
-              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS move_seq
-        FROM motion_base
-      ),
-      scroll_starts AS (
-        SELECT
-          MIN(ts) AS scroll_start_ts,
-          gesture_id,
-          MAX(process_name) AS app
-        FROM motion_with_seq
-        WHERE event_action = 'MOVE'
-          AND move_seq >= 2
-          AND gesture_id > 0
-        GROUP BY gesture_id
-      )
-      SELECT
-        printf('%d', scroll_start_ts) AS ts,
-        '0' AS dur,
-        '滑动启动' ||
-        CASE
-          WHEN app IS NOT NULL AND app != ''
-          THEN ' [' || REPLACE(REPLACE(app, 'com.', ''), 'android.', '') || ']'
-          ELSE ''
-        END AS event,
-        gesture_id,
-        app AS app_package,
-        'scroll_start' AS category,
-        '💡 此时刻手指已移动足够距离，系统开始响应滑动' AS explanation
-      FROM scroll_starts
-      ORDER BY scroll_start_ts
-      LIMIT 100
+      SELECT printf('%d', s.ts) AS ts, printf('%d', s.dur) AS dur,
+        'RecyclerView 滚动处理' AS event, s.id AS gesture_id, p.name AS app_package,
+        'scroll_processing' AS event_type, 'scroll_start' AS category,
+        'RecyclerView RV Scroll 标记；不据此推断手势开始时间' AS explanation,
+        'slice' AS source_table, CAST(s.id AS TEXT) AS source_id,
+        t.upid, s.track_id, 'observed' AS source_status, COUNT(*) OVER () AS total_rows
+      FROM slice s JOIN thread_track tt ON s.track_id = tt.id
+      JOIN thread t ON t.utid = tt.utid JOIN process p ON p.upid = t.upid
+      WHERE s.name = 'RV Scroll' AND s.dur >= 0 AND t.is_main_thread = 1
+      ORDER BY s.ts
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: scroll_starts
     optional: true
 
@@ -677,6 +496,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       -- Pair DOWN → nearest UP per key_code using ROW_NUMBER for strict matching.
       -- Handles repeats/double-taps by assigning each DOWN its own ordinal.
       WITH downs AS (
@@ -711,7 +531,8 @@ steps:
       LEFT JOIN ups u ON u.key_code = d.key_code AND u.rn = d.rn AND u.up_ts >= d.ts
       WHERE COALESCE(u.up_ts - d.ts, 0) >= 0
       ORDER BY d.ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: nav_keys
     optional: true
 
@@ -747,6 +568,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       SELECT
         printf('%d', s.ts) AS ts,
         printf('%d', s.dur) AS dur,
@@ -782,7 +604,8 @@ steps:
           OR s.name GLOB '*RecentsAnimation*' OR s.name GLOB '*startRecentsActivity*'
         )
       ORDER BY s.ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: gesture_nav
     optional: true
 
@@ -818,6 +641,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       SELECT
         printf('%d', s.ts) AS ts,
         printf('%d', s.dur) AS dur,
@@ -854,7 +678,8 @@ steps:
           OR s.name GLOB '*startingWindow*'
         )
       ORDER BY s.ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: win_transitions
     optional: true
 
@@ -893,6 +718,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       -- ts in android_anrs is the detection moment (when timeout expired).
       -- The actual blocking period is [ts - timeout, ts].
       -- Use anr_dur_ms → default_anr_dur_ms fallback for the blocking window.
@@ -906,7 +732,8 @@ steps:
         'anr' AS category
       FROM android_anrs
       ORDER BY ts
-      LIMIT 50
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: anr_events
     optional: true
 
@@ -942,6 +769,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       SELECT
         printf('%d', s.ts) AS ts,
         printf('%d', s.dur) AS dur,
@@ -972,7 +800,8 @@ steps:
           OR s.name GLOB '*InputMethodManager*hide*'
         )
       ORDER BY s.ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: ime_events
     optional: true
 
@@ -1015,197 +844,36 @@ steps:
           label: "类别"
           type: string
     sql: |
-      WITH RECURSIVE input_check AS (
-        SELECT 1 AS dummy WHERE EXISTS (
-          SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_input_events'
-        )
-      ),
-      frame_check AS (
-        SELECT 1 AS dummy WHERE EXISTS (
-          SELECT 1 FROM sqlite_master WHERE type='table' AND name='actual_frame_timeline_slice'
-        )
-      ),
-      frame_apps AS (
-        SELECT
-          a.ts,
-          a.dur,
-          a.ts + a.dur AS end_ts,
-          a.jank_type,
-          COALESCE(
-            NULLIF(p.name, ''),
-            CASE
-              WHEN a.layer_name IS NOT NULL AND instr(a.layer_name, '/') > 1
-              THEN substr(a.layer_name, 1, instr(a.layer_name, '/') - 1)
-              ELSE NULL
-            END
-          ) AS app_package
-        FROM actual_frame_timeline_slice a
-        LEFT JOIN process p ON p.upid = a.upid
-        WHERE a.dur > 0
-          AND a.surface_frame_token IS NOT NULL
-      ),
-      motion_base AS (
-        SELECT
-          read_time AS ts,
-          event_action,
-          process_name,
-          SUM(CASE WHEN event_action = 'DOWN' THEN 1 ELSE 0 END)
-            OVER (ORDER BY read_time) AS gesture_id
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-      ),
-      gesture_stats AS (
-        SELECT
-          gesture_id,
-          MIN(ts) AS down_ts,
-          MAX(CASE WHEN event_action = 'UP' THEN ts END) AS up_ts,
-          COUNT(*) AS event_count,
-          SUM(CASE WHEN event_action = 'MOVE' THEN 1 ELSE 0 END) AS move_count,
-          MAX(process_name) AS raw_process_name
-        FROM motion_base
-        WHERE gesture_id > 0
-        GROUP BY gesture_id
-        HAVING COUNT(*) >= 4 AND SUM(CASE WHEN event_action = 'MOVE' THEN 1 ELSE 0 END) >= 3
-      ),
-      fling_windows AS (
-        SELECT
-          g.gesture_id,
-          g.down_ts,
-          g.up_ts AS inertial_start,
-          MIN(
-            COALESCE(LEAD(g.down_ts) OVER (ORDER BY g.down_ts), g.up_ts + 3000000000),
-            g.up_ts + 3000000000
-          ) AS inertial_window_end,
-          g.raw_process_name
-        FROM gesture_stats g
-        WHERE g.up_ts IS NOT NULL
-      ),
-      resolved_windows AS (
-        SELECT
-          w.*,
-          CASE
-            WHEN w.raw_process_name GLOB 'com.*'
-              OR w.raw_process_name GLOB 'org.*'
-              OR w.raw_process_name GLOB 'io.*'
-              OR w.raw_process_name GLOB 'net.*'
-            THEN w.raw_process_name
-            ELSE COALESCE(
-              (SELECT f.app_package
-               FROM frame_apps f
-               WHERE f.app_package IS NOT NULL
-                 AND f.app_package != ''
-                 AND f.app_package NOT GLOB 'surfaceflinger*'
-                 AND f.app_package NOT GLOB 'system_server*'
-                 AND f.app_package NOT GLOB 'com.android.systemui*'
-                 AND f.ts >= w.down_ts - 300000000
-                 AND f.end_ts <= w.inertial_window_end + 800000000
-               GROUP BY f.app_package
-               ORDER BY COUNT(*) DESC
-               LIMIT 1),
-              w.raw_process_name
-            )
-          END AS app_package
-        FROM fling_windows w
-      ),
-      inertial_frames AS (
-        SELECT
-          w.gesture_id,
-          w.inertial_start,
-          w.inertial_window_end,
-          w.app_package,
-          MAX(CASE
-            WHEN f.ts IS NOT NULL
-              AND (w.app_package IS NULL OR w.app_package = '' OR f.app_package = w.app_package)
-            THEN f.end_ts
-            ELSE NULL
-          END) AS matched_inertial_end,
-          MAX(f.end_ts) AS fallback_inertial_end,
-          SUM(CASE
-            WHEN f.ts IS NOT NULL
-              AND (w.app_package IS NULL OR w.app_package = '' OR f.app_package = w.app_package)
-            THEN 1 ELSE 0 END
-          ) AS matched_frame_count,
-          COUNT(f.ts) AS fallback_frame_count,
-          SUM(CASE
-            WHEN f.ts IS NOT NULL
-              AND (w.app_package IS NULL OR w.app_package = '' OR f.app_package = w.app_package)
-              AND f.jank_type IS NOT NULL
-              AND f.jank_type != 'None'
-              AND f.jank_type != ''
-            THEN 1 ELSE 0 END
-          ) AS matched_jank_frames,
-          SUM(CASE
-            WHEN f.jank_type IS NOT NULL
-              AND f.jank_type != 'None'
-              AND f.jank_type != ''
-            THEN 1 ELSE 0 END
-          ) AS fallback_jank_frames
-        FROM resolved_windows w
-        LEFT JOIN frame_apps f
-          ON f.ts >= w.inertial_start
-         AND f.ts < w.inertial_window_end
-        WHERE w.inertial_window_end > w.inertial_start + 80000000
-        GROUP BY w.gesture_id, w.inertial_start, w.inertial_window_end, w.app_package
-      ),
-      resolved_inertial AS (
-        SELECT
-          gesture_id,
-          inertial_start,
-          MIN(
-            COALESCE(
-              CASE
-                WHEN matched_frame_count >= 4 THEN matched_inertial_end
-                ELSE fallback_inertial_end
-              END,
-              inertial_window_end
-            ),
-            inertial_window_end
-          ) AS inertial_end,
-          app_package,
-          CASE
-            WHEN matched_frame_count >= 4 THEN matched_frame_count
-            ELSE fallback_frame_count
-          END AS frame_count,
-          CASE
-            WHEN matched_frame_count >= 4 THEN matched_jank_frames
-            ELSE fallback_jank_frames
-          END AS jank_frames
-        FROM inertial_frames
-      )
-      SELECT
-        printf('%d', inertial_start) AS ts,
-        printf('%d', inertial_end - inertial_start) AS dur,
-        '惯性滑动' ||
-        CASE
-          WHEN app_package IS NOT NULL AND app_package != ''
-          THEN ' [' || REPLACE(REPLACE(app_package, 'com.', ''), 'android.', '') || ']'
-          ELSE ''
-        END ||
-        ' (' || CAST((inertial_end - inertial_start) / 1000000 AS INT) || 'ms, ' || frame_count || '帧)' AS event,
-        frame_count,
-        jank_frames,
-        app_package,
-        'inertial_scroll' AS category
-      FROM resolved_inertial
-      WHERE frame_count >= 4
-        AND inertial_end > inertial_start + 80000000
-      ORDER BY inertial_start
-      LIMIT 100
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
+      -- A frame after UP does not prove fling. Confirmed fling evidence is
+      -- collected by the scene investigation, with producer and object identity.
+      SELECT printf('%d', ts) AS ts, '0' AS dur, '' AS event,
+        0 AS frame_count, 0 AS jank_frames, NULL AS app_package,
+        'inertial_scroll' AS category, 'unavailable' AS source_status
+      FROM slice WHERE 0
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: inertial_scrolls
     optional: true
 
   # ==========================================================================
-  # L2: Idle 区间检测 (用户无交互)
+  # L2: 未观测到输入的区间（采集完整性未确认）
   # ==========================================================================
   - id: idle_periods
     type: atomic
-    name: "Idle 区间"
-    condition: table_availability.data[0]?.has_input_events === 1 && table_availability.data[0]?.has_startups === 1
+    name: "未观测到输入的区间（采集完整性未确认）"
+    investigation_evidence:
+      window: {start: ts, end: end_ts}
+      metrics: []
+    condition: table_availability.data[0]?.has_input_events === 1
     display:
       level: hidden
       layer: list
-      title: "空闲区间"
+      title: "未观测到输入的区间（采集完整性未确认）"
+      title_i18n:
+        en: "Intervals with no observed input (capture completeness unconfirmed)"
       columns:
+        - { name: end_ts, label: "结束时间", type: timestamp, unit: ns, hidden: true }
         - name: ts
           label: "开始时间"
           type: timestamp
@@ -1226,69 +894,15 @@ steps:
         - name: category
           label: "类别"
           type: string
+    sql_fragments: [fragments/scene_input_facts.sql]
     sql: |
-      WITH key_events AS (
-        SELECT read_time AS ts
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-          AND event_action = 'DOWN'
-          AND process_name NOT IN ('system_server', '/system/bin/inputflinger')
-          AND process_name NOT GLOB 'com.android.systemui*'
-
-        UNION ALL
-
-        SELECT ts
-        FROM android_startups
-        WHERE dur > 0
-
-        UNION ALL
-
-        SELECT ts
-        FROM slice
-        WHERE dur > 0
-          AND (
-            -- Screen unlock signals: keep lock-screen related patterns only.
-            -- Avoid generic '*unlock*' to prevent false positives (e.g. render/mutex unlock slices).
-            LOWER(name) LIKE '%keyguard%dismiss%'
-            OR LOWER(name) LIKE '%keyguard%unlock%'
-            OR LOWER(name) LIKE '%lockscreen%unlock%'
-            OR LOWER(name) LIKE '%unlock%screen%'
-            OR LOWER(name) LIKE '%notificationpanel%expand%'
-            OR LOWER(name) LIKE '%notificationpanel%collapse%'
-            OR (LOWER(name) LIKE '%splitscreen%' AND dur > 500000000)
-          )
-          AND LOWER(name) NOT LIKE '%unlockcanvasandpost%'
-          AND LOWER(name) NOT LIKE '%unlockandpost%'
-          AND LOWER(name) != 'unlock'
-      ),
-      ordered_events AS (
-        SELECT
-          ts,
-          LEAD(ts) OVER (ORDER BY ts) AS next_ts
-        FROM key_events
-      ),
-      idle_windows AS (
-        SELECT
-          ts AS start_ts,
-          next_ts AS end_ts,
-          next_ts - ts AS gap_ns
-        FROM ordered_events
-        WHERE next_ts IS NOT NULL
-          AND next_ts - ts >= 800000000
-      )
-      SELECT
-        printf('%d', start_ts) AS ts,
-        printf('%d', gap_ns) AS dur,
-        '空闲 (' || CAST(gap_ns / 1000000 AS INT) || 'ms)' AS event,
-        CASE
-          WHEN gap_ns >= 3000000000 THEN '高'
-          WHEN gap_ns >= 1500000000 THEN '中'
-          ELSE '低'
-        END AS confidence,
-        'idle' AS category
-      FROM idle_windows
-      ORDER BY start_ts
-      LIMIT 120
+      SELECT printf('%d', ts) AS ts, printf('%d', end_ts) AS end_ts, printf('%d', end_ts - ts) AS dur,
+        '未观测到输入（采集完整性未确认）' AS event, 'LOW' AS confidence,
+        'unknown' AS category, 'partial' AS source_status,
+        'input_coverage_gap' AS source_table, 'capture_completeness_unproven' AS reason,
+        COUNT(*) OVER () AS total_rows
+      FROM scene_input_gaps WHERE end_ts > ts ORDER BY ts
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: idle_periods
     optional: true
 
@@ -1331,6 +945,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH RECURSIVE startup_check AS (
         SELECT 1 AS dummy WHERE EXISTS (
           SELECT 1 FROM sqlite_master WHERE type='table' AND name='android_startups'
@@ -1376,7 +991,8 @@ steps:
         'app_launch' AS category
       FROM validated_startups s
       ORDER BY s.ts
-      LIMIT 50
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: launches
     optional: true
 
@@ -1412,6 +1028,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       SELECT
         printf('%d', ts) AS ts,
         printf('%d', dur) AS dur,
@@ -1461,7 +1078,8 @@ steps:
         AND LOWER(name) NOT LIKE '%unlockandpost%'
         AND LOWER(name) != 'unlock'
       ORDER BY ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: sys_events
     optional: true
 
@@ -1491,6 +1109,7 @@ steps:
           label: "耗时(ms)"
           type: number
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       SELECT
         printf('%d', s.ts) AS ts,
         CASE
@@ -1516,7 +1135,8 @@ steps:
       )
         AND s.dur > 1000000
       ORDER BY s.ts
-      LIMIT 200
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: broadcast_events
     optional: true
 
@@ -1549,6 +1169,7 @@ steps:
           label: "接口名"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       -- 使用 stdlib android_binder_txns 替代手动 7-table JOIN
       SELECT
         printf('%d', bt.client_ts) AS ts,
@@ -1562,7 +1183,8 @@ steps:
         AND bt.server_process IS NOT NULL
         AND bt.client_process != bt.server_process
       ORDER BY bt.client_dur DESC
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: cross_process_interactions
     optional: true
 
@@ -1601,6 +1223,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       SELECT
         printf('%d', ts) AS ts,
         printf('%d', dur) AS dur,
@@ -1624,7 +1247,8 @@ steps:
         AND jank_type != 'None'
         AND jank_type != ''
       ORDER BY ts
-      LIMIT 200
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: janks
     optional: true
 
@@ -1654,13 +1278,9 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH time_bounds AS (
-        SELECT MIN(ts) AS t_start, MAX(ts) AS t_end
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+        SELECT start_ts AS t_start, end_ts AS t_end FROM trace_bounds
       ),
       -- CPU frequency ranges: report min/max freq per CPU cluster
       cpu_freq AS (
@@ -1705,7 +1325,7 @@ steps:
           AND c.value IS NOT NULL
         GROUP BY ct.name
         HAVING c.ts = MAX(c.ts)
-        LIMIT 10
+
       ),
       -- Battery / charging status from counter tracks
       battery AS (
@@ -1740,7 +1360,7 @@ steps:
         GROUP BY ct.name
         HAVING c.ts = MIN(c.ts)
         ORDER BY c.ts
-        LIMIT 10
+
       ),
       -- Foreground apps (oom_adj <= 0)
       fg_apps AS (
@@ -1762,7 +1382,7 @@ steps:
         GROUP BY p.name
         HAVING c.ts = MIN(c.ts)
         ORDER BY c.ts
-        LIMIT 20
+
       )
       SELECT * FROM cpu_freq
       UNION ALL SELECT * FROM mem_pressure
@@ -1770,7 +1390,8 @@ steps:
       UNION ALL SELECT * FROM battery
       UNION ALL SELECT * FROM fg_apps
       ORDER BY ts
-      LIMIT 100
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: device_state
     optional: true
 
@@ -1806,6 +1427,7 @@ steps:
           label: "类别"
           type: string
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH oom_changes AS (
         SELECT
           c.ts,
@@ -1884,7 +1506,8 @@ steps:
         FROM proc_starts
       )
       ORDER BY ts
-      LIMIT 200
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: app_states
     optional: true
 
@@ -1916,23 +1539,20 @@ steps:
         - name: priority
           label: "优先级"
           type: number
+    sql_fragments: [fragments/scene_input_facts.sql]
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH time_bounds AS (
-        SELECT MIN(ts) AS t_start
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+        SELECT start_ts AS t_start FROM trace_bounds
       ),
       -- Screen on/off
       screen_ev AS (
         SELECT ts,
-          CASE screen_state WHEN 1 THEN '屏幕熄灭' WHEN 2 THEN '屏幕点亮' WHEN 3 THEN '屏幕休眠'
+          CASE simple_screen_state WHEN 'off' THEN '屏幕熄灭' WHEN 'on' THEN '屏幕点亮' WHEN 'doze' THEN '屏幕低功耗显示（DOZE）'
             ELSE '屏幕状态 ' || screen_state END AS event,
           'screen' AS category, 1 AS priority
         FROM android_screen_state WHERE dur > 0
-        LIMIT 30
+
       ),
       -- App launches (reclassify: bindApplication on main thread → cold)
       launch_validated AS (
@@ -1957,7 +1577,7 @@ steps:
             ELSE '启动' END || ' ' || package || ' [' || CAST(dur / 1000000 AS INT) || 'ms]' AS event,
           'app_launch' AS category, 2 AS priority
         FROM launch_validated
-        LIMIT 30
+
       ),
       -- Top-app switches
       topapp_ev AS (
@@ -1966,33 +1586,11 @@ steps:
           'app_switch' AS category, 3 AS priority
         FROM android_battery_stats_event_slices
         WHERE track_name = 'battery_stats.top' AND safe_dur > 100000000
-        LIMIT 30
+
       ),
       -- Gestures (simplified from input events)
-      gesture_base AS (
-        SELECT
-          read_time AS ts, event_action,
-          SUM(CASE WHEN event_action = 'DOWN' THEN 1 ELSE 0 END) OVER (ORDER BY read_time) AS gid
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-          AND process_name NOT IN ('system_server', '/system/bin/inputflinger')
-          AND process_name NOT GLOB 'com.android.systemui*'
-      ),
-      gesture_agg AS (
-        SELECT gid, MIN(ts) AS ts, MAX(ts) - MIN(ts) AS dur,
-          COUNT(CASE WHEN event_action = 'MOVE' THEN 1 END) AS mc
-        FROM gesture_base WHERE gid > 0 GROUP BY gid HAVING COUNT(*) >= 2
-      ),
       gesture_ev AS (
-        SELECT ts,
-          CASE
-            WHEN mc >= 3 THEN '滑动列表 (' || mc || '次移动, ' || CAST(dur / 1000000 AS INT) || 'ms)'
-            WHEN dur > 500000000 AND mc <= 2 THEN '长按 (' || CAST(dur / 1000000 AS INT) || 'ms)'
-            ELSE '点击'
-          END AS event,
-          'gesture' AS category, 4 AS priority
-        FROM gesture_agg
-        LIMIT 60
+        SELECT ts, CASE gesture_type WHEN 'touch_move' THEN '连续触摸移动' WHEN 'touch_hold' THEN '持续触摸（长按识别未确认）' WHEN 'tap' THEN '点击接触' WHEN 'cancelled' THEN '触摸取消' WHEN 'key' THEN '按键输入' WHEN 'scroll_input' THEN '滚动轴输入（ACTION_SCROLL）' WHEN 'wheel' THEN '滚轮输入' ELSE '输入活动（动作信息不完整）' END AS event, 'gesture' AS category, 4 AS priority FROM scene_gestures
       ),
       -- Foreground transitions (oom_adj crossing 0)
       fg_transitions AS (
@@ -2022,7 +1620,7 @@ steps:
                  WHERE c2.track_id = c.track_id AND c2.ts < c.ts
                  ORDER BY c2.ts DESC LIMIT 1), 999) <= 0)
           )
-        LIMIT 30
+
       ),
       -- System events (quality-gated: per-event duration thresholds)
       sys_ev AS (
@@ -2054,7 +1652,7 @@ steps:
           AND LOWER(name) NOT LIKE '%unlockcanvasandpost%'
           AND LOWER(name) NOT LIKE '%unlockandpost%'
           AND LOWER(name) != 'unlock'
-        LIMIT 20
+
       ),
       all_chain AS (
         SELECT * FROM screen_ev
@@ -2076,7 +1674,8 @@ steps:
         priority
       FROM all_chain
       ORDER BY ts, priority
-      LIMIT 200
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: operation_chain
     optional: true
 
@@ -2127,14 +1726,11 @@ steps:
         - name: rating
           label: "评级"
           type: string
+    sql_fragments: [fragments/scene_input_facts.sql]
     sql: |
+      SELECT scene_rows.*, COUNT(*) OVER () AS total_rows FROM (
       WITH time_bounds AS (
-        SELECT MIN(ts) AS t_start
-        FROM (
-          SELECT ts FROM slice WHERE dur > 0
-          UNION ALL
-          SELECT ts FROM counter WHERE value IS NOT NULL
-        )
+        SELECT start_ts AS t_start FROM trace_bounds
       ),
       -- Screen state removed: now shown in dedicated Device State lane (state_timeline skill)
       -- ========== 数据源 1: App 启动 (reclassify: bindApplication → cold) ==========
@@ -2179,59 +1775,12 @@ steps:
           'app_launch' AS category,
           2 AS priority
         FROM launch_type_validated s
-        LIMIT 30
+
       ),
       -- ========== 数据源 3: 用户手势 (tap/scroll/long_press) ==========
-      gesture_base AS (
-        SELECT
-          read_time AS ts, event_action, process_name,
-          SUM(CASE WHEN event_action = 'DOWN' THEN 1 ELSE 0 END) OVER (ORDER BY read_time) AS gid
-        FROM android_input_events
-        WHERE event_type = 'MOTION'
-          AND process_name NOT IN ('system_server', '/system/bin/inputflinger')
-          AND process_name NOT GLOB 'com.android.systemui*'
-          AND EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_input_events')
-      ),
-      gesture_agg AS (
-        SELECT
-          gid,
-          MIN(ts) AS ts,
-          MAX(ts) - MIN(ts) AS dur,
-          COUNT(*) AS event_count,
-          COUNT(CASE WHEN event_action = 'MOVE' THEN 1 END) AS move_count,
-          MAX(process_name) AS app
-        FROM gesture_base
-        WHERE gid > 0
-        GROUP BY gid
-        HAVING COUNT(*) >= 2
-      ),
       gesture_ev AS (
-        SELECT
-          ts,
-          dur,
-          CASE
-            WHEN move_count >= 3 THEN '滑动 (' || move_count || '次移动, ' || CAST(dur / 1000000 AS INT) || 'ms)'
-            WHEN dur > 500000000 AND move_count <= 2 THEN '长按 (' || CAST(dur / 1000000 AS INT) || 'ms)'
-            ELSE '点击'
-          END ||
-          CASE
-            WHEN app IS NOT NULL AND app != ''
-            THEN ' [' || REPLACE(REPLACE(app, 'com.', ''), 'android.', '') || ']'
-            ELSE ''
-          END AS event,
-          CASE
-            WHEN move_count >= 3 THEN 'scroll'
-            WHEN dur > 500000000 AND move_count <= 2 THEN 'long_press'
-            ELSE 'tap'
-          END AS event_type,
-          CASE
-            WHEN app IS NOT NULL AND app != '' THEN app
-            ELSE NULL
-          END AS app_package,
-          'gesture' AS category,
-          3 AS priority
-        FROM gesture_agg
-        LIMIT 60
+        SELECT ts, dur, CASE gesture_type WHEN 'touch_move' THEN '连续触摸移动' WHEN 'touch_hold' THEN '持续触摸（长按识别未确认）' WHEN 'tap' THEN '点击接触' WHEN 'cancelled' THEN '触摸取消' WHEN 'key' THEN '按键输入' WHEN 'scroll_input' THEN '滚动轴输入（ACTION_SCROLL）' WHEN 'wheel' THEN '滚轮输入' ELSE '输入活动（动作信息不完整）' END AS event, gesture_type AS event_type,
+          app_package, 'gesture' AS category, 3 AS priority FROM scene_gestures
       ),
       -- ========== 数据源 4: Top App 切换 ==========
       topapp_ev AS (
@@ -2253,7 +1802,7 @@ steps:
         WHERE track_name = 'battery_stats.top'
           AND safe_dur > 100000000
           AND EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_battery_stats_event_slices')
-        LIMIT 30
+
       ),
       -- ========== 数据源 5: 系统事件 (quality-gated) ==========
       system_ev AS (
@@ -2299,36 +1848,13 @@ steps:
           AND LOWER(name) NOT LIKE '%unlockcanvasandpost%'
           AND LOWER(name) NOT LIKE '%unlockandpost%'
           AND LOWER(name) != 'unlock'
-        LIMIT 20
+
       ),
-      -- ========== 数据源 6: Idle 空闲 ==========
+      -- ========== 数据源 6: 未观测到输入（采集完整性未确认） ==========
       idle_ev AS (
-        SELECT
-          ts,
-          gap_ns AS dur,
-          '空闲 (' || CAST(gap_ns / 1000000 AS INT) || 'ms)' AS event,
-          'idle' AS event_type,
-          NULL AS app_package,
-          'idle' AS category,
-          5 AS priority
-        FROM (
-          SELECT
-            ts,
-            LEAD(ts) OVER (ORDER BY ts) AS next_ts,
-            LEAD(ts) OVER (ORDER BY ts) - ts AS gap_ns
-          FROM (
-            SELECT read_time AS ts FROM android_input_events
-            WHERE event_type = 'MOTION' AND event_action = 'DOWN'
-              AND process_name NOT IN ('system_server', '/system/bin/inputflinger')
-              AND process_name NOT GLOB 'com.android.systemui*'
-              AND EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_input_events')
-            UNION ALL
-            SELECT ts FROM android_startups WHERE dur > 0
-              AND EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_startups')
-          )
-        )
-        WHERE gap_ns >= 800000000
-        LIMIT 30
+        SELECT ts, end_ts - ts AS dur, '未观测到输入（采集完整性未确认）' AS event,
+          'unknown' AS event_type, NULL AS app_package, 'unknown' AS category, 5 AS priority
+        FROM scene_input_gaps WHERE end_ts > ts
       ),
       -- ========== 数据源 7: 导航按键 + 手势导航 ==========
       nav_key_ev AS (
@@ -2369,7 +1895,7 @@ steps:
                  OR s.name GLOB '*RecentsAnimation*' OR s.name GLOB '*startRecentsActivity*')
         ) sub
         WHERE event IS NOT NULL
-        LIMIT 60
+
       ),
       -- ========== 数据源 8: ANR ==========
       anr_ev AS (
@@ -2384,7 +1910,7 @@ steps:
           1 AS priority
         FROM android_anrs
         WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='android_anrs')
-        LIMIT 20
+
       ),
       -- ========== 数据源 9: 输入法 ==========
       ime_ev AS (
@@ -2399,7 +1925,7 @@ steps:
           AND (s.name GLOB '*showSoftInput*' OR s.name GLOB '*hideSoftInput*'
                OR s.name GLOB '*InputMethodService*show*' OR s.name GLOB '*InputMethodService*hide*'
                OR s.name GLOB '*InputMethodManager*show*' OR s.name GLOB '*InputMethodManager*hide*')
-        LIMIT 30
+
       ),
       -- ========== 数据源 10: 窗口转场 ==========
       win_trans_ev AS (
@@ -2419,7 +1945,7 @@ steps:
           AND (s.name GLOB '*AppTransition*' OR s.name GLOB '*openAnimation*'
                OR s.name GLOB '*closeAnimation*' OR s.name GLOB '*Shell transition*'
                OR s.name GLOB '*startingWindow*')
-        LIMIT 30
+
       ),
       -- ========== 合并 + 过滤 + 排序 ==========
       all_events AS (
@@ -2443,8 +1969,9 @@ steps:
       ),
       -- ========== 格式化输出 ==========
       ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (ORDER BY ts, priority) AS rn
+        SELECT CAST(ts AS INTEGER) AS ts, CAST(dur AS INTEGER) AS dur,
+          event, event_type, app_package, category, priority,
+          ROW_NUMBER() OVER (ORDER BY CAST(ts AS INTEGER), priority) AS rn
         FROM all_events
       )
       SELECT
@@ -2471,10 +1998,6 @@ steps:
           WHEN event_type = 'hot_start' AND dur / 1e6 < 100 THEN '🟢 优秀'
           WHEN event_type = 'hot_start' AND dur / 1e6 < 200 THEN '🟡 良好'
           WHEN event_type = 'hot_start' THEN '🔴 需优化'
-          -- 点击评级
-          WHEN event_type = 'tap' AND dur / 1e6 < 100 THEN '🟢'
-          WHEN event_type = 'tap' AND dur / 1e6 < 200 THEN '🟡'
-          WHEN event_type = 'tap' AND dur / 1e6 > 200 THEN '🔴'
           -- ANR 固定严重
           WHEN event_type = 'anr' THEN '🔴 ANR'
           -- 窗口转场评级
@@ -2486,7 +2009,8 @@ steps:
         END AS rating
       FROM ranked
       ORDER BY ts, priority
-      LIMIT 200
+      ) AS scene_rows
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: clean_timeline
     optional: true
 
@@ -2525,161 +2049,18 @@ steps:
         - name: priority
           label: "优先级"
           type: number
+    sql_fragments: [fragments/scene_input_facts.sql, fragments/scene_screen_facts.sql]
     sql: |
-      WITH all_events AS (
-        -- 屏幕状态
-        SELECT
-          CAST(ts AS INTEGER) AS ts,
-          CAST(dur AS INTEGER) AS dur,
-          event,
-          'screen' AS category,
-          1 AS priority
-        FROM (
-          SELECT
-            printf('%d', ts) AS ts,
-            printf('%d', dur) AS dur,
-            CASE screen_state
-              WHEN 1 THEN '屏幕熄灭'
-              WHEN 2 THEN '屏幕点亮'
-              WHEN 3 THEN '屏幕休眠'
-              ELSE '屏幕状态 ' || screen_state
-            END AS event
-          FROM android_screen_state
-          WHERE dur > 0
-          LIMIT 50
-        )
-
-        UNION ALL
-
-        -- Top App 切换
-        SELECT
-          CAST(ts AS INTEGER) AS ts,
-          CAST(dur AS INTEGER) AS dur,
-          event,
-          'app_switch' AS category,
-          2 AS priority
-        FROM (
-          SELECT
-            printf('%d', ts) AS ts,
-            printf('%d', safe_dur) AS dur,
-            '切换到 ' || REPLACE(REPLACE(str_value, 'com.', ''), 'android.', '') AS event
-          FROM android_battery_stats_event_slices
-          WHERE track_name = 'battery_stats.top' AND safe_dur > 100000000
-          LIMIT 50
-        )
-
-        UNION ALL
-
-        -- 用户手势
-        SELECT
-          ts, dur, event, 'gesture' AS category, 3 AS priority
-        FROM (
-          WITH gesture_events AS (
-            SELECT
-              read_time AS ts,
-              event_action,
-              process_name,
-              CASE WHEN event_action = 'DOWN' THEN 1 ELSE 0 END AS is_start
-            FROM android_input_events
-            WHERE event_type = 'MOTION'
-          ),
-          gesture_groups AS (
-            SELECT ts, event_action, process_name,
-                   SUM(is_start) OVER (ORDER BY ts) AS gesture_id
-            FROM gesture_events
-          ),
-          gestures AS (
-            SELECT
-              gesture_id,
-              MIN(ts) AS ts,
-              MAX(ts) - MIN(ts) AS dur,
-              COUNT(*) AS event_count,
-              COUNT(CASE WHEN event_action = 'MOVE' THEN 1 END) AS move_count,
-              MAX(process_name) AS app
-            FROM gesture_groups
-            WHERE gesture_id > 0
-            GROUP BY gesture_id
-            HAVING COUNT(*) >= 2
-          )
-          SELECT
-            CAST(ts AS INTEGER) AS ts,
-            CAST(dur AS INTEGER) AS dur,
-            CASE
-              WHEN move_count >= 3 THEN '滑动 (' || move_count || '次移动)'
-              WHEN dur > 500000000 AND move_count <= 2 THEN '长按'
-              ELSE '点击'
-            END ||
-            CASE
-              WHEN app IS NOT NULL AND app != ''
-              THEN ' [' || REPLACE(REPLACE(app, 'com.', ''), 'android.', '') || ']'
-              ELSE ''
-            END AS event
-          FROM gestures
-          LIMIT 100
-        )
-
-        UNION ALL
-
-        -- App 启动
-        SELECT
-          CAST(ts AS INTEGER) AS ts,
-          CAST(dur AS INTEGER) AS dur,
-          event,
-          'app_launch' AS category,
-          4 AS priority
-        FROM (
-          SELECT
-            printf('%d', ts) AS ts,
-            printf('%d', dur) AS dur,
-            CASE startup_type
-              WHEN 'cold' THEN '冷启动'
-              WHEN 'warm' THEN '温启动'
-              WHEN 'hot' THEN '热启动'
-              ELSE '启动'
-            END || ' ' ||
-            REPLACE(REPLACE(package, 'com.', ''), 'android.', '') ||
-            ' [' || CAST(dur / 1000000 AS INT) || 'ms]' AS event
-          FROM android_startups
-          WHERE dur > 0
-          LIMIT 30
-        )
-
-        UNION ALL
-
-        -- 掉帧事件
-        SELECT
-          CAST(ts AS INTEGER) AS ts,
-          CAST(dur AS INTEGER) AS dur,
-          event,
-          'performance' AS category,
-          5 AS priority
-        FROM (
-          SELECT
-            printf('%d', ts) AS ts,
-            printf('%d', dur) AS dur,
-            CASE
-              WHEN jank_type LIKE '%App Deadline%' OR jank_type = 'Self Jank' THEN 'App掉帧'
-              WHEN jank_type LIKE '%SurfaceFlinger%' THEN '合成器掉帧'
-              ELSE '掉帧'
-            END || ' [' || CAST(dur / 1000000 AS INT) || 'ms]' AS event
-          FROM actual_frame_timeline_slice
-          WHERE jank_type IS NOT NULL AND jank_type != 'None' AND jank_type != ''
-          LIMIT 50
-        )
-      ),
-      time_range AS (
-        SELECT MIN(ts) AS start_ts FROM all_events
+      WITH events AS (
+        SELECT ts, dur, CASE gesture_type WHEN 'touch_move' THEN '连续触摸移动' WHEN 'touch_hold' THEN '持续触摸（长按识别未确认）' WHEN 'tap' THEN '点击接触' WHEN 'cancelled' THEN '触摸取消' WHEN 'key' THEN '按键输入' WHEN 'scroll_input' THEN '滚动轴输入（ACTION_SCROLL）' WHEN 'wheel' THEN '滚轮输入' ELSE '输入活动（动作信息不完整）' END AS event, 'gesture' AS category, 3 AS priority FROM scene_gestures
+        UNION ALL SELECT ts, end_ts - ts, raw_state, 'screen', 1 FROM scene_screen_facts
+        UNION ALL SELECT ts, dur, '应用启动: ' || package, 'app_launch', 2 FROM android_startups WHERE dur >= 0
       )
-      SELECT
-        printf('%d', ts) AS ts,
-        printf('%d', dur) AS dur,
-        ROUND((ts - (SELECT start_ts FROM time_range)) / 1e9, 2) AS time_offset_sec,
-        event,
-        category,
-        priority
-      FROM all_events
-      ORDER BY ts, priority
-      LIMIT 300
+      SELECT printf('%d', ts) AS ts, printf('%d', dur) AS dur,
+        ROUND((ts - (SELECT start_ts FROM trace_bounds)) / 1e9, 2) AS time_offset_sec,
+        event, category, priority, COUNT(*) OVER () AS total_rows
+      FROM events ORDER BY ts, priority
+      LIMIT MIN(MAX(CAST(${scene_row_limit|4096} AS INT), 1), 4096)
     save_as: timeline
     optional: true
 
@@ -2736,9 +2117,9 @@ steps:
       ${inertial_scrolls}
       说明：这里记录手指抬起（UP）后界面仍在滚动的区间，通常对应 Fling 惯性滚动
 
-      ## 空闲区间（Idle）
+      ## 未观测到输入的区间（采集完整性未确认）
       ${idle_periods}
-      说明：这里记录较长时间没有明显用户交互/切换的区间
+      说明：这里只记录未观测到输入的区间；采集完整性未确认，不能据此判断用户没有操作或设备空闲。
 
       ## App 启动事件
       ${app_launches}

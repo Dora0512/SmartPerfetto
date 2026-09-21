@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Commit prefixes follow [Conventional Commits](https://www.conventionalcommits.org/).
 Detailed commit-level history is available via `git log`.
 
+## [1.13.0] - 2026-09-21
+
+### Added
+- Evidence-linked scene reconstruction investigates user input, device state and
+  application response through the selected Provider, with incremental timeline
+  revisions, bounded evidence archives and consistent UI/report/history views.
+- Explicit input, device-state and raw response-marker inventories retain exact
+  timestamps, identities, missing observations and query coverage gaps.
+
+### Changed
+- The scene button starts investigation immediately through the shared analysis
+  lifecycle, including Provider pinning, cancellation and replay safeguards.
+
+### Fixed
+- Missing input no longer becomes idle; touch movement and ACTION_SCROLL no
+  longer imply application scrolling or a physical wheel. First state samples
+  and OEM device-state numbers retain their observation limits.
+- Time-boundary references, scene retries and asynchronous session cleanup are
+  checked without treating a successful query as complete trace capture or a
+  semantically verified story. Scene reconstruction remains explicitly partial
+  when required observations or checks are unavailable.
+
 ## [1.12.1] - 2026-09-21
 
 ### Added

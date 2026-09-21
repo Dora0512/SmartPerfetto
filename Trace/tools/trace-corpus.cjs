@@ -10,7 +10,7 @@ const {
   validateCatalog,
 } = require('./lib/catalog.cjs');
 const {writeIndexes} = require('./lib/indexer.cjs');
-const {buildCatalogCases, materializeCatalogCases} = require('./lib/builder.cjs');
+const {buildCatalogCases, materializeCatalogCases, updateCaseExpectations} = require('./lib/builder.cjs');
 const {importRealCase, promoteRealCase} = require('./lib/import-real.cjs');
 
 function parseArgs(argv) {
@@ -73,6 +73,7 @@ Commands:
   coverage                       Print exact Skill and Strategy coverage
   build [--check] [--case <id>]  Materialize constructed trace cases
   materialize [--case <id>]     Combine committed bases and overlays without proto sources
+  expectations --case <id> [--check]  Generate or check one constructed case's expected.json
   resolve <case-id-or-alias>     Print the committed trace path
   import-real [options]          Stage a captured trace under ignored .private/
   promote-real <id> [options]    Publish a reviewed private draft atomically
@@ -140,6 +141,17 @@ function main(argv) {
     if (parsed.flags.has('--case') && !caseId) throw new Error('--case requires a case id');
     const result = materializeCatalogCases(parsed.repoRoot, {caseIds});
     console.log(`materialized ${result.length} constructed case(s) from committed overlays`);
+    return 0;
+  }
+  if (parsed.command === 'expectations') {
+    if (parsed.positional.length > 0 || [...parsed.flags].some(flag => !['--case', '--check'].includes(flag)) ||
+        parsed.values('--case').length !== 1 || parsed.values('--check').length > 0) {
+      throw new Error('expectations requires exactly --case <id> and optional --check');
+    }
+    const result = updateCaseExpectations(parsed.repoRoot, {caseId: requiredValue(parsed, '--case'),
+      check: parsed.flags.has('--check')});
+    console.log(parsed.flags.has('--check') ? `PASS expectations are current for ${result.case_id}`
+      : `${result.changed ? 'generated' : 'unchanged'} ${result.output}`);
     return 0;
   }
   if (parsed.command === 'resolve') {

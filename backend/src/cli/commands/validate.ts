@@ -843,7 +843,7 @@ function validateRegexPattern(
     return;
   }
   try {
-    // Final report contracts use JavaScript regex syntax, matching the runtime gate.
+    // Legacy metadata retains valid JavaScript syntax; final report coverage is semantic.
     new RegExp(pattern, 'i');
   } catch (error: any) {
     errors.push(`${fieldPath} is not a valid JavaScript regex: ${error.message}`);
@@ -892,8 +892,8 @@ function validateFinalReportContractFrontmatter(frontmatter: Record<string, unkn
     const patternGroups = record.pattern_groups;
     const hasPatterns = Array.isArray(patterns) && patterns.length > 0;
     const hasPatternGroups = Array.isArray(patternGroups) && patternGroups.length > 0;
-    if (!hasPatterns && !hasPatternGroups) {
-      errors.push(`${prefix} must define non-empty patterns or pattern_groups`);
+    if (!isNonEmptyString(record.description) && !hasPatterns && !hasPatternGroups) {
+      errors.push(`${prefix} must define a non-empty description, patterns or pattern_groups`);
     }
 
     if (patterns !== undefined) {

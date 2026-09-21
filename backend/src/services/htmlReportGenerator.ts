@@ -14,6 +14,7 @@
  */
 
 import markdownit from 'markdown-it';
+import {renderSceneTimelineHtml} from './sceneReport/sceneTimelineHtml';
 import {claimVerificationNotCheckedExplanation, investigationStatusLines} from './analysisInvestigationPresentation';
 import {analysisConfidenceIsGrounded} from '../agentv3/analysisTermination';
 import {projectAnalysisEvidenceForDisplay} from './evidence/analysisEvidencePresentation';
@@ -116,6 +117,7 @@ export interface MasterAgentReportData {
 
 export interface AgentDrivenReportData {
   traceId: string;
+  backendBaseUrl?: string;
   query: string;
   /** Language pinned to the analysis session; process configuration is only a fallback. */
   outputLanguage?: OutputLanguage;
@@ -134,6 +136,8 @@ export interface AgentDrivenReportData {
       contradictingEvidence: any[];
     }>;
     conclusion: string;
+    sceneTimeline?: import('../types/sceneTimeline').SceneTimelineView;
+    sceneReport?: import('../agent/core/orchestratorTypes').AnalysisResult['sceneReport'];
     turnIntent?: import('../agent/core/orchestratorTypes').AnalysisResult['turnIntent'];
     completion?: import('../types/analysisDelivery').AnalysisCompletion;
     outputOrigin?: import('../types/analysisDelivery').AnalysisOutputOrigin;
@@ -4658,6 +4662,7 @@ export class HTMLReportGenerator {
     </div>
 
     ${this.renderAnalysisReceiptSection(result.analysisReceipt, outputLanguage)}
+    ${renderSceneTimelineHtml({timeline: result.sceneTimeline, reference: result.sceneReport, outputLanguage, backendBaseUrl: data.backendBaseUrl})}
     <div class="section">
       <h2 class="section-title">${localize(outputLanguage, '系统调查范围与证据', 'System investigation scope and evidence')}</h2>
       ${investigationStatusLines(evidencePresentation?.deliveryAssurance ?? undefined, outputLanguage).map(line => `<p>${this.escapeHtml(line)}</p>`).join('')}

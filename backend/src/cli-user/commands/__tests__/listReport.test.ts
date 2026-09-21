@@ -23,6 +23,7 @@ import {
   latestCliAnalysisEvidencePath,
   turnCliAnalysisEvidencePath,
 } from '../../services/analysisResultPresentation';
+import {buildCliSceneReportBundle, latestCliSceneReportPath, turnCliSceneReportPath} from '../../services/sceneReportReference';
 
 describe('CLI list/report command messages', () => {
   const originalCwd = process.cwd();
@@ -66,6 +67,40 @@ describe('CLI list/report command messages', () => {
     const message = String(consoleLogSpy.mock.calls[0]?.[0] ?? '');
     expect(message).toContain('smp run <trace> "question"');
     expect(message).not.toContain('smp -f');
+  });
+  test('show and report exports preserve a bound partial scene reference without fetching the backend', async () => {
+    const sessionId = 'session-scene-reference', sp = sessionPaths(computePaths(sessionDir), sessionId);
+    const config = makeConfig(sessionId), markdown = '# Turn 1\n\nlatest conclusion\n';
+    const result = evidenceResult(sessionId);
+    result.sceneReport = {schemaVersion: 'scene_report_ref@1', reportId: 'scene-v3-offline', traceId: config.traceId,
+      sessionId, runId: 'scene-run', revision: 2, expiresAt: Date.now() + 60_000, manifestSha256: 'a'.repeat(64)};
+    result.sceneTimeline = {schemaVersion: 'scene_timeline@1', sessionId, traceId: config.traceId, runId: 'scene-run', revision: 2,
+      status: 'partial', segments: [], unresolved: [], diagnostics: [],
+      coverage: {status: 'unknown', captureStatus: 'unknown', reason: 'missing', sources: []}};
+    writeConfig(sp, config); writeConclusion(sp, result.conclusion); writeTurnMarkdown(sp, 1, markdown);
+    writeReportHtml(sp, '<html>shared-renderer-scene-timeline</html>'); writeTurnReportHtml(sp, 1, '<html>shared-renderer-scene-timeline</html>');
+    const bundle = buildCliSceneReportBundle({sessionId, traceId: config.traceId, turn: 1, conclusion: result.conclusion, turnMarkdown: markdown, result});
+    writeJsonFile(sp, latestCliSceneReportPath(sp), bundle); writeJsonFile(sp, turnCliSceneReportPath(sp, 1), bundle);
+    expect(await runShowCommand({envFile, sessionDir, sessionId, open: false})).toBe(0);
+    expect(consoleLogSpy.mock.calls.map(call => String(call[0])).join('\n')).toContain('/api/agent/v1/scene-reconstruct/report/scene-v3-offline');
+    expect(await runReportCommand({envFile, sessionDir, sessionId, turn: 1, open: false})).toBe(0);
+    const jsonOut = path.join(tmpDir, 'scene-ref.json');
+    await runReportExportCommand({envFile, sessionDir, sessionId, turn: 1, format: 'json', out: jsonOut});
+    expect(JSON.parse(fs.readFileSync(jsonOut, 'utf8'))).toMatchObject({sceneReport: result.sceneReport, sceneReportStatus: 'partial'});
+    writeConfig(sp, {...config, traceId: 'later-loaded-trace-id'});
+    await runReportExportCommand({envFile, sessionDir, sessionId, turn: 1, format: 'json', out: jsonOut});
+    expect(JSON.parse(fs.readFileSync(jsonOut, 'utf8')).sceneReport).toEqual(result.sceneReport);
+    writeConfig(sp, config);
+    const mdOut = path.join(tmpDir, 'scene-ref.md');
+    await runReportExportCommand({envFile, sessionDir, sessionId, format: 'md', out: mdOut});
+    expect(fs.readFileSync(mdOut, 'utf8')).toContain('scene-v3-offline');
+    const htmlOut = path.join(tmpDir, 'scene-ref.html');
+    await runReportExportCommand({envFile, sessionDir, sessionId, format: 'html', out: htmlOut});
+    expect(fs.readFileSync(htmlOut, 'utf8')).toBe('<html>shared-renderer-scene-timeline</html>');
+    writeJsonFile(sp, latestCliSceneReportPath(sp), {...bundle, binding: {...bundle.binding, turn: 2}});
+    await runReportExportCommand({envFile, sessionDir, sessionId, format: 'json', out: jsonOut});
+    const mismatched = JSON.parse(fs.readFileSync(jsonOut, 'utf8'));
+    expect(mismatched.sceneReportStatus).toBe('unavailable'); expect(mismatched).not.toHaveProperty('sceneReport');
   });
 
   test('missing report recommends valid follow-up commands', async () => {

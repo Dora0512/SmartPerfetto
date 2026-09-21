@@ -30,6 +30,12 @@ export interface ValidateDisplayContractOptions {
 const VALID_TIME_UNITS = ['ns', 'us', 'ms', 's'] as const;
 const VALID_WIDTHS = ['narrow', 'medium', 'wide', 'auto'] as const;
 
+export function isDisplayTitleTranslations(value: unknown): value is NonNullable<DisplayConfig['title_i18n']> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.entries(value).every(([locale, title]) => ['zh-CN', 'en'].includes(locale) &&
+      typeof title === 'string' && title.trim().length > 0));
+}
+
 function pushIssue(
   issues: DisplayContractIssue[],
   skillName: string,
@@ -162,6 +168,15 @@ function validateDisplayConfig(
   if (!display || typeof display !== 'object' || Array.isArray(display)) return;
 
   const config = display as Record<string, unknown>;
+  if (config.title_i18n !== undefined && (!stepId?.trim() || !/^steps\[\d+\](?:\.steps\[\d+\])*\.display$/.test(path))) {
+    pushIssue(issues, skillName, `${path}.title_i18n`, `${path}.title_i18n`,
+      'title_i18n is supported only on named steps[].display and nested steps[].steps[].display',
+      config.title_i18n, options, stepId);
+  }
+  if (config.title_i18n !== undefined && !isDisplayTitleTranslations(config.title_i18n)) {
+    pushIssue(issues, skillName, `${path}.title_i18n`, `${path}.title_i18n`,
+      'title_i18n must map en or zh-CN to non-empty strings', config.title_i18n, options, stepId);
+  }
   if (config.layer && !isValidDisplayLayer(String(config.layer))) {
     pushIssue(
       issues,
@@ -330,6 +345,7 @@ export function sanitizeDisplayConfigForRuntime(
   } = {},
 ): { config: DisplayConfig; issues: DisplayContractIssue[] } {
   const sanitized: DisplayConfig = { ...config };
+  delete sanitized.title_i18n; // Authoring metadata belongs to the localization catalog.
   const issues: DisplayContractIssue[] = [];
   const skillName = context.skillName || 'runtime_display';
   const stepId = context.stepId;

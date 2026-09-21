@@ -69,6 +69,7 @@ export function externalIssueReportingFragment(content: string): string {
 /** Sources needed by the serialized fields on AnalysisCompletedEvent. */
 export const ANALYSIS_COMPLETED_PUBLIC_TYPE_PATHS = [
   'types/analysisDelivery.ts',
+  'types/sceneTimeline.ts',
   'types/analysisInvestigationAssessment.ts',
   'services/evidence/investigationEvidenceLedger.ts',
   'services/evidence/evidenceCapture.ts',
@@ -121,6 +122,9 @@ export function analysisCompletedPublicTypeFragment(eventContent: string, conten
   const collectRoots = (node: ts.Node): void => {
     if (ts.isImportTypeNode(node) && node.qualifier && ts.isIdentifier(node.qualifier) && declarations.has(node.qualifier.text)) {
       pending.push(node.qualifier.text);
+    }
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && declarations.has(node.typeName.text)) {
+      pending.push(node.typeName.text);
     }
     ts.forEachChild(node, collectRoots);
   };

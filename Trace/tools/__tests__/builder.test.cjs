@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const {materializeCatalogCases} = require('../lib/builder.cjs');
+const {materializeCatalogCases, updateCaseExpectations} = require('../lib/builder.cjs');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -114,5 +114,109 @@ test('rejects non-regular trace inputs', () => {
     assert.throws(() => materializeCatalogCases(repoRoot), /overlay trace must be a regular file/);
   } finally {
     fs.rmSync(repoRoot, {recursive: true, force: true});
+  }
+});
+
+function expectationsFixture(t) {
+  const {repoRoot} = fixture();
+  t.after(() => fs.rmSync(repoRoot, {recursive: true, force: true}));
+  const caseDir = path.join(repoRoot, 'Trace/constructed/derived');
+  const manifestPath = path.join(caseDir, 'case.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.schema_version = 1;
+  manifest.coverage = {expectations: [{id: 'one', type: 'sql', assertions: [{value: '9007199254740993'}]}]};
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  return {repoRoot, caseDir, manifestPath, manifest, output: path.join(caseDir, 'analysis/expected.json')};
+}
+
+test('expectations updates only the selected constructed projection and preserves extra truth', t => {
+  const f = expectationsFixture(t);
+  fs.mkdirSync(path.dirname(f.output));
+  const truth = {trace: {overlaySha256: 'original-gold'}, facts: [{ts: '9007199254740993'}]};
+  fs.writeFileSync(f.output, JSON.stringify({schema_version: 0, case_id: 'old', marker: 'old', expectations: [],
+    source_trace_ground_truth: truth, native_oracle: {rows: 7}}));
+  const scenario = path.join(f.caseDir, 'scenario.json');
+  fs.writeFileSync(scenario, '{"authored":true}\n');
+  const other = path.join(f.repoRoot, 'Trace/constructed/other');
+  fs.mkdirSync(path.join(other, 'analysis'), {recursive: true});
+  // A target-only operation must not even require unrelated manifests to parse.
+  fs.writeFileSync(path.join(other, 'case.json'), 'unrelated in-progress edit');
+  fs.writeFileSync(path.join(other, 'analysis/expected.json'), 'other gold');
+  const untouched = [f.manifestPath, scenario, path.join(f.caseDir, 'trace.overlay.pftrace'),
+    path.join(other, 'case.json'), path.join(other, 'analysis/expected.json')];
+  const before = untouched.map(file => fs.readFileSync(file));
+  const result = updateCaseExpectations(f.repoRoot, {caseId: 'derived'});
+  assert.equal(result.changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.output, 'utf8')), {schema_version: 1, case_id: 'derived',
+    marker: 'SmartPerfetto::CASE::derived', expectations: f.manifest.coverage.expectations,
+    source_trace_ground_truth: truth, native_oracle: {rows: 7}});
+  untouched.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
+  const beforeStat = fs.statSync(f.output);
+  assert.equal(updateCaseExpectations(f.repoRoot, {caseId: 'derived', check: true}).changed, false);
+  assert.equal(updateCaseExpectations(f.repoRoot, {caseId: 'derived'}).changed, false);
+  assert.equal(fs.statSync(f.output).mtimeMs, beforeStat.mtimeMs);
+  assert.deepEqual(fs.readdirSync(path.dirname(f.output)), ['expected.json']);
+});
+
+test('expectations check is read-only for missing and stale output', t => {
+  const f = expectationsFixture(t);
+  assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId: 'derived', check: true}), /stale expectations/);
+  assert.equal(fs.existsSync(path.dirname(f.output)), false);
+  updateCaseExpectations(f.repoRoot, {caseId: 'derived'});
+  const previous = fs.readFileSync(f.output);
+  f.manifest.coverage.expectations.push({id: 'new'});
+  fs.writeFileSync(f.manifestPath, JSON.stringify(f.manifest));
+  assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId: 'derived', check: true}), /stale expectations/);
+  assert.deepEqual(fs.readFileSync(f.output), previous);
+});
+
+test('expectations requires a safe explicit constructed case id and valid source', t => {
+  const f = expectationsFixture(t);
+  for (const caseId of [undefined, '', '../real/base', 'a/b', 'a\\b', '/tmp/escape']) {
+    assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId}), /--case requires/);
+  }
+  assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId: 'base'}), /ENOENT/);
+  for (const replacement of [{...f.manifest, kind: 'real'}, {...f.manifest, id: 'other'},
+    {...f.manifest, coverage: {expectations: null}}]) {
+    fs.writeFileSync(f.manifestPath, JSON.stringify(replacement));
+    assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId: 'derived'}), /invalid constructed expectations source/);
+  }
+  assert.equal(fs.existsSync(f.output), false);
+});
+
+test('expectations refuses symlinked path components, manifests and output files', t => {
+  for (const target of ['Trace', 'constructed', 'derived', 'case.json', 'analysis', 'expected.json']) {
+    const f = expectationsFixture(t);
+    fs.mkdirSync(path.dirname(f.output));
+    fs.writeFileSync(f.output, '{}');
+    const paths = {Trace: path.join(f.repoRoot, 'Trace'), constructed: path.join(f.repoRoot, 'Trace/constructed'),
+      derived: f.caseDir, 'case.json': f.manifestPath, analysis: path.dirname(f.output), 'expected.json': f.output};
+    const original = paths[target];
+    const moved = `${original}-original`;
+    fs.renameSync(original, moved);
+    fs.symlinkSync(moved, original);
+    assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId: 'derived'}), /symlink|regular file/);
+  }
+});
+
+test('expectations atomically replaces a hard-linked output without modifying its other name', t => {
+  const f = expectationsFixture(t);
+  fs.mkdirSync(path.dirname(f.output));
+  const gold = path.join(f.repoRoot, 'unrelated-gold.json');
+  fs.writeFileSync(gold, '{"native_oracle":{"retained":true}}\n');
+  fs.linkSync(gold, f.output);
+  const before = fs.readFileSync(gold);
+  updateCaseExpectations(f.repoRoot, {caseId: 'derived'});
+  assert.deepEqual(fs.readFileSync(gold), before);
+  assert.equal(JSON.parse(fs.readFileSync(f.output, 'utf8')).native_oracle.retained, true);
+});
+
+test('expectations rejects malformed existing truth instead of discarding it', t => {
+  const f = expectationsFixture(t);
+  fs.mkdirSync(path.dirname(f.output));
+  for (const content of ['in-progress gold', 'null', '[]']) {
+    fs.writeFileSync(f.output, content);
+    assert.throws(() => updateCaseExpectations(f.repoRoot, {caseId: 'derived'}));
+    assert.equal(fs.readFileSync(f.output, 'utf8'), content);
   }
 });

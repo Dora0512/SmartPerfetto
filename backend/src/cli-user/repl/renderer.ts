@@ -28,6 +28,7 @@ import {
   renderCliAnalysisEvidence,
   type CliAnalysisEvidenceOutput,
 } from '../services/analysisResultPresentation';
+import {renderCliSceneReport, type CliSceneReportMetadata} from '../services/sceneReportReference';
 
 export interface RendererOptions {
   verbose: boolean;
@@ -57,7 +58,7 @@ function ansi(code: string, on: boolean): (s: string) => string {
   return (s) => (on ? `\x1b[${code}m${s}\x1b[0m` : s);
 }
 
-interface CompletionMetadata {
+interface CompletionMetadata extends CliSceneReportMetadata {
   reportPath: string;
   turnReportPath?: string;
   sessionDir: string;
@@ -277,6 +278,12 @@ export function createRenderer(opts: RendererOptions): Renderer {
     if (meta.turnReportPath) {
       console.log(`  ${dim('turn:')}   ${meta.turnReportPath}`);
     }
+    if (meta.sceneReportStatus) {
+      console.log(renderCliSceneReport(meta.sceneReportStatus === 'partial' && meta.sceneReport
+        ? {status: 'available', reference: meta.sceneReport}
+        : {status: 'unavailable', reason: meta.sceneReportUnavailableReason || 'scene_report_missing'},
+      parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE)));
+    }
     console.log(dim(`\n  open ${meta.reportPath}  ·  smp ask ${meta.sessionId} "..."  ·  smp repl --resume ${meta.sessionId}`));
   }
 
@@ -329,6 +336,9 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
   }
 
   function printCompletion(meta: CompletionMetadata): void {
+    const scene = {...(meta.sceneReport ? {sceneReport: meta.sceneReport} : {}),
+      ...(meta.sceneReportStatus ? {sceneReportStatus: meta.sceneReportStatus} : {}),
+      ...(meta.sceneReportUnavailableReason ? {sceneReportUnavailableReason: meta.sceneReportUnavailableReason} : {})};
     if (format === 'ndjson') {
       emit({
         ok: meta.success !== false,
@@ -342,6 +352,7 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
         sessionDir: meta.sessionDir,
         reportPath: meta.reportPath,
         ...(meta.turnReportPath ? { turnReportPath: meta.turnReportPath } : {}),
+        ...scene,
       });
       return;
     }
@@ -358,6 +369,7 @@ function createMachineRenderer(format: 'json' | 'ndjson'): Renderer {
       reportPath: meta.reportPath,
       ...(meta.turnReportPath ? { turnReportPath: meta.turnReportPath } : {}),
       ...(conclusionPayload ?? { conclusion: '' }),
+      ...scene,
     });
   }
 

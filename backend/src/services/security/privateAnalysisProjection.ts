@@ -12,6 +12,7 @@ import type {ClaimSupportV1} from '../../types/evidenceContract';
 import type {ClaimVerificationResult, DeterministicNativeRowIdentity} from '../../types/claimVerification';
 import type {IdentityResolutionV1} from '../../types/identityContract';
 import {sanitizeCodeAwareText, withOwnerCodeAwareProjection, isOwnerCodeAwareProjection, isCredentialField} from './codeAwareOutputRegistry';
+import {projectSceneTimelineForOwner} from '../../agent/scene/sceneTimelineProjection';
 import type {CodeLookupSummary} from '../codebase/codeLookupLedger';
 import {sanitizeSourceUseDecision, type SourceUseDecisionV1, type SourceReferenceV1} from '../codebase/sourceUseDecision';
 import {isCodebaseKind} from '../codebase/codebaseRegistry';
@@ -722,6 +723,9 @@ export function projectPrivateAnalysisResult(
     ...(sourceClaimVerificationResult ? {sourceClaimVerificationResult} : {}),
     ...(analysisReceipt ? {analysisReceipt} : {}),
     uiActionProposals: projectPrivateUiActionProposals(sessionId, result.uiActionProposals),
+    ...(isOwnerCodeAwareProjection() && result.sceneTimeline
+      ? {sceneTimeline: projectSceneTimelineForOwner(result.sceneTimeline)} : {}),
+    ...(isOwnerCodeAwareProjection() && result.sceneReport ? {sceneReport: {...result.sceneReport}} : {}),
   };
 }
 
@@ -763,6 +767,8 @@ export function copyAnalysisResultForSnapshot(result: AnalysisResult): AnalysisR
     ...(result.uiActionProposals !== undefined ? {uiActionProposals: result.uiActionProposals} : {}),
     ...(result.quickRun !== undefined ? {quickRun: result.quickRun} : {}),
     ...(result.smartScenePreview !== undefined ? {smartScenePreview: result.smartScenePreview} : {}),
+    ...(result.sceneTimeline !== undefined ? {sceneTimeline: structuredClone(result.sceneTimeline)} : {}),
+    ...(result.sceneReport !== undefined ? {sceneReport: {...result.sceneReport}} : {}),
   };
   if (claimsChanged && stored.claimVerificationResult) {
     stored.claimVerificationResult = invalidatePrivateClaimVerification(stored.claimVerificationResult);

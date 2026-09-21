@@ -37,6 +37,12 @@ import {resolveAnalysisInvestigationRequirements} from '../agentRuntime/analysis
 import {assessInvestigationAcquisition, assessLedgerAcquisition} from './finalInvestigationContractGate';
 import type {ResolvedAnalysisInvestigationRequirements} from '../types/analysisInvestigation';
 import type {FinalInvestigationAssessment} from '../types/analysisInvestigationAssessment';
+import {consumeSceneRuntimeSeal, type SceneRuntimeSeal} from '../agent/scene/sceneRuntimeBinding';
+import {assessSceneTimeline} from '../agent/scene/sceneTimelineAssessment';
+import {projectSceneTimelineForOwner} from '../agent/scene/sceneTimelineProjection';
+import type {SceneScope} from '../agent/scene/sceneTimelineContract';
+import {issueSceneTimelinePublication, type SceneTimelinePublication} from '../agent/scene/sceneTimelinePublication';
+import type {OutputLanguage} from '../agentv3/outputLanguage';
 
 export interface AnalysisFinalizationOwner {
   runId: string;
@@ -57,6 +63,8 @@ export interface FinalizeAnalysisResultInput {
   comparisonIdentity?: FinalResultComparisonIdentity;
   caseRetrieval?: AnalysisCaseRetrievalState;
   conversation?: NonNullable<Parameters<typeof canonicalizeAnalysisResult>[1]>['conversation'];
+  /** Issued product sidecar, separate from a provider's accepted body or result JSON. */
+  scene?: {seal: SceneRuntimeSeal; scope: SceneScope; outputLanguage: OutputLanguage; providerId?: string | null};
 }
 
 export interface FinalizedAnalysisResult {
@@ -65,6 +73,7 @@ export interface FinalizedAnalysisResult {
   conversationOutcome?: ReturnType<typeof canonicalizeAnalysisResult>['conversationOutcome'];
   /** Diagnostic receipt stays private; persistence consumes result only. */
   semanticAssessment?: FinalSemanticAssessment;
+  scenePublication?: SceneTimelinePublication;
 }
 
 const consumedContexts = new WeakSet<RuntimeFinalizationContext>();
@@ -252,6 +261,10 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
   const {context, owner} = input;
   try {
     assertOwner(owner);
+    if (input.scene && (input.scene.scope.runId !== owner.runId || input.scene.scope.sessionId !== input.result.sessionId)) {
+      throw new Error('scene_finalization_identity_mismatch');
+    }
+    const sceneSnapshot = input.scene ? consumeSceneRuntimeSeal(input.scene.seal, input.scene.scope) : undefined;
     if (context) {
       if (context.runId !== owner.runId || context.sessionId !== input.result.sessionId || consumedContexts.has(context)) {
         throw new Error('finalization_run_identity_mismatch');
@@ -264,7 +277,8 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
       providerQuery.analysisContextFingerprint !== owner.analysisContextFingerprint) {
       throw new Error('finalization_authorization_fingerprint_mismatch');
     }
-    const original = frozenSnapshot(input.result);
+    const {sceneTimeline: _untrustedSceneTimeline, sceneReport: _untrustedSceneReport, ...nativeResult} = input.result;
+    const original = frozenSnapshot(nativeResult);
     const conversation = frozenSnapshot(input.conversation);
     const comparisonReportSection = frozenSnapshot(input.comparisonReportSection);
     const suppliedIdentity = frozenSnapshot(input.comparisonIdentity);
@@ -437,7 +451,18 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
     assertOwner(owner);
     const qualityIssue = applyFinalResultQualityGate({result, query, context: delivery, comparisonIdentity});
     assertOwner(owner);
+    if (sceneSnapshot && input.scene) {
+      result.sceneTimeline = projectSceneTimelineForOwner(assessSceneTimeline(sceneSnapshot, input.scene.scope));
+      if (result.sceneTimeline.status === 'partial') result.partial = true;
+    }
+    const scenePublication = result.sceneTimeline && input.scene ? issueSceneTimelinePublication({
+      scope: input.scene.scope, assessment: result.sceneTimeline, summary: result.conclusion,
+      outputLanguage: input.scene.outputLanguage, totalDurationMs: result.totalDurationMs,
+      providerId: input.scene.providerId, runtimeKind: result.completion?.runtimeKind,
+      registryFingerprint: context?.strategyRegistry.registryFingerprint,
+    }) : undefined;
     return {result, qualityIssue, semanticAssessment: semantic,
+      ...(scenePublication ? {scenePublication} : {}),
       ...(canonical.conversationOutcome ? {conversationOutcome: {...canonical.conversationOutcome, message: result.conclusion}} : {})};
   } finally {
     context?.dispose();

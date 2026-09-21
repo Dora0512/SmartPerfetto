@@ -58,6 +58,7 @@
         "properties": {
           "type": {
             "enum": [
+              "atrace-track-instant", "android-input-motion", "android-input-dispatch",
               "atrace-slice", "atrace-counter", "atrace-async-slice", "atrace-async-track-slice",
               "sched-running", "sched-switch", "sched-waking", "process-stats", "battery-counters", "power-rail",
               "gpu-work-period", "gpu-frequency", "gpu-power-state", "cpu-frequency", "cpu-idle",
@@ -77,6 +78,13 @@
           "sched_priority": {"type": "integer", "minimum": -1, "maximum": 139},
           "prev_state_raw": {"type": "string", "pattern": "^[0-9]+$", "description": "Raw kernel sched_switch prev_state bitmask. The base trace kernel version controls decoding: modern kernels (4.14+) use 256 for R+; missing kernel metadata defaults to 4.4 and uses 2048. No policy is inferred from this field or priority."},
           "target_cpu": {"type": "integer", "minimum": 0},
+          "event_id": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+          "device_id": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+          "display_id": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+          "window_id": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+          "source": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+          "action": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+          "vsync_id": {"type": "string", "pattern": "^-?[0-9]+$"},
           "target_process": {"type": "string"},
           "name": {"type": "string"},
           "error_id": {"type": "string", "minLength": 1},
@@ -196,6 +204,18 @@
           }
         },
         "allOf": [
+          {
+            "if": {"properties": {"type": {"const": "atrace-track-instant"}}},
+            "then": {"required": ["process", "thread", "track_name", "name"]}
+          },
+          {
+            "if": {"properties": {"type": {"const": "android-input-motion"}}},
+            "then": {"required": ["event_id", "device_id", "display_id", "source", "action"]}
+          },
+          {
+            "if": {"properties": {"type": {"const": "android-input-dispatch"}}},
+            "then": {"required": ["event_id", "window_id", "vsync_id"]}
+          },
           {
             "if": {"properties": {"type": {"const": "sched-switch"}}},
             "then": {"required": ["cpu", "prev_thread", "next_thread", "prev_priority", "next_priority", "prev_state_raw"]}

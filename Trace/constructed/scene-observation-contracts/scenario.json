@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "clock": {
+    "anchor": "trace-middle",
+    "duration_ns": "1000000000"
+  },
+  "actors": {
+    "processes": [
+      {
+        "id": "app",
+        "name": "com.smartperfetto.fixture",
+        "uid": 10999
+      },
+      {
+        "id": "system",
+        "name": "system_server",
+        "uid": 1000
+      }
+    ],
+    "threads": [
+      {
+        "id": "main",
+        "process": "app",
+        "name": "main",
+        "is_main": true
+      },
+      {
+        "id": "system-main",
+        "process": "system",
+        "name": "main",
+        "is_main": true
+      }
+    ]
+  },
+  "signals": [
+    {
+      "type": "atrace-slice",
+      "at_ns": "150000000",
+      "duration_ns": "781",
+      "process": "app",
+      "thread": "main",
+      "name": "FlingStart duration=1580, direction=VERTICAL, caller=UNKNOWN"
+    },
+    {
+      "type": "atrace-async-slice",
+      "at_ns": "240000000",
+      "duration_ns": "100600833",
+      "process": "app",
+      "thread": "main",
+      "name": "Scroll",
+      "cookie": 99101
+    },
+    {
+      "type": "atrace-slice",
+      "at_ns": "0",
+      "duration_ns": "1000000000",
+      "process": "app",
+      "thread": "main",
+      "name": "SmartPerfetto::CASE::scene-observation-contracts"
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "100000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "ScreenState",
+      "value": 2
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "100000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "BatteryStatus",
+      "value": 2
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "100000000",
+      "event_id": 8810001,
+      "action": 0,
+      "device_id": 101,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "110000000",
+      "event_id": 8810002,
+      "action": 2,
+      "device_id": 101,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "android-input-dispatch",
+      "at_ns": "110000100",
+      "event_id": 8810002,
+      "window_id": 41,
+      "vsync_id": "9007199254740993"
+    },
+    {
+      "type": "android-input-dispatch",
+      "at_ns": "110000200",
+      "event_id": 8810002,
+      "window_id": 42,
+      "vsync_id": "9007199254740993"
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "120000000",
+      "event_id": 8810003,
+      "action": 2,
+      "device_id": 101,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "130000000",
+      "event_id": 8810004,
+      "action": 1,
+      "device_id": 101,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "atrace-track-instant",
+      "at_ns": "200000000",
+      "process": "system",
+      "thread": "system-main",
+      "track_name": "DeviceStateChanged",
+      "name": "17"
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "200000000",
+      "event_id": 8820001,
+      "action": 0,
+      "device_id": 102,
+      "display_id": 1,
+      "source": 4098
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "210000000",
+      "event_id": 8820002,
+      "action": 3,
+      "device_id": 102,
+      "display_id": 1,
+      "source": 4098
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "300000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "ScreenState",
+      "value": 1
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "300000000",
+      "event_id": 8830001,
+      "action": 99,
+      "device_id": 103,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "400000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "BatteryStatus",
+      "value": 3
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "400000000",
+      "event_id": 8840001,
+      "action": 0,
+      "device_id": 104,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "500000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "ScreenState",
+      "value": 3
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "500000000",
+      "event_id": 8850001,
+      "action": 8,
+      "device_id": 105,
+      "display_id": 0,
+      "source": 4098
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "600000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "BatteryStatus",
+      "value": 4
+    },
+    {
+      "type": "atrace-track-instant",
+      "at_ns": "600000000",
+      "process": "system",
+      "thread": "system-main",
+      "track_name": "DeviceStateChanged",
+      "name": "23"
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "700000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "ScreenState",
+      "value": 2
+    },
+    {
+      "type": "atrace-counter",
+      "at_ns": "800000000",
+      "process": "system",
+      "thread": "system-main",
+      "name": "BatteryStatus",
+      "value": 5
+    },
+    {
+      "type": "android-input-motion",
+      "at_ns": "900000000",
+      "event_id": 8840002,
+      "action": 1,
+      "device_id": 104,
+      "display_id": 0,
+      "source": 4098
+    }
+  ]
+}

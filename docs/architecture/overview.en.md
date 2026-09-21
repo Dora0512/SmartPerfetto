@@ -172,6 +172,8 @@ Jank investigation starts with continuous execution on the target process's main
 
 Strategy frontmatter `investigation_requirements` is separate from report formatting. The shared typed-intent prompt builder reads these evidence obligations from the run's pinned strategy snapshot for investigation answers and reports. Bounded questions apply only relevant obligations; facts and acknowledgements gain no investigation recipe, and `existing_only` gains no retrieval authority. Older snapshots may omit the optional field; declared requirements participate in the fingerprint.
 
+All runtimes use this pinned-context builder. Missing intent or registry fails explicitly, with no legacy quick/full template fallback. The final conclusion is the primary deliverable; budgets and intermediate table previews do not cap its findings, claims or prose. The input discipline budget is 16,000 estimated tokens, with identity and evidence obligations protected from trimming. Actual output or review capacity limits must remain explicit incomplete states.
+
 In OIDC mode, the static entry point gates startup through `/api/auth/session`
 and does not load the Perfetto bundle until the session is ready. After the
 callback establishes the backend session, every browser request derives tenant,
@@ -384,6 +386,10 @@ subpaths or features. Only entries marked `classification_role: variant` and
 `primary_eligible: true` in the catalog may become the primary classification.
 Run `npm run check:rendering-pipelines` to verify the upstream pin, hashes, and
 all active references.
+
+## Scene Reconstruction
+
+Scene Reconstruction uses the current Provider and shared Agent investigation loop to revise a candidate timeline from this run's input, device-state and application-response evidence. The shared finalizer produces one revision for UI, reports and historical access. Scan coverage, capture completeness and narrative verification remain separate; unknown does not mean idle. See the [Scene Reconstruction Architecture Contract](scene-reconstruction.en.md).
 
 ## System investigation contract
 

@@ -147,6 +147,8 @@ cookie credentials，也不会把非 OIDC 401 当作 OIDC authority 失效。本
 
 策略 frontmatter 的 `investigation_requirements` 独立于报告格式。共享 typed-intent 提示构造器从本轮固定的策略快照中读取这些取证义务，供 investigation 的 answer/report 使用；具体问题仅应用相关义务，fact/acknowledgement 不增加调查流程，`existing_only` 不因此获得取证权限。旧快照可以省略此可选字段，新字段参与快照指纹。
 
+所有运行时只使用这套固定上下文的提示构造器；缺失 intent 或策略快照会明确失败，不回退到旧 quick/full 模板。最终结论是主要交付记录，预算与中间表格预览不限制发现、声明或正文数量。输入提示词纪律预算为 16,000 个估算 token，身份和证据义务不可裁剪；实际输出或核验容量不足仍须显式保留不完整状态。
+
 OIDC 模式下，静态入口先通过 `/api/auth/session` 完成门禁，未就绪时不加载 Perfetto
 bundle。回调建立后端 Session 后，所有浏览器请求的 tenant、user 和 workspace 都以后端
 Session 和数据库所有权为准；前端请求头只是传输上下文，不能改变授权边界。个人工作区按
@@ -331,6 +333,10 @@ tool registry、`backend/skills/` 文件树和 strategy frontmatter 决定。
 catalog 中的 pipeline 条目定义 trace 检测子路径或 feature。只有 catalog 中
 `classification_role: variant` 且 `primary_eligible: true` 的条目能成为主判定；
 同步、哈希和引用完整性由 `npm run check:rendering-pipelines` 校验。
+
+## 场景还原
+
+“场景还原”通过当前 Provider 进入共享 Agent 调查链路，基于本轮输入、设备状态和应用响应证据修订候选时间线，再由统一 finalizer 生成供界面、报告和历史读取的同一版本。扫描覆盖、采集完整性及叙述语义核验分别保留，未知不等于空闲。详见[场景还原架构合同](scene-reconstruction.md)。
 
 ## 系统调查合同
 

@@ -50,6 +50,39 @@ async function fixture(rows: unknown[][] = [row], settings: {observe?: boolean; 
 }
 
 describe('trusted investigation evidence ledger', () => {
+  it('accepts a producer-owned window without inventing metric records', async () => {
+    const windowOnly = {window: {start: 'start', end: 'end'}, metrics: []};
+    expect(() => validateInvestigationEvidenceDeclarations({investigation_evidence: windowOnly})).not.toThrow();
+    const {store} = await fixture([row], {declaration: windowOnly});
+    const snapshot = store.createEvidenceReadView(options).investigationEvidence!();
+    expect(snapshot.records).toEqual([]);
+    expect(snapshot.scans ?? []).toEqual([]);
+    for (const window of [undefined, {start: '', end: 'end'}, {start: 'start', end: 1}, {start: 'same', end: 'same'}]) {
+      expect(() => validateInvestigationEvidenceDeclarations({investigation_evidence: {window, metrics: []}})).toThrow();
+    }
+  });
+  it('issues identity roles from producer mappings rather than guessed column names', () => {
+    const origin = {kind: 'skill_literal' as const, definitionFingerprint: 'producer', selectedSqlHash: 'sql'};
+    const fields = investigationCaptureFields({...declaration,
+      identity: {upid: 'target_instance', machine_id: 'machine'}}, origin);
+    expect(fields.target_instance).toEqual({origin, identityRole: 'upid'});
+    expect(fields.machine).toEqual({origin, identityRole: 'machine_id'});
+    expect(fields.upid).toBeUndefined();
+    expect(() => investigationCaptureFields({...declaration, identity: {upid: 'target', utid: 'target'}}, origin))
+      .toThrow('identityRole');
+  });
+
+  it('retains producer-issued identity semantics in the actual execution read view', async () => {
+    const {store, artifactId} = await fixture();
+    const [resolution] = await store.createEvidenceReadView(options).resolveReferences([
+      {key: 'identity', reference: {artifactId, rowIndex: 0}, requiredColumns: ['upid', 'utid']},
+    ]);
+    expect(resolution.status).toBe('resolved');
+    if (resolution.status !== 'resolved') throw new Error('Missing execution capture');
+    expect(resolution.record.fields.upid).toMatchObject({identityRole: 'upid', origin: {kind: 'skill_literal'}});
+    expect(resolution.record.fields.utid.identityRole).toBe('utid');
+  });
+
   it('preserves real thread-summary metric semantics when running time also denominates placement', () => {
     const skill = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/atomic/thread_system_summary_in_range.skill.yaml'), 'utf8')) as {
       investigation_evidence: InvestigationEvidenceDeclaration};

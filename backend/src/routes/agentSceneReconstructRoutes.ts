@@ -9,14 +9,17 @@ import {
   type IOrchestrator,
   type StreamingUpdate,
 } from '../agent';
-import { createAgentOrchestrator } from '../agentRuntime';
 import { featureFlagsConfig } from '../config';
 import {
   AssistantApplicationService,
   type ManagedAssistantSession,
 } from '../assistant/application/assistantApplicationService';
-import { StreamProjector } from '../assistant/stream/streamProjector';
-import { createSessionLogger, type SessionLogger } from '../services/sessionLogger';
+import type { SessionLogger } from '../services/sessionLogger';
+import type {AnalysisRunDispatchInput, AnalysisRunDispatchResponse} from '../assistant/application/analysisRunDispatchService';
+import {renderRequiredLocalizedStrategyTemplate} from '../agentv3/localizedStrategyTemplate';
+import {sceneRunOwnerKey} from '../agent/scene/sceneRuntimeBinding';
+import {SCENE_TIMELINE_REPORT_PREFIX} from '../agent/scene/sceneTimelineReportAdapter';
+import {projectSceneTimelineForClient} from '../agent/scene/sceneTimelineProjection';
 import { getTraceProcessorService } from '../services/traceProcessorService';
 import { SkillExecutor } from '../services/skillEngine/skillExecutor';
 import { skillRegistry, ensureSkillRegistryInitialized } from '../services/skillEngine/skillLoader';
@@ -38,7 +41,6 @@ import {
 } from '../services/resourceOwnership';
 import { readTraceMetadataForContext } from '../services/traceMetadataStore';
 import {
-  requireAiEnabledForHttp,
   sendAiDisabledErrorIfPresent,
 } from './aiCapabilityPolicyHttp';
 
@@ -53,6 +55,8 @@ export interface SceneReconstructConversationStep {
 }
 
 export interface SceneReconstructSession extends ManagedAssistantSession {
+  sceneReconstructionRunId?: string;
+  sceneExecutionInFlightRunId?: string;
   orchestrator: IOrchestrator;
   orchestratorUpdateHandler?: (update: StreamingUpdate) => void;
   traceId: string;
@@ -136,25 +140,16 @@ function getAuthorizedSceneSession<TSession extends SceneReconstructSession>(
 
 interface RegisterSceneReconstructRoutesDeps<TSession extends SceneReconstructSession> {
   assistantAppService: AssistantApplicationService<TSession>;
-  streamProjector: StreamProjector;
-  ensureToolsRegistered: () => void;
-  /**
-   * Legacy `/analyze`-style runner. Kept here for backward compatibility with
-   * the keyword-triggered path; the primary `/scene-reconstruct` POST handler
-   * now uses sceneStoryService.start() instead.
-   */
-  runAgentDrivenAnalysis: (
-    sessionId: string,
-    query: string,
-    traceId: string,
-    options?: any
-  ) => Promise<void>;
-  broadcastToAgentDrivenClients: (sessionId: string, update: StreamingUpdate) => void;
-  sendAgentDrivenResult: (res: express.Response, session: TSession) => void;
+  dispatchSceneAnalysis(input: AnalysisRunDispatchInput): Promise<AnalysisRunDispatchResponse>;
+  getRequestId(req: express.Request): string;
+  streamSceneAnalysis(req: express.Request, res: express.Response, sessionId: string): Promise<void>;
+  checkSceneHistory(req: express.Request, res: express.Response, sessionId: string): Promise<boolean>;
+  projectSceneResult(session: TSession): AgentRuntimeAnalysisResult | undefined;
+  cancelSceneRun(sessionId: string, runId: string): Promise<{status: number; body: Record<string, unknown>}>;
   isSceneReplayOnlyQuery: (query: string) => boolean;
   buildSceneReplayNarrative: (scenes: any[]) => string;
   normalizeNarrativeForClient: (narrative: string) => string;
-  /** Scene-specific pipeline. Replaces runAgentDrivenAnalysis for /scene-reconstruct. */
+  /** Historical report access and publication adapter; execution uses shared dispatch. */
   sceneStoryService: SceneStoryService;
 }
 
@@ -262,8 +257,11 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
           code: 'UNSUPPORTED_OUTPUT_LANGUAGE',
         });
       }
-      const report = await deps.sceneStoryService.getReport(reportId);
-      if (!report || !await readTraceMetadataForContext(report.traceId, requireRequestContext(req))) {
+      const report = reportId.startsWith(SCENE_TIMELINE_REPORT_PREFIX)
+        ? await deps.sceneStoryService.getFinalizedReport(sceneRunOwnerKey(ownerFieldsFromContext(requireRequestContext(req))), reportId)
+        : await deps.sceneStoryService.getReport(reportId);
+      if (!report || !isOwnedByContext(report, requireRequestContext(req)) ||
+          !await readTraceMetadataForContext(report.traceId, requireRequestContext(req))) {
         return sendResourceNotFound(res, 'Report not found or expired');
       }
       return res.json({
@@ -319,119 +317,16 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
         });
       }
 
-      if (!requireAiEnabledForHttp(res, 'scene_reconstruct_start')) {
-        return;
-      }
-
-      if (!await ensureTraceAccessible(req, res, traceId)) {
-        return;
-      }
-
-      const traceProcessorService = getTraceProcessorService();
-      // Fall back to disk restore so traces evicted from the in-memory registry
-      // (but still on disk) don't produce spurious 404s on this endpoint.
-      const trace = await traceProcessorService.getOrLoadTrace(traceId);
-      if (!trace) {
-        return res.status(404).json({
-          success: false,
-          error: 'Trace not found in backend',
-          hint: 'Please upload the trace to the backend first',
-          code: 'TRACE_NOT_UPLOADED',
-        });
-      }
-
-      deps.ensureToolsRegistered();
-
-      const deepAnalysis = false;
-      const generateTracks = typeof options.generateTracks === 'boolean'
-        ? options.generateTracks
-        : true;
-      const forceRefresh = options.forceRefresh === true;
-      const query = outputLanguage === 'en'
-        ? (deepAnalysis ? 'Scene reconstruction' : 'Scene reconstruction detection only')
-        : (deepAnalysis ? '场景还原' : '场景还原 仅检测');
-      const analysisId = `scene-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-      const owner = ownerFieldsFromContext(requireRequestContext(req));
-
-      const orchestrator: IOrchestrator = createAgentOrchestrator({
-        traceProcessorService: getTraceProcessorService(),
-        aiFeature: 'scene_reconstruct_start',
-      });
-
-      const logger = createSessionLogger(analysisId);
-      logger.setMetadata({ traceId, query, architecture: 'agent-driven', feature: 'scene-reconstruct' });
-      logger.info('AgentRoutes', 'Scene reconstruction session created (agent-driven)', { options });
-
-      const session = {
-        orchestrator,
-        sessionId: analysisId,
-        sseClients: [],
-        status: 'pending',
-        traceId,
-        query,
-        outputLanguage,
-        ...owner,
-        createdAt: Date.now(),
-        lastActivityAt: Date.now(),
-        logger,
-        hypotheses: [],
-        agentDialogue: [],
-        dataEnvelopes: [],
-        agentResponses: [],
-        scenes: [],
-        trackEvents: [],
-        conversationOrdinal: 0,
-        conversationSteps: [],
-        queryHistory: [],
-        conclusionHistory: [],
-        sseEventSeq: 0,
-        sseEventBuffer: [],
-      } as unknown as TSession;
-      deps.assistantAppService.setSession(analysisId, session);
-
-      // Drive scene reconstruction through the dedicated SceneStoryService
-      // instead of runAgentDrivenAnalysis. The SkillExecutor is created
-      // per-request because there's no module-level async init point in
-      // this codebase for the skill registry.
-      void (async () => {
-        await ensureSkillRegistryInitialized();
-        const skillExecutor = new SkillExecutor(traceProcessorService);
-        skillExecutor.registerSkills(skillRegistry.getAllSkills());
-        await deps.sceneStoryService.start({
-          sessionId: analysisId,
-          traceId,
-          skillExecutor,
-          owner,
-          options: {
-            forceRefresh,
-            outputLanguage,
-          },
-        });
-      })().catch((error) => {
-        console.error(`[AgentRoutes] Scene reconstruction (story pipeline) error for ${analysisId}:`, error);
-        const currentSession = deps.assistantAppService.getSession(analysisId);
-        if (currentSession) {
-          currentSession.logger.error('AgentRoutes', 'Scene reconstruction failed', error);
-          currentSession.status = 'failed';
-          currentSession.error = error.message;
-          deps.broadcastToAgentDrivenClients(analysisId, {
-            type: 'error',
-            content: { message: error.message },
-            timestamp: Date.now(),
-          });
-        }
-      });
-      // generateTracks is intentionally unused by the new pipeline; track
-      // lanes flow through the existing `data` SSE events emitted by
-      // SceneStoryService during Stage 1.
-      void generateTracks;
-
-      res.json({
-        success: true,
-        analysisId,
-        sessionId: analysisId,
-        architecture: 'agent-driven',
-      });
+      const query = renderRequiredLocalizedStrategyTemplate('prompt-scene-reconstruction-query', outputLanguage, {});
+      // Shared admission owns permissions, provider pinning, one run and terminal cleanup.
+      // Legacy cache flags remain accepted, but never select a separate model pipeline.
+      const {generateTracks: _tracks, forceRefresh: _refresh, ...analysisOptions} = options;
+      const response = await deps.dispatchSceneAnalysis({entry: 'scene_reconstruction',
+        requestId: deps.getRequestId(req), context: requireRequestContext(req),
+        body: {traceId, query, providerId: req.body?.providerId,
+          options: {...analysisOptions, outputLanguage, analysisMode: 'full'}}});
+      return res.status(response.status).json({...response.body,
+        ...(response.body.sessionId ? {analysisId: response.body.sessionId} : {})});
     } catch (error: any) {
       if (sendAiDisabledErrorIfPresent(res, error)) {
         return;
@@ -444,77 +339,17 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
     }
   });
 
-  router.get('/scene-reconstruct/:analysisId/stream', (req, res) => {
-    const { analysisId } = req.params;
-    const session = getAuthorizedSceneSession(req, res, deps, analysisId);
-    if (!session) return;
-
-    deps.streamProjector.setSseHeaders(res);
-    deps.streamProjector.sendConnected(res, {
-      analysisId,
-      sessionId: analysisId,
-      status: session.status,
-      traceId: session.traceId,
-      query: session.query,
-      architecture: 'agent-driven',
-      timestamp: Date.now(),
-    });
-
-    // Replay buffered events BEFORE registering as live client — ensures events
-    // broadcast before SSE connect (e.g., state_timeline) are delivered exactly once.
-    // This matches the ordering in the primary agent SSE endpoint (agentRoutes.ts).
-    const eventBuffer = (session as any).sseEventBuffer as Array<{seqId: number; eventType: string; eventData: string}> | undefined;
-    const bufLen = eventBuffer?.length ?? 0;
-    session.logger?.info('SSE', 'Scene SSE connect', { buffer: bufLen, sseClients: session.sseClients.length, status: session.status });
-    if (eventBuffer && eventBuffer.length > 0) {
-      const lastEventId = parseInt(req.headers['last-event-id'] as string, 10) || 0;
-      const eventTypes = eventBuffer.map(e => e.eventType).join(',');
-      session.logger?.info('SSE', 'Replaying buffer', { count: eventBuffer.length, lastEventId, eventTypes });
-      const replayed = deps.streamProjector.replayBufferedEvents(res, eventBuffer, lastEventId);
-      session.logger?.info('SSE', 'Replay complete', { replayed, total: eventBuffer.length });
-    }
-
-    deps.assistantAppService.addSseClient(analysisId, res);
-    session.logger?.info('SSE', 'Client registered', {});
-
-    // Late-connect terminal handling. Two paths:
-    //  - Legacy agent-driven runs: session.result is set; send the legacy
-    //    payload then close.
-    //  - Scene Story runs (including cache hits): scene_story_report_ready
-    //    is already in sseEventBuffer above, replayed for the late client.
-    //    We just need to close the stream so the connection doesn't hang
-    //    open forever waiting for events that already fired.
-    const sceneStoryReport = session.sceneStoryReport;
-    if (session.status === 'completed' && (session.result || sceneStoryReport)) {
-      if (session.result) {
-        deps.sendAgentDrivenResult(res, session);
-      }
-      deps.streamProjector.sendEnd(res);
-      res.end();
-      return;
-    }
-
-    if (session.status === 'failed') {
-      deps.streamProjector.sendError(res, session.error);
-      deps.streamProjector.sendEnd(res);
-      res.end();
-      return;
-    }
-
-    req.on('close', () => {
-      console.log(`[AgentRoutes] Scene SSE client disconnected for ${analysisId}`);
-      deps.assistantAppService.removeSseClient(analysisId, res);
-    });
-
-    deps.streamProjector.bindKeepAlive(req, res);
+  router.get('/scene-reconstruct/:analysisId/stream', async (req, res) => {
+    await deps.streamSceneAnalysis(req, res, req.params.analysisId);
   });
 
-  router.get('/scene-reconstruct/:analysisId/tracks', (req, res) => {
+  router.get('/scene-reconstruct/:analysisId/tracks', async (req, res) => {
     const { analysisId } = req.params;
     const session = getAuthorizedSceneSession(req, res, deps, analysisId);
-    if (!session) return;
+    if (!session || !await deps.checkSceneHistory(req, res, analysisId)) return;
 
-    if (session.status !== 'completed') {
+    const canonical = deps.projectSceneResult(session);
+    if (session.status !== 'completed' && !canonical?.sceneTimeline) {
       return res.status(400).json({
         success: false,
         error: 'Analysis not yet completed',
@@ -526,19 +361,29 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
       success: true,
       tracks: session.trackEvents || [],
       scenes: session.scenes || [],
+      sceneTimeline: canonical?.sceneTimeline ? projectSceneTimelineForClient(canonical.sceneTimeline) : undefined,
     });
   });
 
-  router.get('/scene-reconstruct/:analysisId/status', (req, res) => {
+  router.get('/scene-reconstruct/:analysisId/status', async (req, res) => {
     const { analysisId } = req.params;
     const session = getAuthorizedSceneSession(req, res, deps, analysisId);
-    if (!session) return;
+    if (!session || !await deps.checkSceneHistory(req, res, analysisId)) return;
 
     const response: any = {
       success: true,
       analysisId,
       status: session.status,
     };
+    const canonical = deps.projectSceneResult(session);
+    if (canonical?.sceneTimeline) {
+      response.result = {narrative: canonical.conclusion, partial: canonical.partial,
+        sceneTimeline: projectSceneTimelineForClient(canonical.sceneTimeline), sceneReport: canonical.sceneReport,
+        confidence: canonical.confidence, executionTimeMs: canonical.totalDurationMs,
+        scenesCount: canonical.sceneTimeline.segments.length};
+      if (session.status === 'failed') response.error = session.error;
+      return res.json(response);
+    }
 
     // Two completion shapes — legacy agent-driven (session.result) and the
     // new Scene Story pipeline (session.sceneStoryReport). Surface whichever
@@ -582,7 +427,11 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
       const { eventId, eventType, startTs, endTs, appPackage } = req.body;
 
       const session = getAuthorizedSceneSession(req, res, deps, analysisId);
-      if (!session) return;
+      if (!session || !await deps.checkSceneHistory(req, res, analysisId)) return;
+      if (session.sceneReconstructionRunId || session.result?.sceneTimeline) {
+        return res.status(409).json({success: false, code: 'SCENE_INVESTIGATION_REQUIRED',
+          error: 'Continue through the analysis entrypoint to investigate a scene with current run authorization'});
+      }
 
       const route = getSceneDeepDiveRoute(eventType);
       if (!route) {
@@ -628,22 +477,29 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
   // DELETE which tears down the whole session — cancel keeps the session
   // and any partial results so the frontend can render whatever jobs
   // already completed before the cancel landed.
-  router.post('/scene-reconstruct/:analysisId/cancel', (req, res) => {
+  router.post('/scene-reconstruct/:analysisId/cancel', async (req, res) => {
     const { analysisId } = req.params;
     const session = getAuthorizedSceneSession(req, res, deps, analysisId);
     if (!session) return;
-    const cancelled = deps.sceneStoryService.cancel(analysisId);
-    res.json({
-      success: true,
-      cancelled,
-      sessionStatus: session.status,
-    });
+    const runId = typeof req.body?.runId === 'string' ? req.body.runId.trim() : '';
+    if (!runId) return res.status(400).json({success: false, code: 'RUN_ID_REQUIRED', error: 'runId is required for cancellation'});
+    const response = await deps.cancelSceneRun(analysisId, runId);
+    return res.status(response.status).json(response.body);
   });
 
-  router.delete('/scene-reconstruct/:analysisId', (req, res) => {
+  router.delete('/scene-reconstruct/:analysisId', async (req, res) => {
     const { analysisId } = req.params;
     const session = getAuthorizedSceneSession(req, res, deps, analysisId);
     if (!session) return;
+    if (session.sceneExecutionInFlightRunId || ['pending', 'running', 'awaiting_user'].includes(session.status)) {
+      return res.status(409).json({success: false, code: 'RUN_ALREADY_ACTIVE',
+        error: 'Cancel the active scene run and wait for cleanup before deleting its session'});
+    }
+    // Keep the exact object registered and closed to admission across async
+    // runtime cleanup. Removing it early would let persistence restore this ID.
+    const deletionMarker = `delete:${analysisId}`;
+    session.sceneExecutionInFlightRunId = deletionMarker;
+    session.lastActivityAt = Date.now();
 
     session.sseClients.forEach((client) => {
       try {
@@ -653,9 +509,14 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
       }
     });
 
-    session.orchestrator.reset();
-    deps.assistantAppService.deleteSession(analysisId);
-
-    res.json({ success: true });
+    try {
+      await Promise.resolve(session.orchestrator.cleanupSession?.(analysisId));
+      if (deps.assistantAppService.getSession(analysisId) === session) deps.assistantAppService.deleteSession(analysisId);
+      return res.json({success: true});
+    } catch {
+      return res.status(500).json({success: false, error: 'Failed to clean up scene session'});
+    } finally {
+      if (session.sceneExecutionInFlightRunId === deletionMarker) session.sceneExecutionInFlightRunId = undefined;
+    }
   });
 }

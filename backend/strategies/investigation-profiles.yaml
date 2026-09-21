@@ -101,3 +101,61 @@ profiles:
           absent saved dimensions not_checked; a missing metric is not zero or absence
           of a problem. Saved-result comparison uses stored provenance and does not
           silently fetch either raw trace to fill gaps. Separate observed deltas from causes.
+  scene_reconstruction:
+    version: 1
+    requirements:
+      - id: scene_input_observations
+        domain: scene_input
+        evidence_metrics: [scene.input.event_count]
+        description: >-
+          Reconstruct observed input actions with exact intervals and available
+          device, channel, display and target identities. Preserve partial dispatch,
+          missing action, cancellation and open gesture boundaries. Distinguish
+          physical events from delivery recipients. Missing input is unknown,
+          not evidence of inactivity or a completed gesture.
+      - id: scene_device_observations
+        domain: scene_device
+        evidence_metrics: [scene.device.state]
+        description: >-
+          Explain observed device state and changes separately from user action,
+          including screen, charging and committed device state plus other relevant
+          sources when captured. Preserve raw values and source coverage. Screen
+          state is not lock state; vendor device state numbers do not establish
+          posture without configuration evidence. Initial state before its first
+          observation remains unknown unless a prior observation supports carry-in.
+      - id: scene_application_response
+        domain: scene_response
+        description: >-
+          Relate user input to observed window, application lifecycle and rendering
+          responses only with compatible time and object evidence. Preserve
+          alternatives, process instances, multiple windows/displays and unresolved
+          ownership. ACK completion is not display completion; simultaneous
+          activity does not prove attribution or causation.
+      - id: scene_scan_coverage
+        domain: scene_coverage
+        description: >-
+          Account for the whole requested trace range, including observed,
+          unscanned and unknown intervals. Read complete available artifact pages;
+          distinguish transport pagination from producer SQL truncation.
+          Window further acquisition when needed, carry preceding states and
+          unfinished gestures, and deduplicate stable event identities across
+          boundaries. Preserve failures, truncation and exhausted budgets.
+      - id: scene_finding_coverage
+        domain: scene_findings
+        description: >-
+          In the visible account, retain every distinct material user-operation
+          phase, device transition and application response supported within the
+          requested scope. Include adjacent readable intervals, identities and
+          observed values or source limitations. A short overview or hidden
+          structured timeline cannot replace the explanation of material findings;
+          preserve late-trace observations and unresolved alternatives without
+          turning reconstruction into an unrelated performance-remediation task.
+      - id: scene_candidate_revision
+        domain: scene_revision
+        description: >-
+          Maintain the structured timeline through current-run candidate deltas.
+          Explain every segment's user action, device state and application response,
+          including explicit unknowns, using exact boundaries and original evidence
+          locators. Investigate competing explanations and correct segment identity,
+          boundaries or dependencies when evidence changes. Proposal acceptance and
+          finite checks do not establish semantic verification or full coverage.

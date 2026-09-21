@@ -26,7 +26,7 @@ function envelope(
   stepId: string,
   rows: Array<Record<string, any>>,
 ): DataEnvelope {
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const columns = [...new Set(rows.flatMap(row => Object.keys(row)))];
   return {
     meta: {
       type: 'list',
@@ -99,6 +99,17 @@ describe('buildDisplayedScenes', () => {
     ];
     const { scenes } = buildDisplayedScenes(envs);
     expect(scenes.map((s) => s.sceneType)).toEqual(['tap', 'scroll', 'long_press']);
+  });
+  it('displays scroll axis input neutrally while keeping legacy wheel reports readable', () => {
+    const {scenes} = buildDisplayedScenes([envelope('user_gestures', [
+      {ts: '10', dur: '0', gesture_type: 'scroll_input', device_id: 7, display_id: 3, input_source: 4098},
+      {ts: '20', dur: '0', gesture_type: 'wheel'},
+    ])]);
+    expect(scenes.map(scene => scene.sceneType)).toEqual(['scroll_input', 'wheel']);
+    expect(scenes[0]).toMatchObject({severity: 'unknown', metadata: {device_id: 7, display_id: 3, input_source: 4098}});
+    expect(scenes[0].label).toContain('滚动轴输入（ACTION_SCROLL）');
+    expect(scenes[0].label).not.toContain('滚轮');
+    expect(scenes[1].label).toContain('滚轮');
   });
 
   it('produces inertial_scroll scenes from inertial_scrolls', () => {
@@ -308,6 +319,88 @@ describe('buildDisplayedScenes', () => {
     ];
     const { scenes } = buildDisplayedScenes(envs);
     expect(scenes).toEqual([]);
+  });
+
+  it('keeps unclassified motion and cancelled input instead of inventing a tap', () => {
+    const {scenes} = buildDisplayedScenes([envelope('user_gestures', [
+      {ts: '0', dur: '100000000', gesture_type: 'input_unknown', source_status: 'partial', missing_action_count: 2},
+      {ts: '200000000', dur: '100000000', gesture_type: 'cancelled', source_status: 'observed', stream_key: 'window-A'},
+      {ts: '400000000', dur: '100000000', gesture_type: 'touch_move', source_status: 'observed'},
+    ])]);
+    expect(scenes.map(scene => scene.sceneType)).toEqual(['input_unknown', 'cancelled', 'touch_move']);
+    expect(scenes[0].metadata.missing_action_count).toBe(2);
+    expect(scenes[1].metadata.stream_key).toBe('window-A');
+    expect(scenes.every(scene => scene.severity === 'unknown')).toBe(true);
+  });
+
+  it('does not turn an uncovered input gap into idle or a good performance rating', () => {
+    const {scenes} = buildDisplayedScenes([envelope('idle_periods', [
+      {ts: '0', dur: '1000000000', category: 'unknown', source_status: 'unknown'},
+    ])]);
+    expect(scenes[0].sceneType).toBe('input_unknown');
+    expect(scenes[0].sceneRole).toBe('context');
+    expect(scenes[0].severity).toBe('unknown');
+  });
+
+  it('separates input duration from measured response and frame quality', () => {
+    const {scenes} = buildDisplayedScenes([
+      envelope('user_gestures', [
+        {ts: '0', dur: '500000000', gesture_type: 'tap', app_package: 'com.app'},
+        {ts: '1000000000', dur: '1000000000', gesture_type: 'long_press', app_package: 'com.app'},
+        {ts: '2000000000', dur: '1000000000', gesture_type: 'scroll', app_package: 'com.app'},
+      ]),
+      envelope('inertial_scrolls', [
+        {ts: '4000000000', dur: '1000000000', frame_count: 60, jank_frames: 60, app_package: 'com.app'},
+      ]),
+    ]);
+    expect(scenes.slice(0, 3).map(scene => scene.severity)).toEqual(['unknown', 'unknown', 'unknown']);
+    expect(scenes[3].severity).toBe('bad');
+  });
+
+  it('does not increase a low-confidence gesture score for derived copies of the same input', () => {
+    const gesture = envelope('user_gestures', [
+      {ts: '1000000000', dur: '100000000', gesture_type: 'scroll', app_package: 'com.app', confidence: '低'},
+    ]);
+    const original = buildDisplayedScenes([gesture]).scenes[0];
+    const enriched = buildDisplayedScenes([gesture,
+      envelope('clean_timeline', [{ts: '1000000000', dur: '100000000', event_type: 'scroll', app_package: 'com.app'}]),
+      envelope('operation_chain', [{ts: '1000000000', event: 'scroll', category: 'gesture'}]),
+    ]).scenes[0];
+    expect(original.confidenceLevel).toBe('low');
+    expect(enriched.confidenceScore).toBe(original.confidenceScore);
+  });
+
+  it('keeps nearby input from another app and distinct same-app input as separate candidates', () => {
+    const {scenes} = buildDisplayedScenes([
+      envelope('user_gestures', [{ts: '0', dur: '10000000', gesture_type: 'tap', app_package: 'com.first'}]),
+      envelope('clean_timeline', [
+        {ts: '0', dur: '10000000', event_type: 'tap', app_package: 'com.second'},
+        {ts: '20000000', dur: '10000000', event_type: 'tap', app_package: 'com.first'},
+      ]),
+    ]);
+    expect(scenes).toHaveLength(3);
+    expect(scenes[0].evidenceRefs).toHaveLength(1);
+  });
+
+  it('interprets typed screen states and keeps explicitly unknown screen intervals', () => {
+    const {scenes} = buildDisplayedScenes([envelope('screen_state_changes', [
+      {ts: '0', dur: '1', simple_screen_state: 'on'},
+      {ts: '1', dur: '1', simple_screen_state: 'off'},
+      {ts: '2', dur: '1', simple_screen_state: 'doze'},
+      {ts: '3', dur: '1', simple_screen_state: 'unknown'},
+    ])]);
+    expect(scenes.map(scene => scene.sceneType)).toEqual(['screen_on', 'screen_off', 'screen_sleep', 'screen_unknown']);
+    expect(scenes.every(scene => scene.severity === 'unknown')).toBe(true);
+  });
+
+  it('preserves a 1ns ordering difference above the safe Number range', () => {
+    const {scenes} = buildDisplayedScenes([envelope('user_gestures', [
+      {ts: '9007199254740994', dur: '1', gesture_type: 'tap', app_package: 'com.b'},
+      {ts: '9007199254740993', dur: '1', gesture_type: 'tap', app_package: 'com.a'},
+    ])]);
+    expect(scenes.map(scene => scene.startTs)).toEqual(['9007199254740993', '9007199254740994']);
+    expect(scenes[0].endTs).toBe('9007199254740994');
+    expect(scenes[0].durationMs).toBe(0.000001);
   });
 });
 

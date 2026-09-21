@@ -2615,7 +2615,7 @@
             "id": "strategy-overview",
             "type": "strategy",
             "target": "overview",
-            "query": "发生了什么",
+            "query": "性能概览",
             "expected_strategy": "overview",
             "source_file": "backend/strategies/overview.strategy.md",
             "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
@@ -3540,6 +3540,7 @@
               "trace_id": 1
             },
             "required_steps": [
+              "input_coverage",
               "trace_time_range",
               "table_availability",
               "screen_state_changes",
@@ -3566,6 +3567,7 @@
               "merged_timeline"
             ],
             "required_sql_steps": [
+              "input_coverage",
               "trace_time_range",
               "table_availability",
               "screen_state_changes",
@@ -3593,43 +3595,31 @@
             ],
             "forced_sql_steps": [
               "screen_state_changes",
+              "user_gestures",
+              "scroll_initiation",
               "navigation_keys",
+              "inertial_scrolls",
               "idle_periods",
-              "jank_events"
+              "jank_events",
+              "merged_timeline"
             ],
             "isolated_sql_probes": [],
             "expected_condition_skips": [
               {
                 "step": "top_app_changes",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-              },
-              {
-                "step": "user_gestures",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-              },
-              {
-                "step": "scroll_initiation",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+                "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
               },
               {
                 "step": "anr_events",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-              },
-              {
-                "step": "inertial_scrolls",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+                "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
               },
               {
                 "step": "app_launches",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+                "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
               },
               {
                 "step": "clean_timeline",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
-              },
-              {
-                "step": "merged_timeline",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+                "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
               }
             ],
             "semantic_step": "trace_time_range",
@@ -3650,6 +3640,7 @@
               "trace_id": 1
             },
             "required_steps": [
+              "input_coverage",
               "timeline_bounds",
               "device_state_lane",
               "device_state_lane_fallback",
@@ -3661,6 +3652,7 @@
               "lane_summary"
             ],
             "required_sql_steps": [
+              "input_coverage",
               "timeline_bounds",
               "device_state_lane",
               "device_state_lane_fallback",
@@ -3682,7 +3674,7 @@
             "expected_condition_skips": [
               {
                 "step": "app_state_lane",
-                "reason": "This conditional SQL is exercised only on its production branch because forcing it would mutate state or require condition-populated context."
+                "reason": "This conditional SQL remains exercised on its production branch; the contract analyzer does not classify it as an independently forceable read-only probe."
               }
             ],
             "semantic_step": "device_state_lane",
@@ -7969,6 +7961,1449 @@
       },
       "case_dir": "Trace/constructed/rendering-jank",
       "manifest_path": "Trace/constructed/rendering-jank/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "scene-observation-contracts",
+      "kind": "constructed",
+      "title": "Scene observation and device state contracts",
+      "description": "Independent constructed input, screen, charging and raw committed device-state observations. Gesture semantics and unknown coverage are checked against authored event sequences, not model output.",
+      "scene": "scene_reconstruction",
+      "tags": [
+        "android",
+        "constructed",
+        "scene",
+        "input",
+        "device-state"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "4e56dc4bf62953d04dad86b7a344128ccf60053689af674699bd1e6fb6dfd212",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Android 16 startup-light base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-09-21T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public",
+        "evidence_tier": "R3"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-startup-light",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "scene-observation-contracts-v1",
+        "output": "Trace/.generated/constructed/scene-observation-contracts/trace.pftrace",
+        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+      },
+      "coverage": {
+        "skills": [
+          "scene_reconstruction",
+          "state_timeline",
+          "scene_device_state_changes",
+          "scene_response_markers"
+        ],
+        "strategies": [
+          "scene_reconstruction"
+        ],
+        "expectations": [
+          {
+            "id": "response-fling-marker-execution",
+            "type": "skill",
+            "target": "scene_response_markers",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_response_markers.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "response_sources",
+              "response_markers"
+            ],
+            "required_sql_steps": [
+              "response_sources",
+              "response_markers"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "response_markers",
+            "required_columns": [
+              "slice_id",
+              "ts",
+              "dur",
+              "end_ts",
+              "raw_name",
+              "process_name",
+              "thread_name",
+              "identity_basis",
+              "source_status"
+            ],
+            "assertions": [
+              {
+                "column": "raw_name",
+                "operator": "eq",
+                "value": "FlingStart duration=1580, direction=VERTICAL, caller=UNKNOWN"
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "781"
+              },
+              {
+                "column": "identity_basis",
+                "operator": "eq",
+                "value": "thread_track"
+              },
+              {
+                "column": "process_name",
+                "operator": "eq",
+                "value": "com.smartperfetto.fixture"
+              },
+              {
+                "column": "name_parameter_semantics",
+                "operator": "eq",
+                "value": "uninterpreted_producer_text"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "response-scroll-process-track",
+            "type": "skill",
+            "target": "scene_response_markers",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_response_markers.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "response_sources",
+              "response_markers"
+            ],
+            "required_sql_steps": [
+              "response_sources",
+              "response_markers"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "response_markers",
+            "required_columns": [
+              "slice_id",
+              "ts",
+              "dur",
+              "end_ts",
+              "raw_name",
+              "process_name",
+              "thread_name",
+              "identity_basis",
+              "source_status"
+            ],
+            "assertions": [
+              {
+                "column": "raw_name",
+                "operator": "eq",
+                "value": "Scroll"
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "100600833"
+              },
+              {
+                "column": "identity_basis",
+                "operator": "eq",
+                "value": "process_track"
+              },
+              {
+                "column": "process_name",
+                "operator": "eq",
+                "value": "com.smartperfetto.fixture"
+              },
+              {
+                "column": "semantic_limit",
+                "operator": "eq",
+                "value": "slice_execution_only_not_action_extent_or_presentation"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-screen-on",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "screen"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "on"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-screen-off",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "screen"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "off"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-screen-doze",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "screen"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "doze"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-charging-charging",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "charging"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "charging"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-charging-discharging",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "charging"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "discharging"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-charging-not_charging",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "charging"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "not_charging"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-charging-full",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "charging"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "full"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-device_state-17",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "device_state"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "17"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              },
+              {
+                "column": "semantic_limit",
+                "operator": "eq",
+                "value": "posture_requires_device_state_configuration"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "device-device_state-23",
+            "type": "skill",
+            "target": "scene_device_state_changes",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+            "parameters": {
+              "start_ts": "${fixture_start}",
+              "end_ts": "${fixture_end}"
+            },
+            "required_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "required_sql_steps": [
+              "state_sources",
+              "state_intervals"
+            ],
+            "forced_sql_steps": [],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [],
+            "semantic_step": "state_intervals",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ],
+            "assertions": [
+              {
+                "column": "dimension",
+                "operator": "eq",
+                "value": "device_state"
+              },
+              {
+                "column": "state_value",
+                "operator": "eq",
+                "value": "23"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              },
+              {
+                "column": "semantic_limit",
+                "operator": "eq",
+                "value": "posture_requires_device_state_configuration"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "native-input-touch_move",
+            "type": "skill",
+            "target": "scene_reconstruction",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "forced_sql_steps": [
+              "screen_state_changes",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "inertial_scrolls",
+              "idle_periods",
+              "jank_events",
+              "merged_timeline"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "top_app_changes",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "anr_events",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "app_launches",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "clean_timeline",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "user_gestures",
+            "required_columns": [
+              "ts",
+              "dur",
+              "event",
+              "gesture_type",
+              "confidence",
+              "move_count",
+              "app_package",
+              "category"
+            ],
+            "assertions": [
+              {
+                "column": "device_id",
+                "operator": "eq",
+                "value": 101
+              },
+              {
+                "column": "gesture_type",
+                "operator": "eq",
+                "value": "touch_move"
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "30000000"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "native-input-cancelled",
+            "type": "skill",
+            "target": "scene_reconstruction",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "forced_sql_steps": [
+              "screen_state_changes",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "inertial_scrolls",
+              "idle_periods",
+              "jank_events",
+              "merged_timeline"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "top_app_changes",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "anr_events",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "app_launches",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "clean_timeline",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "user_gestures",
+            "required_columns": [
+              "ts",
+              "dur",
+              "event",
+              "gesture_type",
+              "confidence",
+              "move_count",
+              "app_package",
+              "category"
+            ],
+            "assertions": [
+              {
+                "column": "device_id",
+                "operator": "eq",
+                "value": 102
+              },
+              {
+                "column": "gesture_type",
+                "operator": "eq",
+                "value": "cancelled"
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "10000000"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "native-input-input_unknown",
+            "type": "skill",
+            "target": "scene_reconstruction",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "forced_sql_steps": [
+              "screen_state_changes",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "inertial_scrolls",
+              "idle_periods",
+              "jank_events",
+              "merged_timeline"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "top_app_changes",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "anr_events",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "app_launches",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "clean_timeline",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "user_gestures",
+            "required_columns": [
+              "ts",
+              "dur",
+              "event",
+              "gesture_type",
+              "confidence",
+              "move_count",
+              "app_package",
+              "category"
+            ],
+            "assertions": [
+              {
+                "column": "device_id",
+                "operator": "eq",
+                "value": 103
+              },
+              {
+                "column": "gesture_type",
+                "operator": "eq",
+                "value": "input_unknown"
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "0"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "partial"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "native-input-touch_hold",
+            "type": "skill",
+            "target": "scene_reconstruction",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "forced_sql_steps": [
+              "screen_state_changes",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "inertial_scrolls",
+              "idle_periods",
+              "jank_events",
+              "merged_timeline"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "top_app_changes",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "anr_events",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "app_launches",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "clean_timeline",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "user_gestures",
+            "required_columns": [
+              "ts",
+              "dur",
+              "event",
+              "gesture_type",
+              "confidence",
+              "move_count",
+              "app_package",
+              "category"
+            ],
+            "assertions": [
+              {
+                "column": "device_id",
+                "operator": "eq",
+                "value": 104
+              },
+              {
+                "column": "gesture_type",
+                "operator": "eq",
+                "value": "touch_hold"
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "500000000"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "native-input-scroll-axis",
+            "type": "skill",
+            "target": "scene_reconstruction",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "trace_time_range",
+              "table_availability",
+              "screen_state_changes",
+              "top_app_changes",
+              "activity_lifecycle",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "gesture_navigation",
+              "window_transitions",
+              "anr_events",
+              "ime_events",
+              "inertial_scrolls",
+              "idle_periods",
+              "app_launches",
+              "system_events",
+              "broadcast_events",
+              "cross_process_interactions",
+              "jank_events",
+              "device_state",
+              "app_state_tracking",
+              "operation_chain",
+              "clean_timeline",
+              "merged_timeline"
+            ],
+            "forced_sql_steps": [
+              "screen_state_changes",
+              "user_gestures",
+              "scroll_initiation",
+              "navigation_keys",
+              "inertial_scrolls",
+              "idle_periods",
+              "jank_events",
+              "merged_timeline"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "top_app_changes",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "anr_events",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "app_launches",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              },
+              {
+                "step": "clean_timeline",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "user_gestures",
+            "required_columns": [
+              "ts",
+              "dur",
+              "event",
+              "gesture_type",
+              "confidence",
+              "move_count",
+              "app_package",
+              "category"
+            ],
+            "assertions": [
+              {
+                "column": "device_id",
+                "operator": "eq",
+                "value": 105
+              },
+              {
+                "column": "gesture_type",
+                "operator": "eq",
+                "value": "scroll_input"
+              },
+              {
+                "column": "input_source",
+                "operator": "eq",
+                "value": 4098
+              },
+              {
+                "column": "dur",
+                "operator": "eq",
+                "value": "0"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "missing-input-is-not-idle",
+            "type": "skill",
+            "target": "state_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/state_timeline.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "timeline_bounds",
+              "device_state_lane",
+              "device_state_lane_fallback",
+              "input_state_lane_frames",
+              "input_state_lane_fallback",
+              "app_state_lane",
+              "app_state_lane_fallback",
+              "system_state_lane",
+              "lane_summary"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "timeline_bounds",
+              "device_state_lane",
+              "device_state_lane_fallback",
+              "input_state_lane_frames",
+              "input_state_lane_fallback",
+              "app_state_lane",
+              "app_state_lane_fallback",
+              "system_state_lane",
+              "lane_summary"
+            ],
+            "forced_sql_steps": [
+              "device_state_lane",
+              "device_state_lane_fallback",
+              "input_state_lane_frames",
+              "input_state_lane_fallback",
+              "app_state_lane_fallback"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "app_state_lane",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "input_state_lane_frames",
+            "required_columns": [
+              "lane",
+              "state",
+              "state_label",
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dur_ms",
+              "source_status"
+            ],
+            "assertions": [
+              {
+                "column": "state",
+                "operator": "eq",
+                "value": "INPUT_UNKNOWN"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "partial"
+              },
+              {
+                "column": "device_id",
+                "operator": "eq",
+                "value": 103
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "text-screen-doze",
+            "type": "skill",
+            "target": "state_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/state_timeline.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "input_coverage",
+              "timeline_bounds",
+              "device_state_lane",
+              "device_state_lane_fallback",
+              "input_state_lane_frames",
+              "input_state_lane_fallback",
+              "app_state_lane",
+              "app_state_lane_fallback",
+              "system_state_lane",
+              "lane_summary"
+            ],
+            "required_sql_steps": [
+              "input_coverage",
+              "timeline_bounds",
+              "device_state_lane",
+              "device_state_lane_fallback",
+              "input_state_lane_frames",
+              "input_state_lane_fallback",
+              "app_state_lane",
+              "app_state_lane_fallback",
+              "system_state_lane",
+              "lane_summary"
+            ],
+            "forced_sql_steps": [
+              "device_state_lane",
+              "device_state_lane_fallback",
+              "input_state_lane_frames",
+              "input_state_lane_fallback",
+              "app_state_lane_fallback"
+            ],
+            "isolated_sql_probes": [],
+            "expected_condition_skips": [
+              {
+                "step": "app_state_lane",
+                "reason": "Run on its declared production condition; the current SQL contract does not independently force this branch."
+              }
+            ],
+            "semantic_step": "device_state_lane",
+            "required_columns": [
+              "lane",
+              "state",
+              "state_label",
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dur_ms",
+              "source_status"
+            ],
+            "assertions": [
+              {
+                "column": "state",
+                "operator": "eq",
+                "value": "SCREEN_DOZE"
+              },
+              {
+                "column": "source_status",
+                "operator": "eq",
+                "value": "observed"
+              }
+            ],
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          },
+          {
+            "id": "strategy-scene-reconstruction",
+            "type": "strategy",
+            "target": "scene_reconstruction",
+            "query": "场景还原",
+            "expected_strategy": "scene_reconstruction",
+            "source_file": "backend/strategies/scene-reconstruction.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::scene-observation-contracts"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/scene-observation-contracts",
+      "manifest_path": "Trace/constructed/scene-observation-contracts/case.json"
     },
     {
       "schema_version": 1,

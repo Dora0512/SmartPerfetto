@@ -1,0 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2024-2026 Gracker (Chris) | SmartPerfetto -->
+
+Reconstruct the complete sequence of user actions, device state changes and application responses in the current trace. Establish the available sources and time range, query input, device and window facts, then investigate ambiguities and revise the segments. For each exact interval, explain what the user was doing, the device state and the application response; submit the timeline through the active scene proposal tool with original evidence references. Scan long traces in bounded windows while carrying state and unfinished gestures across boundaries. Preserve unknowns, missing data, unscanned intervals and verification limits instead of treating them as inactivity or confirmed states.

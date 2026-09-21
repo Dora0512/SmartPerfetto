@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2024-2026 Gracker (Chris)
 
+import {readRuntimeToolResultFacts} from '../../agentRuntime/runtimeToolResult';
 import type {RuntimeToolInvocationEvent} from '../../agentRuntime/runtimeToolObserver';
 import {FINAL_SEMANTIC_INPUT_BYTE_LIMIT} from '../finalSemanticLimits';
 import type {EvidenceReadRecord, EvidenceReadViewOptions} from './evidenceReadView';
@@ -12,9 +13,29 @@ export interface InvestigationEvidenceDeclaration {
   window: {start: string; end: string};
   identity?: {upid?: string; utid?: string; cpu?: string; ucpu?: string; machine_id?: string};
   context?: {window_id?: string; role?: string};
+  scan?: InvestigationScanDeclaration;
   metrics: Array<{domain: string; metric_id: string; value: string; unit?: string;
     status: string; coverage?: string; denominator?: string; aggregation?: string}>;
 }
+/** A registered SQL producer describes its own non-paged scan and sibling output. */
+export interface InvestigationScanDeclaration {
+  domain: string; resultStepId: string;
+  sourceColumn?: string; resultSourceColumn?: string;
+  totalRowsColumn: string; outputTruncatedColumn: string; cursorClosedColumn: string; parseFailuresColumn: string;
+}
+export interface InvestigationScanRecord {
+  readonly recordId: string; readonly captureId: string; readonly resultCaptureId?: string;
+  readonly originRunId: string; readonly traceId: string; readonly traceSide: 'current';
+  readonly skillId: string; readonly stepId: string; readonly resultStepId: string;
+  readonly sourceToolCallId: string; readonly definitionFingerprint: string;
+  readonly selectedSqlHash: string; readonly resultSqlHash?: string;
+  readonly domain: string; readonly source: string;
+  readonly window: {start: string; end: string}; readonly totalRows?: string; readonly returnedRows?: string;
+  readonly scanStatus: 'complete' | 'partial'; readonly captureStatus: 'unknown';
+  readonly issues: readonly string[];
+}
+export const SCAN_RECORD_BUDGET = 1024;
+export const SCAN_ROW_CHECK_BUDGET = 65536;
 interface ProducerBinding {
   declaration: InvestigationEvidenceDeclaration;
   definitionFingerprint: string;
@@ -79,6 +100,8 @@ export interface InvestigationEvidenceSnapshot {
   readonly currentRunId?: string;
   readonly fingerprint: string;
   readonly records: readonly InvestigationEvidenceRecord[];
+  readonly scans?: readonly InvestigationScanRecord[];
+  readonly scanIssues?: readonly string[];
   readonly issues: readonly string[];
   readonly incompleteCaptureIds?: readonly string[];
   readonly complete: boolean;
@@ -99,10 +122,20 @@ export function isInvestigationEvidenceDeclaration(value: unknown): value is Inv
       ['upid', 'utid', 'cpu', 'ucpu', 'machine_id'].includes(key) && nonempty(column))) &&
     (!declaration.context || Object.entries(declaration.context).every(([key, column]) =>
       ['window_id', 'role'].includes(key) && nonempty(column))) &&
-    Array.isArray(declaration.metrics) && declaration.metrics.length > 0 && declaration.metrics.every(metric =>
+    (declaration.scan === undefined || validScanDeclaration(declaration.scan)) &&
+    Array.isArray(declaration.metrics) && declaration.metrics.every(metric =>
       metric && nonempty(metric.domain) && nonempty(metric.metric_id) && nonempty(metric.value) && nonempty(metric.status) &&
       [metric.unit, metric.coverage, metric.denominator, metric.aggregation].every(field => field === undefined || nonempty(field)) &&
       (metric.coverage === undefined) === (metric.denominator === undefined)));
+}
+
+function validScanDeclaration(scan: InvestigationScanDeclaration): boolean {
+  const required = ['domain', 'resultStepId', 'totalRowsColumn', 'outputTruncatedColumn', 'cursorClosedColumn', 'parseFailuresColumn'];
+  return Boolean(scan && typeof scan === 'object' && !Array.isArray(scan) &&
+    Object.keys(scan).every(key => [...required, 'sourceColumn', 'resultSourceColumn'].includes(key)) &&
+    required.every(key => nonempty(scan[key as keyof InvestigationScanDeclaration])) &&
+    (scan.sourceColumn === undefined) === (scan.resultSourceColumn === undefined) &&
+    [scan.sourceColumn, scan.resultSourceColumn].every(value => value === undefined || nonempty(value)));
 }
 
 /** Validate nested Skill declarations before admitting a definition into the executor. */
@@ -127,7 +160,7 @@ export function investigationCaptureFields(declaration: InvestigationEvidenceDec
   const fields: Record<string, CapturedFieldSemantics> = Object.create(null);
   const merge = (column: string, next: CapturedFieldSemantics): void => {
     const previous = fields[column];
-    for (const key of ['unit', 'timeRole', 'clock', 'metricId', 'aggregation', 'populationKey'] as const) {
+    for (const key of ['unit', 'timeRole', 'clock', 'identityRole', 'metricId', 'aggregation', 'populationKey'] as const) {
       if (previous?.[key] !== undefined && next[key] !== undefined && previous[key] !== next[key]) {
         throw new Error(`Invalid investigation_evidence conflicting field semantics: ${column}.${key}`);
       }
@@ -136,6 +169,9 @@ export function investigationCaptureFields(declaration: InvestigationEvidenceDec
   };
   merge(declaration.window.start, {origin, unit: 'ns', timeRole: 'start', clock: 'trace_monotonic'});
   merge(declaration.window.end, {origin, unit: 'ns', timeRole: 'end', clock: 'trace_monotonic'});
+  for (const [identityRole, column] of Object.entries(declaration.identity ?? {})) {
+    if (column) merge(column, {origin, identityRole: identityRole as CapturedFieldSemantics['identityRole']});
+  }
   for (const metric of declaration.metrics) {
     merge(metric.value, {origin, metricId: metric.metric_id, ...(metric.unit ? {unit: metric.unit} : {}),
       ...(metric.aggregation ? {aggregation: metric.aggregation} : {})});
@@ -156,16 +192,17 @@ export function attachInvestigationEvidence(witness: EvidenceTableWitness, bindi
   bindings.set(witness, freezeEvidenceValue(structuredClone(binding)));
 }
 
-export type InvestigationToolObservation = {toolCallId: string; phase: 'started' | 'completed' | 'failed'; failed: boolean; originRunId?: string};
+export type InvestigationToolObservation = {toolCallId: string; phase: 'started' | 'completed' | 'failed'; failed: boolean; success?: boolean; originRunId?: string};
 export function captureInvestigationToolObservation(event: RuntimeToolInvocationEvent): InvestigationToolObservation {
   return Object.freeze({toolCallId: event.toolCallId, phase: event.phase,
+    ...(event.phase === 'completed' ? {success: readRuntimeToolResultFacts(event.result).success} : {}),
     failed: event.phase === 'failed' || (event.phase === 'completed' && event.result.isError === true)});
 }
 
 export function investigationEvidenceFingerprint(snapshot: Omit<InvestigationEvidenceSnapshot, 'fingerprint'>): string {
-  const {schemaVersion, ownerKey, currentRunId, records, issues, complete, incompleteCaptureIds} = snapshot;
+  const {schemaVersion, ownerKey, currentRunId, records, issues, complete, incompleteCaptureIds, scans, scanIssues} = snapshot;
   return evidenceCaptureHash({schemaVersion, ownerKey, currentRunId, records, issues, complete,
-    ...(incompleteCaptureIds ? {incompleteCaptureIds} : {})});
+    ...(incompleteCaptureIds ? {incompleteCaptureIds} : {}), ...(scans ? {scans} : {}), ...(scanIssues ? {scanIssues} : {})});
 }
 export function isIssuedInvestigationEvidenceSnapshot(value: unknown): value is InvestigationEvidenceSnapshot {
   return Boolean(value && typeof value === 'object' && issuedSnapshots.has(value));
@@ -232,6 +269,98 @@ export function compactInvestigationEvidenceForSemantic(snapshot: InvestigationE
   return compactInvestigationEvidenceWithin(snapshot, maxBytes, FINAL_SEMANTIC_INPUT_BYTE_LIMIT);
 }
 
+/** Independent from metric presence/identity: an empty successful sibling is meaningful for a scan. */
+function buildScanRecords(captures: readonly EvidenceReadRecord[], options: EvidenceReadViewOptions,
+  toolStates: ReadonlyMap<string, InvestigationToolObservation>): {scans: InvestigationScanRecord[]; scanIssues: string[]} {
+  const scans: InvestigationScanRecord[] = [];
+  const scanIssues = new Set<string>();
+  const seen = new Set<string>();
+  let checkedRows = 0;
+  const allowed = new Set(options.allowedTraces.map(trace => `${trace.traceSide}:${trace.traceId}`));
+  for (const {record, witness} of captures) {
+    const binding = bindings.get(witness), table = capturedEvidenceTable(witness);
+    const scan = binding?.declaration.scan;
+    if (!binding || !scan || seen.has(witness.captureId)) continue;
+    seen.add(witness.captureId);
+    // Retained history/reference traces are not acquisitions of the active scan run.
+    if (!options.currentRunId || record.originRunId !== options.currentRunId || record.meta.traceSide !== 'current' ||
+        !allowed.has(`current:${record.meta.traceId}`)) continue;
+    if (binding.traceId !== record.meta.traceId ||
+        !record.meta.sourceToolCallId || record.captureId !== witness.captureId || !table || table.unavailableReason ||
+        ['optional_error', 'unavailable'].includes(record.meta.executionStatus || '') ||
+        new Set(table.columns).size !== table.columns.length) {
+      scanIssues.add('scan_scope_or_summary_unavailable'); continue;
+    }
+    if (!table.rows.length) {scanIssues.add('scan_summary_empty'); continue;}
+    const observation = toolStates.get(`${record.originRunId}:${record.meta.sourceToolCallId}`);
+    const siblings = new Map<string, EvidenceReadRecord>();
+    for (const candidate of captures) {
+      const sibling = bindings.get(candidate.witness);
+      if (sibling?.skillId === binding.skillId && sibling.stepId === scan.resultStepId &&
+          sibling.definitionFingerprint === binding.definitionFingerprint && sibling.traceId === binding.traceId &&
+          candidate.record.originRunId === record.originRunId && candidate.record.meta.traceId === record.meta.traceId &&
+          candidate.record.meta.traceSide === record.meta.traceSide &&
+          candidate.record.meta.sourceToolCallId === record.meta.sourceToolCallId) siblings.set(candidate.witness.captureId, candidate);
+    }
+    for (let index = 0; index < table.rows.length; index++) {
+      if (scans.length >= SCAN_RECORD_BUDGET) {scanIssues.add('scan_record_budget_exhausted'); break;}
+      if (++checkedRows > SCAN_ROW_CHECK_BUDGET) {scanIssues.add('scan_row_budget_exhausted'); break;}
+      const read = (column: string) => table.rows[index][table.columns.indexOf(column)];
+      const start = read(binding.declaration.window.start), end = read(binding.declaration.window.end);
+      if (!exactNs(start) || !exactNs(end) || BigInt(end) < BigInt(start)) {scanIssues.add('scan_window_invalid'); continue;}
+      const issues = new Set<string>();
+      const sourceValue = scan.sourceColumn ? read(scan.sourceColumn) : 'all';
+      const sourceValid = typeof sourceValue === 'string' && sourceValue.trim().length > 0 && sourceValue.length <= 256;
+      if (!sourceValid) issues.add('scan_source_invalid');
+      if (observation?.phase !== 'completed' || observation.failed || observation.success !== true) issues.add('scan_tool_success_unproven');
+      const total = read(scan.totalRowsColumn), truncated = read(scan.outputTruncatedColumn), cursor = read(scan.cursorClosedColumn), failures = read(scan.parseFailuresColumn);
+      if (!exactNs(total)) issues.add('scan_total_invalid');
+      if (truncated !== 0) issues.add('scan_output_truncated_or_unknown');
+      if (cursor !== 1) issues.add('scan_cursor_not_closed');
+      if (!exactNs(failures) || BigInt(failures) !== 0n) issues.add('scan_parse_failures_or_unknown');
+      const sibling = siblings.size === 1 ? [...siblings.values()][0] : undefined;
+      if (!sibling) issues.add(siblings.size ? 'scan_result_ambiguous' : 'scan_result_missing');
+      const resultTable = sibling && capturedEvidenceTable(sibling.witness);
+      const resultBinding = sibling && bindings.get(sibling.witness);
+      let returned: number | undefined;
+      if (sibling && resultBinding && resultTable) {
+        if (sibling.record.captureId !== sibling.witness.captureId || resultTable.unavailableReason ||
+            ['optional_error', 'unavailable'].includes(sibling.record.meta.executionStatus || '') ||
+            new Set(resultTable.columns).size !== resultTable.columns.length) issues.add('scan_result_unavailable');
+        else if (!resultTable.columns.includes(resultBinding.declaration.window.start) ||
+            !resultTable.columns.includes(resultBinding.declaration.window.end)) issues.add('scan_result_window_columns_missing');
+        else if (scan.resultSourceColumn && !resultTable.columns.includes(scan.resultSourceColumn)) issues.add('scan_result_source_missing');
+        else {
+          returned = 0;
+          for (const row of resultTable.rows) {
+            if (++checkedRows > SCAN_ROW_CHECK_BUDGET) {issues.add('scan_row_budget_exhausted'); scanIssues.add('scan_row_budget_exhausted'); break;}
+            if (scan.resultSourceColumn) {
+              const value = row[resultTable.columns.indexOf(scan.resultSourceColumn)];
+              if (typeof value !== 'string' || !value.trim() || value.length > 256) issues.add('scan_result_source_invalid');
+              if (value !== sourceValue) continue;
+            }
+            returned++;
+            const rowStart = row[resultTable.columns.indexOf(resultBinding.declaration.window.start)];
+            const rowEnd = row[resultTable.columns.indexOf(resultBinding.declaration.window.end)];
+            if (!exactNs(rowStart) || !exactNs(rowEnd) || BigInt(rowStart) > BigInt(rowEnd) ||
+                BigInt(rowStart) < BigInt(start) || BigInt(rowEnd) > BigInt(end)) issues.add('scan_result_window_invalid');
+          }
+          if (exactNs(total) && BigInt(returned) !== BigInt(total)) issues.add('scan_result_count_mismatch');
+        }
+      }
+      scans.push({recordId: `${witness.captureId}:scan:${index}`, captureId: witness.captureId,
+        ...(sibling ? {resultCaptureId: sibling.witness.captureId, resultSqlHash: resultBinding?.selectedSqlHash} : {}),
+        originRunId: record.originRunId, traceId: binding.traceId, traceSide: 'current', skillId: binding.skillId,
+        stepId: binding.stepId, resultStepId: scan.resultStepId, sourceToolCallId: record.meta.sourceToolCallId,
+        definitionFingerprint: binding.definitionFingerprint, selectedSqlHash: binding.selectedSqlHash,
+        domain: scan.domain, source: sourceValid ? sourceValue as string : 'unknown', window: {start: String(start), end: String(end)},
+        ...(exactNs(total) ? {totalRows: String(total)} : {}), ...(returned !== undefined ? {returnedRows: String(returned)} : {}),
+        scanStatus: issues.size ? 'partial' : 'complete', captureStatus: 'unknown', issues: [...issues].sort()});
+    }
+  }
+  return {scans, scanIssues: [...scanIssues].sort()};
+}
+
 /** The caller supplies retained private witnesses, never serialized artifact payloads. */
 export function buildInvestigationEvidenceSnapshot(captures: readonly EvidenceReadRecord[], options: EvidenceReadViewOptions,
   observations: readonly InvestigationToolObservation[] = []): InvestigationEvidenceSnapshot {
@@ -241,13 +370,14 @@ export function buildInvestigationEvidenceSnapshot(captures: readonly EvidenceRe
   const perMetricCounts = new Map<string, number>();
   const allowed = new Set(options.allowedTraces.map(trace => `${trace.traceSide}:${trace.traceId}`));
   const toolStates = new Map(observations.map(observation => [`${observation.originRunId || ''}:${observation.toolCallId}`, observation]));
+  const scanResult = buildScanRecords(captures, options, toolStates);
   for (const observation of toolStates.values()) {
     if ((!options.currentRunId || observation.originRunId === options.currentRunId) &&
         (observation.phase === 'started' || observation.failed)) issues.add('tool_observation_incomplete');
   }
   for (const {record, witness} of captures) {
     const binding = bindings.get(witness);
-    if (!binding) continue; // Arbitrary SQL does not acquire producer authority by choosing familiar aliases.
+    if (!binding || !binding.declaration.metrics.length) continue; // Arbitrary SQL does not acquire producer authority by choosing familiar aliases.
     const incomplete = (issue: string) => {issues.add(issue); incompleteCaptureIds.add(witness.captureId);};
     const table = capturedEvidenceTable(witness);
     const meta = record.meta;
@@ -324,7 +454,8 @@ export function buildInvestigationEvidenceSnapshot(captures: readonly EvidenceRe
   }
   const body = {schemaVersion: 'investigation_evidence@1' as const, ownerKey: options.ownerKey,
     ...(options.currentRunId ? {currentRunId: options.currentRunId} : {}), records, issues: [...issues].sort(),
-    incompleteCaptureIds: [...incompleteCaptureIds].sort(), complete: issues.size === 0};
+    incompleteCaptureIds: [...incompleteCaptureIds].sort(), complete: issues.size === 0,
+    ...(scanResult.scans.length || scanResult.scanIssues.length ? scanResult : {})};
   const snapshot = freezeEvidenceValue({...body, fingerprint: investigationEvidenceFingerprint(body)});
   issuedSnapshots.add(snapshot);
   return snapshot;

@@ -15,6 +15,7 @@ import type {
   SynthesizeConfig,
 } from '../src/services/skillEngine/types';
 import {humanizeSkillIdentifier} from '../src/services/skillLocalizationLabels';
+import {isDisplayTitleTranslations, validateSkillDisplayContract} from '../src/services/skillEngine/displayContractValidator';
 
 type OutputLanguage = 'zh-CN' | 'en';
 
@@ -77,13 +78,16 @@ function humanizeIdentifierZh(value: string): string {
   return humanizeSkillIdentifier(value, 'zh-CN') || value.trim() || '未命名';
 }
 
-function localizedTitle(authored: unknown, stableId: string): LocalizedText {
+function localizedTitle(authored: unknown, stableId: string, titles?: DisplayConfig['title_i18n']): LocalizedText {
+  if (titles !== undefined && !isDisplayTitleTranslations(titles)) {
+    throw new Error(`Invalid title_i18n for ${stableId}`);
+  }
   const source = sentence(authored);
   const identifierEn = humanizeIdentifier(stableId);
   const identifierZh = humanizeIdentifierZh(stableId);
   return {
-    'zh-CN': source && HAN_RE.test(source) ? source : identifierZh,
-    en: source && !HAN_RE.test(source) ? source : identifierEn,
+    'zh-CN': titles?.['zh-CN']?.trim() ?? (source && HAN_RE.test(source) ? source : identifierZh),
+    en: titles?.en?.trim() ?? (source && !HAN_RE.test(source) ? source : identifierEn),
   };
 }
 
@@ -197,7 +201,8 @@ function collectSteps(skill: SkillDefinition): Record<string, CatalogStep> {
         ? raw.display.title
         : undefined;
       const entry = result[stepId] || emptyStep(
-        localizedTitle(displayTitle || raw.name, stepId),
+        localizedTitle(displayTitle || raw.name, stepId,
+          typeof raw.display === 'object' ? raw.display.title_i18n : undefined),
       );
       if (typeof raw.description === 'string' && raw.description.trim()) {
         entry.description = localizedDescription(raw.description, stepId);
@@ -223,6 +228,10 @@ function collectSteps(skill: SkillDefinition): Record<string, CatalogStep> {
 }
 
 function buildCatalog(skills: SkillDefinition[]): SkillLocalizationCatalog {
+  for (const skill of skills) {
+    const invalidTitles = validateSkillDisplayContract(skill).filter(issue => issue.field.endsWith('.title_i18n'));
+    if (invalidTitles.length) throw new Error(invalidTitles.map(issue => `${skill.name}: ${issue.path}: ${issue.message}`).join('\n'));
+  }
   const orderedSkills = [...skills].sort((left, right) =>
     left.name.localeCompare(right.name));
   const catalogSkills: Record<string, CatalogSkill> = {};

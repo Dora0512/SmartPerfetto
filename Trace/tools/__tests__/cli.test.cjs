@@ -272,3 +272,28 @@ test('CLI parser preserves repeated evidence flags without treating values as po
   assert.deepEqual(parsed.positional, []);
   assert.equal(parsed.repoRoot, path.resolve('/tmp/trace-repo'));
 });
+
+test('CLI expectations requires exactly one constructed case and supports read-only check', t => {
+  const {repoRoot} = createIndexFixture();
+  t.after(() => fs.rmSync(repoRoot, {recursive: true, force: true}));
+  const caseDir = path.join(repoRoot, 'Trace/constructed/target');
+  writeJson(path.join(caseDir, 'case.json'), {schema_version: 1, id: 'target', kind: 'constructed',
+    coverage: {expectations: [{id: 'target-evidence'}]}});
+  const run = (...args) => spawnSync(process.execPath, [cliPath, 'expectations', ...args, '--repo', repoRoot], {encoding: 'utf8'});
+  for (const args of [[], ['--case'], ['--case', 'target', '--case', 'other'], ['--case', '../real/android-startup'],
+    ['--case', 'target', '--all'], ['--case', 'target', '--check', 'unexpected']]) {
+    assert.notEqual(run(...args).status, 0);
+  }
+  const output = path.join(caseDir, 'analysis/expected.json');
+  assert.equal(fs.existsSync(output), false);
+  const missing = run('--case', 'target', '--check');
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /stale expectations/);
+  assert.equal(fs.existsSync(path.dirname(output)), false);
+  const generated = run('--case', 'target');
+  assert.equal(generated.status, 0, generated.stderr);
+  assert.match(generated.stdout, /generated Trace\/constructed\/target\/analysis\/expected.json/);
+  const check = run('--case', 'target', '--check');
+  assert.equal(check.status, 0, check.stderr);
+  assert.match(check.stdout, /PASS expectations are current for target/);
+});

@@ -238,6 +238,9 @@ export interface AnalysisResult {
   runtimeAppendix?: AnalysisRuntimeAppendix;
   reportAssessment?: FinalReportAssessment;
   investigationAssessment?: import('../../types/analysisInvestigationAssessment').FinalInvestigationAssessment;
+  /** Product-finalized timeline. Stored copies carry historical checks only. */
+  sceneTimeline?: import('../scene/sceneTimelineContract').SceneTimelineAssessment;
+  sceneReport?: import('../../types/sceneTimeline').SceneReportReference;
   deliveryAssurance?: AnalysisDeliveryAssurance;
   conclusionContract?: ConclusionContract;
   claimSupport?: ClaimSupportV1[];

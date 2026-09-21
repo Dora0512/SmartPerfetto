@@ -3,7 +3,7 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
-import {MaxTurnsExceededError, OpenAIChatCompletionsModel, OpenAIProvider, Runner, tool, withTrace} from '@openai/agents';
+import {MaxTurnsExceededError, OpenAIChatCompletionsModel, OpenAIProvider, Runner, RunContext, tool, withTrace} from '@openai/agents';
 import {z} from 'zod';
 import {OpenAIRuntime, __testing} from '../openAiRuntime';
 import type {AnalysisPlanV3, PlanPhase} from '../../agentv3/types';
@@ -38,6 +38,7 @@ import {analysisDeliveryFingerprint} from '../../types/analysisDelivery';
 import {createAnalysisHistoryReader, toAnalysisHistoryTurn, withAnalysisHistoryReader} from '../../agentRuntime/analysisHistory';
 import {applyFinalResultQualityGate} from '../../services/finalResultQualityGate';
 import {createRuntimeSourceFinalizationFixture, SOURCE_FINALIZATION_CANARY, SOURCE_FINALIZATION_RAW_SOURCE} from '../../agentRuntime/__tests__/sourceFinalizationFixture';
+import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
 
 const runtimes: OpenAIRuntime[] = [];
 const privacySessions: string[] = [];
@@ -125,6 +126,35 @@ function streamContext(sessionId: string, quickMode: boolean) {
 }
 
 describe('OpenAI typed intent integration', () => {
+  it.each([false, true])('scene runtime matrix: OpenAI shared proposal survives provider failure=%s', async providerFailed => {
+    const f = createSceneRuntimeMatrixFixture('openai');
+    const runtime = createOpenAiRuntimeForTest(f.traceProcessorService);
+    let sceneTool: any;
+    let response: unknown;
+    jest.spyOn(Runner.prototype as any, 'run').mockImplementation(async (agent: any) => {
+      expect(agent.model).toBe('pinned-primary');
+      sceneTool = agent.tools.find((item: any) => item.name === 'propose_scene_timeline');
+      response = await sceneTool.invoke(new RunContext(), JSON.stringify(f.proposal()));
+      if (providerFailed) throw new Error('Mock provider failed after its accepted scene proposal');
+      return sdkStream('Scene candidates submitted.');
+    });
+    try {
+      const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
+      expect(result.turnIntent).toMatchObject({source: 'product', sceneId: 'scene_reconstruction'});
+      expect(intentTransport.runOpenAiIntentTransport).not.toHaveBeenCalled();
+      if (providerFailed) expect(result.partial).toBe(true);
+      expect(JSON.stringify(response)).toContain('accepted');
+      const snapshot = f.seal();
+      expect(snapshot.revision).toBe(1);
+      expect(snapshot.runId).toBe(f.scope.runId);
+      expect(snapshot.segments[0].evidence[0].source.originRunId).toBe(f.scope.runId);
+      expect(f.boundsQueries).toEqual([f.scope.traceId]);
+      f.controller.abort();
+      const late = await sceneTool.invoke(new RunContext(), JSON.stringify(f.proposal())).catch((error: Error) => ({error: error.message}));
+      expect(JSON.stringify(late)).not.toContain('"accepted":true');
+    } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
+    expect(runtime.artifactStores.has(f.scope.sessionId)).toBe(false);
+  });
   it.each(['fast', 'full', 'auto'] as const)('classifies %s once and keeps bounded answers independent of report shape', async analysisMode => {
     const runtime = createOpenAiRuntimeForTest();
     const prepare = prepareStub(runtime);

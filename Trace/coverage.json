@@ -184,7 +184,9 @@
       "rendering_pipeline_detection",
       "rn_bridge_to_frame_jank",
       "rn_fabric_render_jank",
+      "scene_device_state_changes",
       "scene_reconstruction",
+      "scene_response_markers",
       "sched_latency_in_range",
       "scheduler_module",
       "scheduling_analysis",
@@ -266,6 +268,7 @@
       "pipeline",
       "power",
       "runtime_correctness",
+      "scene_reconstruction",
       "scroll_response",
       "scrolling",
       "smart",
@@ -409,7 +412,9 @@
       "rendering_pipeline_detection",
       "rn_bridge_to_frame_jank",
       "rn_fabric_render_jank",
+      "scene_device_state_changes",
       "scene_reconstruction",
+      "scene_response_markers",
       "sched_latency_in_range",
       "scheduler_module",
       "scheduling_analysis",
@@ -662,7 +667,9 @@
       "rendering_pipeline_detection",
       "rn_bridge_to_frame_jank",
       "rn_fabric_render_jank",
+      "scene_device_state_changes",
       "scene_reconstruction",
+      "scene_response_markers",
       "sched_latency_in_range",
       "scheduler_module",
       "scheduling_analysis",
@@ -768,6 +775,7 @@
       "memory-gc-pressure",
       "power-thermal",
       "rendering-jank",
+      "scene-observation-contracts",
       "scheduler-cpu-contention",
       "source-analysis-semantic",
       "startup-lifecycle",
@@ -4049,6 +4057,91 @@
               "janky_frames",
               "max_overlap_ms",
               "severity"
+            ]
+          }
+        ]
+      },
+      {
+        "target": "scene_device_state_changes",
+        "source_file": "backend/skills/atomic/scene_device_state_changes.skill.yaml",
+        "modules": [
+          {
+            "name": "android.battery.charging_states",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/battery/charging_states.sql"
+          },
+          {
+            "name": "android.screen_state",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/screen_state.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "state_sources",
+            "sha256": "a9dfaefca5edd678982191fa2f35334b25a803c0fb2c39f4fc3b2ef51e22d1c8",
+            "required_columns": [
+              "dimension",
+              "total_rows",
+              "observed_rows",
+              "start_ts",
+              "end_ts",
+              "output_truncated",
+              "cursor_closed",
+              "parse_failure_count",
+              "source_status",
+              "reason"
+            ]
+          },
+          {
+            "id": "state_intervals",
+            "sha256": "9e808b5daf6b69390e81f826ee6a69db4bd4e0198d7ff3526bd3e859bc8728d0",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "dur_ns",
+              "dimension",
+              "fact_kind",
+              "state_value",
+              "source_status",
+              "boundary_basis"
+            ]
+          }
+        ]
+      },
+      {
+        "target": "scene_response_markers",
+        "source_file": "backend/skills/atomic/scene_response_markers.skill.yaml",
+        "modules": [],
+        "steps": [
+          {
+            "id": "response_sources",
+            "sha256": "bfdd3c29714f12a89330dd043c085372a8a4e08ae4b983ffa2b8069b50d622a3",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "total_rows",
+              "output_truncated",
+              "cursor_closed",
+              "parse_failure_count",
+              "open_marker_count",
+              "source_status",
+              "capture_status",
+              "marker_population",
+              "coverage_limit"
+            ]
+          },
+          {
+            "id": "response_markers",
+            "sha256": "cc879e908b019fd893353fe45cd9aef957b40d1f45cb98cd2706d837eb72a160",
+            "required_columns": [
+              "slice_id",
+              "ts",
+              "dur",
+              "end_ts",
+              "raw_name",
+              "process_name",
+              "thread_name",
+              "identity_basis",
+              "source_status"
             ]
           }
         ]
@@ -8995,8 +9088,31 @@
         ],
         "steps": [
           {
+            "id": "input_coverage",
+            "sha256": "ce9738a61efea81b4b931e87906ff0afcee6cbb2b2b771df50c3c03fbfd14ac8",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "observed_event_count",
+              "physical_event_count",
+              "physical_missing_action_count",
+              "missing_action_count",
+              "missing_timestamp_count",
+              "timestamp_failure_scope",
+              "gesture_count",
+              "gap_count",
+              "output_row_limit",
+              "output_truncated",
+              "source_status",
+              "reason",
+              "inertial_source_status",
+              "cursor_closed",
+              "normalization_version"
+            ]
+          },
+          {
             "id": "trace_time_range",
-            "sha256": "4b0e4048f3bf092e5f856360b1775aa0aefc5826e75e233fb4902860fc48d0e6",
+            "sha256": "9c15def0db44bdad22228a937c7d2bed3683c7af1fb1ba8d6f89ed9cbaec4482",
             "required_columns": [
               "start_ts_str",
               "end_ts_str",
@@ -9019,7 +9135,7 @@
           },
           {
             "id": "screen_state_changes",
-            "sha256": "48488e088a9370a561c340201bf9c961bd8235ffa1f0eea70653dacc133e1dfc",
+            "sha256": "bce2ee710e1d34c754f21ae9c576298f6c5fc80ca4e94bc12b9de928ad9067bf",
             "required_columns": [
               "ts",
               "dur",
@@ -9029,7 +9145,7 @@
           },
           {
             "id": "top_app_changes",
-            "sha256": "d932535e8e1d48f7b0ca53d2f5aec3a7198af53b3d0704ddd4219f89affa6a83",
+            "sha256": "332295a8d17e03a1caaaab3ffa9fbc432e9d5f177b60cca8335e3a77b8cdb5e2",
             "required_columns": [
               "ts",
               "dur",
@@ -9040,7 +9156,7 @@
           },
           {
             "id": "activity_lifecycle",
-            "sha256": "67dd403b510437d99eff2dd56bc37e7668b2cc12d089f60e51c4dbc7c5804d31",
+            "sha256": "01ebff24d41f3640acb311b559ba58aed558d5ecae2c0f2cb92aafd4c34637b1",
             "required_columns": [
               "ts",
               "activity_name",
@@ -9050,7 +9166,7 @@
           },
           {
             "id": "user_gestures",
-            "sha256": "1d471d0c6b821f549a0de9bfcb1bc7726934a4833f71fe049d319efcc25b35de",
+            "sha256": "1d8d54109766d291a1aab5287251e2b6fddbf00655ba6faf4713564adb3dfada",
             "required_columns": [
               "ts",
               "dur",
@@ -9064,7 +9180,7 @@
           },
           {
             "id": "scroll_initiation",
-            "sha256": "a7119fb3e4a85d76b846733e521240acbb18854ac2ba763de27ad17394135d12",
+            "sha256": "e4531cc6a985871e36ce7d27db1f0443c6c1758dbe3da3dba8400c6b6e9c8019",
             "required_columns": [
               "ts",
               "event",
@@ -9076,7 +9192,7 @@
           },
           {
             "id": "navigation_keys",
-            "sha256": "991e5ebf61b041fa7e9f415bd3c4300b850395a12662f44a53c6dd76b73fcfcd",
+            "sha256": "a8d1c777ffd6d3149b6a09c2d3658e77002f419c1cbcaa4d7ce239a7e2228609",
             "required_columns": [
               "ts",
               "dur",
@@ -9087,7 +9203,7 @@
           },
           {
             "id": "gesture_navigation",
-            "sha256": "93c70696b79f4442bb33e54a15a64ec2b078d886c830ea4e6e179b2d89b43075",
+            "sha256": "07c21b8fb2a9de0f5d85af11e34c147bbc4e0174868603c0f11f01a6ee1b8f68",
             "required_columns": [
               "ts",
               "dur",
@@ -9098,7 +9214,7 @@
           },
           {
             "id": "window_transitions",
-            "sha256": "a4537fdf1a5120b517fcfced5f2cc10af457b4cb1010856df9611ae8c055d8a1",
+            "sha256": "f18b4269abf8b7d21c86f3d0cefd3f9e295d701d3ac388124ef318f3f567d318",
             "required_columns": [
               "ts",
               "dur",
@@ -9109,7 +9225,7 @@
           },
           {
             "id": "anr_events",
-            "sha256": "5a9065eaec8e2987fc181a2db213cabfee5e9389a2d55edf9f49ea4bc2a285bc",
+            "sha256": "bdb859d84cc7e98ad2d9bdd5b6a8d7dae22d58d27e09c97bd8b8604096d1f78e",
             "required_columns": [
               "ts",
               "dur",
@@ -9121,7 +9237,7 @@
           },
           {
             "id": "ime_events",
-            "sha256": "5d887aaf9ac4227696829464d972d828c329226fcc066f23720a785e182a5c92",
+            "sha256": "081a837ec5ea989949c4cb66907d4e3857b89542be1eb1e7e84d48ac998bf22d",
             "required_columns": [
               "ts",
               "dur",
@@ -9132,7 +9248,7 @@
           },
           {
             "id": "inertial_scrolls",
-            "sha256": "5f68aefb336b375b13b1ac5e1ca9e5eef234cf45cc254a0216579e59242cfc42",
+            "sha256": "114a7d641f6523dc5fb1c9f7a6d517dd570fe821e7e6f173a5eb842144225b58",
             "required_columns": [
               "ts",
               "dur",
@@ -9145,8 +9261,9 @@
           },
           {
             "id": "idle_periods",
-            "sha256": "5e3d1e1e3cab3b5645ee6e44ce4f14062dd919e826c30b42b407f4b9fa9c71d4",
+            "sha256": "20ddf387142f542d0b3d972da64ecec8dbc7050fb4033970d2ef4d078157e69b",
             "required_columns": [
+              "end_ts",
               "ts",
               "dur",
               "event",
@@ -9156,7 +9273,7 @@
           },
           {
             "id": "app_launches",
-            "sha256": "4ed4f8b2b164c9d3e3fe1112796190a6398c87567930ee9a1481f7ab75bac882",
+            "sha256": "22e98b396bfb4e206ed83afdee5c7c95b05e21bcb15b2f4c8bd85ad54d5fe8b7",
             "required_columns": [
               "startup_id",
               "ts",
@@ -9169,7 +9286,7 @@
           },
           {
             "id": "system_events",
-            "sha256": "f3faf8eff532b237b3237d04beafc6b510e462edb133ae553034f469eb627c6c",
+            "sha256": "0f323ee6196bd0d6abf0b1f4d752c2a13906dfd84086c2fba12ce3e00ab21cd5",
             "required_columns": [
               "ts",
               "dur",
@@ -9180,7 +9297,7 @@
           },
           {
             "id": "broadcast_events",
-            "sha256": "e5cfc2a4d8dc5db74c2c2744795b2b20bc2c2cd4e45e6ca320a9442cd4d61513",
+            "sha256": "1ec43f0362182bebfca1a0b05ab3f7aac8ba6c29d367959cef750d3a875861c4",
             "required_columns": [
               "ts",
               "receiver_name",
@@ -9190,7 +9307,7 @@
           },
           {
             "id": "cross_process_interactions",
-            "sha256": "fa3e7503bc46d0cdd344c3e777114506aa280e53e6452ffd8ea535f33429abca",
+            "sha256": "3c28ab1dc3daa6be443977a9e20ebe5cabcbe8889fe94f637c6d67212b58bd6c",
             "required_columns": [
               "ts",
               "client_process",
@@ -9201,7 +9318,7 @@
           },
           {
             "id": "jank_events",
-            "sha256": "15a26f5af8c5bab693fdede8074d54beaa1f9513e0308c26974310727b4eb599",
+            "sha256": "5417025ae94fb4c14835e00e01b6f8fe2af1518be8a85e4e31dbfff7aa67ced3",
             "required_columns": [
               "ts",
               "dur",
@@ -9213,7 +9330,7 @@
           },
           {
             "id": "device_state",
-            "sha256": "70d5706e66067a79582b96600bbcf24b41bce0a717959e875902f556f487a452",
+            "sha256": "228cc7ed62712270d66645e89442d94c5966fb9149a3c0ebe8b43c7d51813354",
             "required_columns": [
               "ts",
               "event",
@@ -9223,7 +9340,7 @@
           },
           {
             "id": "app_state_tracking",
-            "sha256": "82397b29e6c5a3afb12c5d4e4ba06332b7b29e7e9b352d59f877d953ff1f086a",
+            "sha256": "9c1a2efaa01e1593297b6c30fd29e42bdc966fc828c570f13b72921fac3f27ee",
             "required_columns": [
               "ts",
               "event",
@@ -9235,7 +9352,7 @@
           },
           {
             "id": "operation_chain",
-            "sha256": "b299fed30a5bd603fea78aa89dab08d9f0f3c6859a28e13d72b76c8ac532a1ab",
+            "sha256": "e28b61069f0e242fcb6f7920f73c1e9fe4b313a948ba8e2edc07b48c48a22ddd",
             "required_columns": [
               "time_offset",
               "ts",
@@ -9246,7 +9363,7 @@
           },
           {
             "id": "clean_timeline",
-            "sha256": "808b5590ada0a4ea7a98a3bc9f6857b2f58b904bc7236a4d1421503cd12ab234",
+            "sha256": "6f739dac9f033923e666cbc278b3d222152500329394f366672b7a93d83726b6",
             "required_columns": [
               "event_id",
               "time_offset",
@@ -9261,7 +9378,7 @@
           },
           {
             "id": "merged_timeline",
-            "sha256": "b7397f405233c054355953138b31d880ed74fe0193f308c8729965bdbecc41d3",
+            "sha256": "d372fb0e557591fb1634e27d4120d6478e3b734e790b070cf1954470581da595",
             "required_columns": [
               "ts",
               "dur",
@@ -10248,8 +10365,29 @@
         ],
         "steps": [
           {
+            "id": "input_coverage",
+            "sha256": "9cf6763f43d3dfa79ea49aeac9b60d1496451169d16c8c64a8464bbe466cfbe0",
+            "required_columns": [
+              "start_ts",
+              "end_ts",
+              "observed_event_count",
+              "physical_event_count",
+              "physical_missing_action_count",
+              "missing_action_count",
+              "missing_timestamp_count",
+              "gesture_count",
+              "gap_count",
+              "output_row_limit",
+              "output_truncated",
+              "source_status",
+              "reason",
+              "inertial_source_status",
+              "normalization_version"
+            ]
+          },
+          {
             "id": "timeline_bounds",
-            "sha256": "5774c6f593e24feb438de41817e5a9521a74008c89af299d2f51a8251bce2697",
+            "sha256": "476dfbd7fc18321f9e6d8513882d0b6d3bd167e14f1b7031751fff6542c55e64",
             "required_columns": [
               "t_start",
               "t_end",
@@ -10264,7 +10402,7 @@
           },
           {
             "id": "device_state_lane",
-            "sha256": "fe09ab4e34af06719420940faa8ce0db95ff558609dcd5ecb954e162d2953ba8",
+            "sha256": "a4e78777ced65e9fc7650f0e1fc7de2945dac14d5059f6665a53525b14fca067",
             "required_columns": [
               "lane",
               "state",
@@ -10278,7 +10416,7 @@
           },
           {
             "id": "device_state_lane_fallback",
-            "sha256": "9bd07dadb5cf24db24b4aceeeecbda57c1d7f33a7eb14b02f46a2b182bb641b1",
+            "sha256": "773464d708a73257a0dfd489ccc1a33ca5676f40a5e7ea9e33493c250f68ecc0",
             "required_columns": [
               "lane",
               "state",
@@ -10292,7 +10430,7 @@
           },
           {
             "id": "input_state_lane_frames",
-            "sha256": "6f35dc1e617ee1bdada381ba47039ddd06886c10c042e1f43f6db2dba2d2e410",
+            "sha256": "0f3a20be50b837697282ce2ed653daa28f55970dd0ac73b8c0314b8b339cea3e",
             "required_columns": [
               "lane",
               "state",
@@ -10306,7 +10444,7 @@
           },
           {
             "id": "input_state_lane_fallback",
-            "sha256": "db08930068eb3fe1e9c338d8fce53d1a9637ccb523401c4841a0c9a385e83816",
+            "sha256": "0f3a20be50b837697282ce2ed653daa28f55970dd0ac73b8c0314b8b339cea3e",
             "required_columns": [
               "lane",
               "state",
@@ -10320,7 +10458,7 @@
           },
           {
             "id": "app_state_lane",
-            "sha256": "b3300ebb8eb20801f7f8bae265791483df4854364983bb958bf4960f54a562f1",
+            "sha256": "84569edac3c9e6b12fda006e2bc3d1f3ff4d9911e0c9f6889be70445a597654e",
             "required_columns": [
               "lane",
               "state",
@@ -10334,7 +10472,7 @@
           },
           {
             "id": "app_state_lane_fallback",
-            "sha256": "3ea4d9f1f0acebc1bcea3ecd9e90e97c146bf3547cd853c70cb8943050f72f4e",
+            "sha256": "759d1d1d044a6ee92d7f451489be88dc4c196747c6ca9fa1605a29ab32578a23",
             "required_columns": [
               "lane",
               "state",
@@ -10348,7 +10486,7 @@
           },
           {
             "id": "system_state_lane",
-            "sha256": "04b4d54b8e93e861f690736d8d1c50b9b551dee73491b3adf7f56643a4bd1227",
+            "sha256": "4ef6df9906380e55737e51f32d5c3d55bec5fb09afa1d9a8193b06acccdd5e12",
             "required_columns": [
               "lane",
               "state",
@@ -10363,7 +10501,7 @@
           },
           {
             "id": "lane_summary",
-            "sha256": "61968369dddee79a31fbf8e96c7908f785102843f6cbbfdf2c14d87554d71542",
+            "sha256": "bad845477cc14cd65a42b611da3711cf3ef6de6ba2c0789a25b4c520fa5f03f2",
             "required_columns": [
               "lane",
               "segment_count",

@@ -127,7 +127,7 @@ export function copyAnalysisDeliveryFields(input: AnalysisDeliveryFields): Analy
   const output: AnalysisDeliveryFields = {};
   const intent = input.turnIntent;
   if (intent?.schemaVersion === 1 && member(intent.status, ['resolved', 'unavailable']) &&
-      member(intent.source, ['semantic', 'fallback']) &&
+      member(intent.source, ['semantic', 'fallback', 'product']) &&
       member(intent.taskKind, ['acknowledgement', 'fact', 'investigation', 'comparison']) &&
       member(intent.scope, ['bounded_question', 'scene_wide']) &&
       member(intent.recommendedComplexity, ['quick', 'full']) &&
