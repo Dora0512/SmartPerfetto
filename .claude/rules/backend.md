@@ -218,9 +218,26 @@ Keep these boundaries intact:
   `timeout`; no returned data or a failed delivery restores the empty result.
   Finalization evidence reads are bounded by the deadline the run hands over,
   so a fixed finalization reserve inside the delivery reserve is never spent
-  by the delivery call; like turn-limit results, a timeout result authorizes no
-  semantic model call. `*_MAX_RUN_TIMEOUT_MS` is part of the provider snapshot
-  fingerprint. Claude, Pi, OpenCode and Qoder still use fixed budgets.
+  by the delivery call. When no delivery call ran, the unspent reserve funds
+  finalization (at most that reserve from now, never past hard): its one
+  no-tool semantic review is the call the reserve exists for, and a fixed 60 s
+  window timed it out on slow providers. Like turn-limit results, a timeout
+  result authorizes no semantic model call. `*_MAX_RUN_TIMEOUT_MS` is part of
+  the provider snapshot fingerprint. Claude scene dispatch uses the same
+  progress-aware budget (`CLAUDE_MAX_RUN_TIMEOUT_MS`), without a timeout
+  delivery call; non-scene Claude runs, Pi, OpenCode and Qoder still use fixed
+  budgets.
+- Scene runs pace acquisition at the shared registry, after scope and
+  lifecycle guards, through `RuntimeAcquisitionPolicy`: a reminder, then a
+  first-revision pause lifted by any segment-bearing attempt, and a monotone
+  closing window sized from observed model rounds before the acquisition
+  limit. Refusals use `action_required`; wording lives in
+  `scene-pacing-*.template.md`. `propose_scene_timeline` strips the
+  registry-published `planPhaseId`, commits in atomic change groups, emits
+  `success`/`planPhaseId` receipts, and marks only actionable rejections as
+  policy refusals. A scene run with no committed segment finalizes with
+  `success: false` and no scene report; a committed timeline never upgrades a
+  native failure.
 - Structured facts must be read from a tool result **before**
   `summarizeExternalToolResult` truncates it. `planPhaseId` and `success` are
   appended after the result body, so they are the first casualties of the

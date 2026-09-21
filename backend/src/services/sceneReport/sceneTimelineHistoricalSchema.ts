@@ -3,7 +3,7 @@
 
 import {createHash} from 'crypto';
 import {z} from 'zod';
-import {DEFAULT_SCENE_RUN_LIMITS as limits, sceneTimelineSegmentSchema,
+import {DEFAULT_SCENE_RUN_LIMITS as limits, sceneCellValueMatches, sceneTimelineSegmentSchema,
   type SceneTimelineAssessment} from '../../agent/scene/sceneTimelineContract';
 import {evidenceCaptureHash} from '../evidence/evidenceCapture';
 import {assessSceneScanCoverage} from '../../agent/scene/sceneScanCoverage';
@@ -127,7 +127,8 @@ export function isSceneTimelineHistoricalAssessment(value: unknown, scope: Histo
               reference[key] !== undefined && excerpt.source[key] !== reference[key]) ||
             (reference.evidenceRefId !== undefined && ![excerpt.source.evidenceRefId, excerpt.source.artifactId,
               ...(excerpt.source.artifactId ? [`data:${excerpt.source.artifactId}`, `ev_${excerpt.source.artifactId}`] : [])].includes(reference.evidenceRefId)) ||
-            (reference.column !== undefined && reference.value !== undefined && excerpt.row[reference.column] !== reference.value)) return false;
+            (reference.column !== undefined && reference.value !== undefined &&
+              !sceneCellValueMatches(excerpt.row[reference.column], reference.value))) return false;
       }
       if (entry.referencesResolved && (!segment.evidenceRefs.length || entry.evidence.length !== segment.evidenceRefs.length)) return false;
       if (entry.diagnostics.some(issue => issue.segmentId !== undefined && issue.segmentId !== segment.id ||

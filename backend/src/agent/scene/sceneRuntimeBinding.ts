@@ -12,6 +12,7 @@ import {assertSceneRunActive, createSceneRunContext, revokeSceneRunContext, scen
   type SceneRunContext} from './sceneRunContext';
 import {sceneNanosecondsSchema, type SceneScope, type SceneTimelineSnapshot} from './sceneTimelineContract';
 import {initializeSceneCoveragePlan, type SceneCoverageRegistrySnapshot} from './sceneCoveragePlan';
+import type {ScenePacingInputs} from './sceneProposalPacing';
 
 const dispatchKey = Symbol('scene product dispatch');
 const dispatches = new WeakMap<object, DispatchState>();
@@ -119,6 +120,8 @@ export async function activateSceneRuntime(options: AnalysisOptions, actual: {
   traceProcessorService: Pick<TraceProcessorService, 'query'>; artifactStore: ArtifactStore;
   sceneCoverageRegistry?: SceneCoverageRegistrySnapshot;
   signal?: AbortSignal; canInvokeTool?: () => boolean;
+  /** Budget of a runtime whose deadline moves; fixed-budget runtimes derive it from deadlineMs. */
+  pacing?: ScenePacingInputs;
 }): Promise<SceneRunContext | undefined> {
   const state = resolveDispatch(options, actual);
   if (!state) return undefined;
@@ -146,6 +149,7 @@ export async function activateSceneRuntime(options: AnalysisOptions, actual: {
         BigInt(startNs) > BigInt(endNs)) throw new Error('scene_trace_bounds_invalid');
     const context = createSceneRunContext({...state.scope, deadlineMs: actual.deadlineMs,
       signal: state.signal, assertAuthorized: () => assertDispatchActive(state), traceBounds: {startNs, endNs},
+      pacing: actual.pacing,
       createEvidenceReadView: () => {
         assertAcquisition();
         const view = store.createEvidenceReadView({ownerKey: state.scope.ownerKey,

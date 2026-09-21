@@ -41,6 +41,7 @@ import {
   sharedToolSpecFromClaudeSdkTool,
   withRuntimeToolConcurrency,
   withRuntimeToolGuard,
+  withRuntimeToolTiming,
   type SharedToolSpec,
 } from '../agentRuntime/runtimeToolSpec';
 import {
@@ -55,8 +56,9 @@ import {
 } from '../types/sparkContracts';
 import {getPlanToolCapability, type PlanToolCapability} from './types';
 import type {RunManifestAttributionSink} from '../types/selfEvolution';
-import {withRuntimeToolObserver, type RuntimeToolObserver} from '../agentRuntime/runtimeToolObserver';
+import {withRuntimeToolObserver, type RuntimeToolInvocationEvent, type RuntimeToolObserver} from '../agentRuntime/runtimeToolObserver';
 import {createRuntimeToolResult} from '../agentRuntime/runtimeToolResult';
+import type {RuntimeToolResult} from '../agentRuntime/runtimeToolSpec';
 
 /** MCP tool name prefix — derived from the server name `'smartperfetto'`.
  * `claudeMcpServer.ts` exports the same constant; both files agree
@@ -118,6 +120,50 @@ function isToolAllowedForScope(
 }
 
 /**
+ * Run-supplied pacing for evidence acquisition. It is consulted only after the
+ * request scope and runtime lifecycle guards admit a call, so authorization
+ * and closed-run refusals always win; it never applies to non-acquisition
+ * tools. Refusals use the ordinary `{success: false, action_required}` shape.
+ */
+export interface RuntimeAcquisitionPolicy {
+  /** Every invocation's lifecycle, for pacing clocks only. */
+  observe?(event: RuntimeToolInvocationEvent): void;
+  /** A policy refusal stops this acquisition; undefined admits it. */
+  admit(toolName: string): RuntimeToolResult | undefined;
+  /** An admitted acquisition returned; may add one reminder to its result. */
+  complete?(toolName: string, result: RuntimeToolResult): RuntimeToolResult;
+}
+
+const acquisitionClosedRefusal = () => createRuntimeToolResult({success: false,
+  action_required: 'deliver_existing_conclusion', unsupportedReason: 'acquisition_closed'}, {isError: true});
+
+function withAcquisitionPolicy(spec: SharedToolSpec, policy: RuntimeAcquisitionPolicy): SharedToolSpec {
+  const admitted = withRuntimeToolTiming(spec).handler;
+  const handler: SharedToolSpec['handler'] = async (args, extra) => {
+    let refusal: RuntimeToolResult | undefined;
+    // Fail closed: a policy that cannot decide (e.g. its run was revoked) must not admit acquisition.
+    try { refusal = policy.admit(spec.name); } catch { refusal = acquisitionClosedRefusal(); }
+    if (refusal) return withRuntimeToolTiming({...spec, handler: async () => refusal!}).handler(args, extra);
+    const result = await admitted(args, extra);
+    try { return policy.complete ? policy.complete(spec.name, result) : result; } catch { return result; }
+  };
+  // Carries the timed marker: both branches are timed exactly once, so outer guards do not re-time.
+  Object.assign(handler, admitted);
+  return {...spec, handler};
+}
+
+/**
+ * `register` publishes an optional `planPhaseId` on every evidence-capable
+ * tool. It is plan attribution, not tool input: handlers with a strict input
+ * contract take the tool input from here.
+ */
+export function splitPlanAttribution<T extends Record<string, unknown>>(input: T):
+  {planPhaseId?: string; toolInput: Omit<T, 'planPhaseId'>} {
+  const {planPhaseId, ...toolInput} = input;
+  return {...(typeof planPhaseId === 'string' ? {planPhaseId} : {}), toolInput};
+}
+
+/**
  * Filter the registry contents by one or more exposure levels.
  *
  * Useful for stdio adapter (`['public']`) or admin-only paths
@@ -161,6 +207,7 @@ export class McpToolRegistry {
   private readonly acquisitionObserver?: RuntimeToolObserver;
   private readonly requestScope?: ToolRequestScope;
   private readonly canInvokeTool?: () => boolean;
+  private readonly acquisitionPolicy?: RuntimeAcquisitionPolicy;
 
   constructor(options: {
     toolConcurrencyCoordinator?: RuntimeToolConcurrencyCoordinator;
@@ -169,6 +216,7 @@ export class McpToolRegistry {
     acquisitionObserver?: RuntimeToolObserver;
     requestScope?: ToolRequestScope;
     canInvokeTool?: () => boolean;
+    acquisitionPolicy?: RuntimeAcquisitionPolicy;
   } = {}) {
     this.toolConcurrencyCoordinator = options.toolConcurrencyCoordinator
       ?? createRuntimeToolConcurrencyCoordinator();
@@ -176,6 +224,7 @@ export class McpToolRegistry {
     this.toolObserver = options.toolObserver;
     this.acquisitionObserver = options.acquisitionObserver;
     this.canInvokeTool = options.canInvokeTool;
+    this.acquisitionPolicy = options.acquisitionPolicy;
     this.requestScope = options.requestScope && Object.freeze({
       ...options.requestScope,
       ...(options.requestScope.capabilities
@@ -202,8 +251,12 @@ export class McpToolRegistry {
         }}
       : base;
     const access = Object.freeze({exposure: shared.exposure, evidenceEffect: shared.evidenceEffect});
+    const compact = compactSharedToolSpec(shared);
+    // Innermost, so scope and lifecycle guards below are evaluated first.
+    const paced = shared.evidenceEffect === 'acquire' && this.acquisitionPolicy
+      ? withAcquisitionPolicy(compact, this.acquisitionPolicy) : compact;
     const scopeGuarded = withRuntimeToolGuard(
-      compactSharedToolSpec(shared),
+      paced,
       () => isToolAllowedForScope(access, this.requestScope),
       async () => createRuntimeToolResult({
         success: false,
@@ -213,11 +266,14 @@ export class McpToolRegistry {
     );
     const guarded = withRuntimeToolGuard(scopeGuarded, () => {
       try { return this.canInvokeTool?.() !== false; } catch { return false; }
-    }, async () => createRuntimeToolResult({success: false,
-      action_required: 'deliver_existing_conclusion', unsupportedReason: 'acquisition_closed'}, {isError: true}));
+    }, async () => acquisitionClosedRefusal());
     const acquisitionObserver = shared.evidenceEffect === 'acquire' ? this.acquisitionObserver : undefined;
-    const observer: RuntimeToolObserver | undefined = acquisitionObserver ? async event => {
-      try { await acquisitionObserver(event); } catch { /* Retained captures remain independently checked. */ }
+    const pacing = this.acquisitionPolicy;
+    const observer: RuntimeToolObserver | undefined = acquisitionObserver || pacing?.observe ? async event => {
+      try { pacing?.observe?.(event); } catch { /* Pacing clocks never change a tool outcome. */ }
+      if (acquisitionObserver) {
+        try { await acquisitionObserver(event); } catch { /* Retained captures remain independently checked. */ }
+      }
       if (this.toolObserver) await this.toolObserver(event);
     } : this.toolObserver;
     const runtimeShared = withRuntimeToolConcurrency(

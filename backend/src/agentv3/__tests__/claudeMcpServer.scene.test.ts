@@ -10,6 +10,13 @@ import {resolveRuntimeEvidenceStore} from '../../agentRuntime/runtimeEvidenceCon
 import {sceneRunState, type SceneRunContext} from '../../agent/scene/sceneRunContext';
 import type {SceneTimelineSegment} from '../../agent/scene/sceneTimelineContract';
 import type {SceneCoverageRegistrySnapshot} from '../../agent/scene/sceneCoveragePlan';
+import {isPolicyRefusalResult} from '../toolNarration';
+import {readRuntimeToolResultFacts} from '../../agentRuntime/runtimeToolResult';
+import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
+import {sceneTimelineProposalSchema, sceneTimelineSegmentSchema, sceneTimelineSegmentToolSchema,
+  sceneTimelineProposalToolShape, sceneEvidenceReferenceSchema} from '../../agent/scene/sceneTimelineContract';
 
 const bindings: SceneRunDispatchBinding[] = [];
 const scope = {runId: 'run-scene-mcp', sessionId: 'session-scene-mcp', traceId: 'trace-scene-mcp', ownerKey: sceneRunOwnerKey({})};
@@ -107,5 +114,91 @@ describe('shared scene proposal capability', () => {
     expect(sceneRunState(capability).revision).toBe(0);
     f.binding.release();
     expect(() => f.server(capability)).toThrow('unissued_scene_runtime_capability');
+  });
+  it('accepts the registry-published planPhaseId and emits plan receipt facts', async () => {
+    const f = fixture();
+    const capability = (await f.activate())!;
+    const tool = f.server(capability).toolDefinitions.find(tool => tool.name === 'propose_scene_timeline')!;
+    expect(tool.shared.inputSchema).toHaveProperty('planPhaseId');
+    const response = await tool.shared.handler({baseRevision: 0, proposalId: 'with-phase', planPhaseId: 'p4',
+      segments: [segment('s')], unresolved: []}, {});
+    expect(response.isError).not.toBe(true);
+    expect(response.structuredContent).toMatchObject({success: true, accepted: true, revision: 1});
+    expect(readRuntimeToolResultFacts(response).success).toBe(true);
+  });
+  it('returns an actionable rejection as a policy refusal with its rejected groups', async () => {
+    const f = fixture();
+    const capability = (await f.activate())!;
+    const tool = f.server(capability).toolDefinitions.find(tool => tool.name === 'propose_scene_timeline')!;
+    const response = await tool.shared.handler({baseRevision: 0, proposalId: 'bad', segments: [
+      {...segment('s'), evidenceRefs: [{evidenceRefId: 'not-issued', rowIndex: 0}]}]}, {});
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent).toMatchObject({success: false, accepted: false,
+      action_required: 'repair_scene_proposal', rejectedGroups: [{segmentIds: ['s']}]});
+    expect(isPolicyRefusalResult(response)).toBe(true);
+  });
+  it('paces acquisition after the lifecycle guard and reopens it after a proposal attempt', async () => {
+    const f = fixture();
+    const capability = (await f.activate())!;
+    const tools = f.server(capability).toolDefinitions;
+    const sql = tools.find(tool => tool.name === 'execute_sql')!;
+    const propose = tools.find(tool => tool.name === 'propose_scene_timeline')!;
+    const query = () => sql.shared.handler({sql: 'SELECT 1 AS value'}, {});
+    const facts = [];
+    for (let index = 0; index < 6; index++) facts.push(readRuntimeToolResultFacts(await query()).success);
+    expect(facts).toEqual([true, true, true, true, true, true]);
+    const paused = await query();
+    expect(paused.structuredContent).toMatchObject({success: false, action_required: 'submit_first_scene_revision',
+      unsupportedReason: 'scene_first_revision_due', committedSegments: 0});
+    expect(isPolicyRefusalResult(paused)).toBe(true);
+    await propose.shared.handler({baseRevision: 0, proposalId: 'attempt', segments: [
+      {...segment('s'), evidenceRefs: [{evidenceRefId: 'not-issued', rowIndex: 0}]}]}, {});
+    expect(readRuntimeToolResultFacts(await query()).success).toBe(true);
+    f.close();
+    const closed = await query();
+    expect(closed.structuredContent).toMatchObject({action_required: 'deliver_existing_conclusion', unsupportedReason: 'acquisition_closed'});
+  });
+  it('lets representational noise through MCP input validation so the strict contract decides per group', async () => {
+    const f = fixture();
+    const capability = (await f.activate())!;
+    const tool = f.server(capability).toolDefinitions.find(tool => tool.name === 'propose_scene_timeline')!;
+    // MCP hosts validate arguments against the published shape before any handler runs.
+    const host = new McpServer({name: 'smartperfetto', version: '1'});
+    host.tool(tool.name, tool.shared.description, tool.shared.inputSchema, (args: any, extra: any) => tool.shared.handler(args, extra) as any);
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    await host.connect(serverSide);
+    const client = new Client({name: 'scene-test', version: '1'});
+    await client.connect(clientSide);
+    const call = async (args: Record<string, unknown>) => {
+      const result: any = await client.callTool({name: tool.name, arguments: args});
+      return result.structuredContent ?? JSON.parse(result.content[0].text);
+    };
+    try {
+      expect(await call({baseRevision: 0, proposalId: 'nulls', planPhaseId: 'p1', segments: [
+        {...segment('s'), object: {kind: 'trace', key: scope.traceId, machineId: null}, dependencies: null}]}))
+        .toMatchObject({accepted: true, revision: 1});
+      expect(await call({baseRevision: 1, proposalId: 'nested', segments: [{...segment('t'), note: 'x'}]}))
+        .toMatchObject({accepted: false, action_required: 'repair_scene_proposal',
+          rejectedGroups: [{segmentIds: ['t'], diagnostics: [{code: 'invalid_segment'}]}]});
+    } finally {await client.close(); await host.close();}
+  });
+  it('publishes the same fields as the strict contract', () => {
+    const keys = (shape: object) => Object.keys(shape).sort();
+    expect(keys(sceneTimelineSegmentToolSchema.shape)).toEqual(keys(sceneTimelineSegmentSchema.shape));
+    expect(keys(sceneTimelineProposalToolShape)).toEqual(keys(sceneTimelineProposalSchema.shape));
+    const nested = (schema: any, key: string) => keys(schema.shape[key].unwrap?.().shape ?? schema.shape[key].shape);
+    expect(nested(sceneTimelineSegmentToolSchema, 'object')).toEqual(nested(sceneTimelineSegmentSchema, 'object'));
+    expect(keys((sceneTimelineSegmentToolSchema.shape.evidenceRefs as any).element.shape))
+      .toEqual(keys((sceneEvidenceReferenceSchema as any).shape ?? (sceneEvidenceReferenceSchema as any)._def.schema.shape));
+  });
+  it('refuses acquisition once the scene run is released even if the runtime still admits tools', async () => {
+    const f = fixture();
+    const capability = (await f.activate())!;
+    const sql = f.server(capability).toolDefinitions.find(tool => tool.name === 'execute_sql')!;
+    f.binding.release();
+    const refused = await sql.shared.handler({sql: 'SELECT 1 AS value'}, {});
+    expect(refused.structuredContent).toMatchObject({success: false, action_required: 'deliver_existing_conclusion',
+      unsupportedReason: 'acquisition_closed'});
+    expect(f.query).not.toHaveBeenCalledWith(expect.anything(), 'SELECT 1 AS value', expect.anything());
   });
 });

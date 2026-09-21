@@ -42,6 +42,45 @@ describe('scene product finalization', () => {
         .rejects.toThrow();
     } finally {binding.release();}
   });
+  it('lowers success for a run that committed no segment and publishes no empty scene report', async () => {
+    const signal = new AbortController().signal;
+    const binding = createSceneRunDispatchBinding({scope, signal, assertCurrent: () => {}});
+    try {
+      const options = binding.bindOptions({runId: scope.runId});
+      const artifactStore = resolveRuntimeEvidenceStore(options, scope, () => {throw new Error('unexpected fallback');});
+      await activateSceneRuntime(options, {...scope, artifactStore, deadlineMs: Date.now() + 60_000,
+        traceProcessorService: {query: jest.fn().mockResolvedValue({columns: ['start_ns', 'end_ns'], rows: [['0', '100']]})}});
+      // A timed-out native run whose text promised a submission that never happened.
+      const native: AnalysisResult = {...body(), success: true, conclusion: 'Submitting the 7-segment timeline now.',
+        confidence: 0.25, terminationReason: 'timeout'};
+      const finalized = await finalizeAnalysisResult({result: native, owner: owner(), query: 'Reconstruct',
+        scene: {seal: binding.seal()!, scope, outputLanguage: 'en'}});
+      expect(finalized.result).toMatchObject({success: false, partial: true, confidence: 0, terminationReason: 'timeout',
+        sceneTimeline: {revision: 0, segments: [], diagnostics: expect.arrayContaining([{code: 'no_scene_candidates'}])}});
+      expect(finalized.result.terminationMessage).toContain('no accepted timeline revision');
+      expect(finalized.result.conclusion).toBe('Submitting the 7-segment timeline now.');
+      expect(finalized.scenePublication).toBeUndefined();
+    } finally {binding.release();}
+  });
+  it('keeps a native failure as failure and states the retained timeline', async () => {
+    const signal = new AbortController().signal;
+    const binding = createSceneRunDispatchBinding({scope, signal, assertCurrent: () => {}});
+    try {
+      const options = binding.bindOptions({runId: scope.runId});
+      const artifactStore = resolveRuntimeEvidenceStore(options, scope, () => {throw new Error('unexpected fallback');});
+      const context = await activateSceneRuntime(options, {...scope, artifactStore, deadlineMs: Date.now() + 60_000,
+        traceProcessorService: {query: jest.fn().mockResolvedValue({columns: ['start_ns', 'end_ns'], rows: [['0', '100']]})}});
+      await proposeSceneTimeline(context!, {baseRevision: 0, proposalId: 'one', segments: [{id: 'unknown',
+        startNs: '0', endNs: '100', object: {kind: 'device', key: 'unknown'}, userAction: 'Unknown',
+        deviceState: 'Unknown', appResponse: 'Unknown', evidenceRefs: [],
+        boundaries: {start: {source: 'trace_bound'}, end: {source: 'trace_bound'}}}]});
+      const finalized = await finalizeAnalysisResult({result: body(), owner: owner(), query: 'Reconstruct',
+        scene: {seal: binding.seal()!, scope, outputLanguage: 'en'}});
+      expect(finalized.result).toMatchObject({success: false, terminationReason: 'execution_error', sceneTimeline: {revision: 1}});
+      expect(finalized.result.terminationMessage).toContain('scene timeline revision 1 (1 segments) is retained');
+      expect(finalized.scenePublication).toBeDefined();
+    } finally {binding.release();}
+  });
   it('drops model or historical timeline JSON without an issued product seal', async () => {
     const result = {...body(), sceneTimeline: {schemaVersion: 'scene_timeline@1', revision: 900,
       segments: [{verified: true}]}} as unknown as AnalysisResult;

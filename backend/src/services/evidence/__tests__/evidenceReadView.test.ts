@@ -136,6 +136,20 @@ describe('runtime execution evidence read view', () => {
       {artifactId: first.id, sourceToolCallId: 'invoke:second'}, {artifactId: first.id, sourceArtifactId: second.id}]) {
       expect((await read(view, reference))[0]).toMatchObject({status: 'missing', reason: 'identifier_conflict'});
     }
+    // Repair hints name identifier fields only, never values.
+    const [conflict] = await read(view, {artifactId: first.id, sourceToolCallId: 'invoke:second', evidenceRefId: first.evidenceRefId});
+    expect(conflict).toMatchObject({locatorDetail: {matchedFields: ['evidenceRefId', 'artifactId'], conflictingFields: ['sourceToolCallId']}});
+    expect(JSON.stringify(conflict)).not.toContain('invoke:second');
+  });
+
+  it('reports available columns and row count for locator repairs without cell values', async () => {
+    const store = new ArtifactStore();
+    const {id} = add(store, {columns: ['id', 'metric'], rows: [[1, 2], [2, 3]]});
+    const view = store.createEvidenceReadView(readOptions);
+    const [column] = await read(view, {artifactId: id, rowIndex: 0, column: 'end_ns'});
+    expect(column).toMatchObject({reason: 'required_column_missing', locatorDetail: {availableColumns: ['id', 'metric']}});
+    const [row] = await read(view, {artifactId: id, rowIndex: 7, column: 'metric'});
+    expect(row).toMatchObject({reason: 'row_index_out_of_range', locatorDetail: {rowCount: 2}});
   });
 
   it('requires a complete unique selector scan and agreement with any row index', async () => {

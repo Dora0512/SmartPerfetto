@@ -66,10 +66,20 @@ describe('progress-aware run deadline', () => {
     // investigation stopped at 3000 s: delivery may use 600 − 40 s, finalization the rest
     expect(deadline.deliveryWindowMs(3000 * S)).toBe(560 * S);
     expect(deadline.finalizationDeadlineAt(3100 * S, 3560 * S)).toBe(3600 * S);
-    // a run that finished early keeps its own deadline; one that finished at it gets the reserve
+    // Without a delivery call the unspent delivery reserve funds finalization, bounded from now:
+    // an early finish keeps the longer of its own deadline and that window, and nothing passes hard.
     expect(deadline.finalizationDeadlineAt(100 * S)).toBe(2000 * S);
-    expect(deadline.finalizationDeadlineAt(1995 * S)).toBe(2035 * S);
+    expect(deadline.finalizationDeadlineAt(1995 * S)).toBe(2595 * S);
     expect(deadline.finalizationDeadlineAt(3590 * S)).toBe(3600 * S);
+    // a delivery call that ran keeps only the fixed finalization reserve after its own window
+    expect(deadline.finalizationDeadlineAt(3100 * S, 3200 * S)).toBe(3240 * S);
+  });
+
+  it('bounds the unused-reserve window by the reserve itself, never by the whole hard budget', () => {
+    const deadline = createProgressAwareRunDeadline(budget);
+    // investigation ended at 1800 s with 1800 s left before hard: finalization gets 600 s, not 1800 s
+    expect(deadline.finalizationDeadlineAt(1800 * S)).toBe(2400 * S);
+    expect(deadline.investigationLimitAt).toBe(3000 * S);
   });
 
   it('treats a maximum below the base budget as the base budget and keeps no reserve', () => {

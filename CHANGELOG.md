@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Commit prefixes follow [Conventional Commits](https://www.conventionalcommits.org/).
 Detailed commit-level history is available via `git log`.
 
+## [Unreleased]
+
+### Fixed
+- Scene reconstruction proposals accept the `planPhaseId` every evidence tool
+  advertises, treat explicit nulls and blank identifiers as absent, and accept a
+  numeric cell quoted as its exact decimal string. Changes commit in atomic
+  groups, so one bad reference no longer discards the rest of a revision, and
+  every failing reference is reported at once with its conflicting identifier,
+  available columns or row count.
+- Scene runs now pause evidence acquisition until a first revision is attempted
+  and close acquisition before the budget limit, so the timeline is committed
+  before a slow provider exhausts the run. Claude scene runs use the same
+  progress-aware budget as OpenAI scene runs.
+- A scene run that committed no timeline segment is reported as failed and no
+  empty scene report is published; a run that retained a timeline states which
+  revision survives. The story panel shows the reason.
+- The final semantic review may use the unspent delivery reserve, so slow
+  providers no longer fail the report quality gate because the review timed out.
+- Summarized SQL results list the original row index of each sample row, and
+  the Agent SSE verification script exits after writing its artifacts.
+
 ## [1.13.0] - 2026-09-21
 
 ### Added

@@ -36,6 +36,7 @@ import {buildComplexityClassifierInput} from '../../../agentv3/queryComplexityCo
 import {ArtifactStore} from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
 import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
+import type {ScenePacingInputs} from '../../../agent/scene/sceneProposalPacing';
 import {createOpenAISnapshotEngineState, getOpenAISnapshotEngineState, projectSessionFieldsForDurableSnapshot, type SessionFieldsForSnapshot, sessionFieldsUsePrivateKnowledge, type SessionStateSnapshot} from '../../../agentv3/sessionStateSnapshot';
 import {extractTraceFeatures, extractKeyInsights, saveAnalysisPattern, saveQuickPathPattern} from '../../../agentv3/analysisPatternMemory';
 import {probeTraceCompleteness} from '../../../agentv3/traceCompletenessProber';
@@ -775,7 +776,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         historyReader, toolObserver: closeoutTape.observe,
         isActive: () => acceptsToolUpdates && !analysisAbortScope.signal.aborted &&
           (!sceneRunDeadline || Date.now() < sceneRunDeadline.current()),
-        sceneDeadlineMs: sceneRunDeadline?.hardDeadlineAt,
+        sceneDeadlineMs: sceneRunDeadline?.hardDeadlineAt, scenePacing: sceneRunDeadline,
       });
       sourceUse = context.sourceUse;
       analysisAbortScope.throwIfAborted();
@@ -1417,6 +1418,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       toolObserver?: RuntimeToolObserver;
       isActive?: () => boolean;
       sceneDeadlineMs?: number;
+      scenePacing?: ScenePacingInputs;
     },
   ) {
     const {config, sceneType, policy, analysisRunSpec, sessionContext, executionLease} = runtime;
@@ -1477,7 +1479,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
     const canInvokeTool = () => runtime.isActive?.() !== false && !executionLease?.signal.aborted;
     const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
       deadlineMs: runtime.sceneDeadlineMs ?? 0, traceProcessorService: this.traceProcessorService,
-      artifactStore, sceneCoverageRegistry, signal: executionLease?.signal, canInvokeTool});
+      artifactStore, sceneCoverageRegistry, signal: executionLease?.signal, canInvokeTool, pacing: runtime.scenePacing});
     const mcp = createClaudeMcpServer({
       sceneRunContext,
       analysisHistoryReader: runtime.historyReader,

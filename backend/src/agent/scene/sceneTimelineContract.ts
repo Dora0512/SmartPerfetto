@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 
 import {z} from 'zod';
+import {exactNumbersEqual} from '../../utils/exactDecimal';
 
 const id = z.string().trim().min(1).max(256);
 export const sceneNanosecondsSchema = z.string().regex(/^(0|[1-9]\d*)$/).max(40);
@@ -33,7 +34,55 @@ export const sceneTimelineProposalSchema = z.object({
   removeSegmentIds: z.array(id).max(4096).default([]),
   unresolved: z.array(z.string().min(1).max(4096)).max(1024).default([]),
 }).strict();
+/**
+ * The proposal tool's published input. MCP hosts validate a call against it
+ * before the handler runs, so it keeps the structure and required fields for
+ * the model but lets representational noise through: optional fields accept
+ * null, identifiers accept blanks, and nested objects keep unknown keys. The
+ * strict contract above then decides per change group with repairable
+ * diagnostics. (A host may still drop unknown top-level keys; they never reach
+ * the stored revision either way.)
+ */
+const toolId = z.string().max(256);
+const toolNs = z.string().max(40);
+const toolText = z.string().max(4096);
+const toolReference = z.object({evidenceRefId: toolId.nullable().optional(), artifactId: toolId.nullable().optional(),
+  sourceToolCallId: toolId.nullable().optional(), rowIndex: z.number().nullable(), column: toolId.nullable().optional(),
+  value: scalar.optional()}).passthrough();
+const toolBoundary = z.object({source: z.enum(['evidence', 'trace_bound', 'inferred', 'open']),
+  evidenceIndex: z.number().nullable().optional(), column: toolId.nullable().optional()}).passthrough();
+export const sceneTimelineSegmentToolSchema = z.object({
+  id: toolId, startNs: toolNs, endNs: toolNs,
+  object: z.object({kind: toolId, key: toolId, machineId: toolNs.nullable().optional()}).passthrough(),
+  userAction: toolText, deviceState: toolText, appResponse: toolText,
+  evidenceRefs: z.array(toolReference).max(4096),
+  boundaries: z.object({start: toolBoundary, end: toolBoundary}).passthrough(),
+  dependencies: z.array(toolId).max(4096).nullable().optional(),
+  supersedes: z.array(toolId).max(4096).nullable().optional(),
+}).passthrough();
+export const sceneTimelineProposalToolShape = {
+  baseRevision: z.number(), proposalId: toolId,
+  segments: z.array(sceneTimelineSegmentToolSchema).max(4096),
+  removeSegmentIds: z.array(toolId).max(4096).nullable().optional(),
+  unresolved: z.array(toolText).max(1024).nullable().optional(),
+};
+
+/** Envelope parsed first; each segment is validated on its own so one bad member cannot hide the rest. */
+export const sceneTimelineProposalEnvelopeSchema = sceneTimelineProposalSchema.extend({segments: z.array(z.unknown()).max(4096)});
 export type SceneTimelineProposal = z.infer<typeof sceneTimelineProposalSchema>;
+/**
+ * A quoted cell must denote the captured value. A numeric cell may be quoted as
+ * an exactly equal decimal string, which is how nanosecond fields travel in the
+ * same payload; this is the claim verifier's exact-number rule, so unsafe
+ * integers, booleans and other coercions never match. Live proposals and
+ * archived assessments use this one rule.
+ */
+export function sceneCellValueMatches(captured: unknown, claimed: unknown): boolean {
+  if (captured === claimed) return true;
+  const mixed = (typeof captured === 'number' && typeof claimed === 'string') ||
+    (typeof captured === 'string' && typeof claimed === 'number');
+  return mixed && exactNumbersEqual(captured, claimed);
+}
 export type SceneTimelineSegment = z.infer<typeof sceneTimelineSegmentSchema>;
 export interface SceneScope {runId: string; sessionId: string; traceId: string; ownerKey: string}
 export interface SceneDiagnostic {code: string; segmentId?: string; referenceIndex?: number; detail?: string}
@@ -82,9 +131,22 @@ export interface SceneCoveragePlan {
     bindingIssue?: string}[];
 }
 export type SceneScanCoverageAssessment = import('../../types/sceneTimeline').SceneTimelineView['coverage'];
+/**
+ * An atomic change group that did not commit. Its members keep their committed
+ * versions and lineage; none of its supersedes or removals were applied.
+ */
+export interface SceneRejectedGroup {
+  segmentIds: readonly string[];
+  segmentIndices: readonly number[];
+  removedSegmentIds: readonly string[];
+  diagnostics: readonly SceneDiagnostic[];
+}
 export interface SceneProposalResult {
   accepted: boolean; revision: number; diagnostics: readonly SceneDiagnostic[];
   segments?: readonly SceneSegmentAssessment[];
+  /** Removals this commit applied. */
+  removedSegmentIds?: readonly string[];
+  rejectedGroups?: readonly SceneRejectedGroup[];
 }
 export interface SceneRunLimits {
   maxSegments: number; maxRunCandidates: number; maxDiagnostics: number; maxRevisions: number; maxReceipts: number; maxDependencyEdges: number;

@@ -7,7 +7,7 @@ import {captureEvidenceTable, type CapturedFieldSemantics} from '../../../servic
 import {investigationCaptureFields} from '../../../services/evidence/investigationEvidenceLedger';
 import type {EvidenceReadView} from '../../../services/evidence/evidenceReadView';
 import {createSceneRunContext, freezeSceneTimeline, sealSceneTimeline, resolveSceneRunContext, sceneRunState, revokeSceneRunContext} from '../sceneRunContext';
-import {proposeSceneTimeline} from '../sceneTimelineProposal';
+import {proposeSceneTimeline, sceneCellValueMatches, sceneProposalActionRequired} from '../sceneTimelineProposal';
 import {assessSceneTimeline} from '../sceneTimelineAssessment';
 import type {SceneTimelineSegment, SceneRunLimits} from '../sceneTimelineContract';
 
@@ -123,8 +123,10 @@ describe('scene timeline issued run and revision evidence', () => {
       evidenceRefs: [{evidenceRefId: 'ev', rowIndex: 0},
         {evidenceRefId: 'ev', rowIndex: 0, column: 'begin', value: 'submitted-wrong-value'}],
     })]));
-    expect(result).toEqual({accepted: false, revision: 0, diagnostics: [{code: 'evidence_value_mismatch',
-      segmentId: 'segment:with:colons', referenceIndex: 1, detail: 'column: begin'}]});
+    const diagnostic = {code: 'evidence_value_mismatch', segmentId: 'segment:with:colons', referenceIndex: 1,
+      detail: 'column: begin; captured type: string'};
+    expect(result).toEqual({accepted: false, revision: 0, diagnostics: [diagnostic], rejectedGroups: [{
+      segmentIds: ['segment:with:colons'], segmentIndices: [0], removedSegmentIds: [], diagnostics: [diagnostic]}]});
     expect(JSON.stringify(result)).not.toContain('private-captured-cell');
     expect(JSON.stringify(result)).not.toContain('submitted-wrong-value');
   });
@@ -136,7 +138,8 @@ describe('scene timeline issued run and revision evidence', () => {
     }})]));
     expect(result).toMatchObject({accepted: false, diagnostics: [{code: 'evidence_reference_rejected',
       segmentId: 's', referenceIndex: 0,
-      detail: 'required_column_missing; requiredColumns: ["begin","invented_end"]; reacquire current-run evidence and resubmit.'}]});
+      detail: 'required_column_missing; requiredColumns: ["begin","invented_end"]; availableColumns: ["begin","finish","device_id"]; ' +
+        'cite an existing column, query a real end column, or mark the boundary inferred'}]});
     expect(JSON.stringify(result)).not.toContain(start);
   });
   it('does not echo an arbitrary reader failure reason', async () => {
@@ -309,4 +312,142 @@ describe('scene timeline issued run and revision evidence', () => {
     expect(result.segments![0].checks[2]).toMatchObject({status: 'unknown'});
   });
 
+});
+
+describe('scene proposal change groups', () => {
+  const missing = {evidenceRefId: 'missing-ref', rowIndex: 0};
+  const ids = (result: Awaited<ReturnType<typeof proposeSceneTimeline>>) => result.segments!.map(item => item.segment.id).sort();
+
+  it('commits independent groups and names every failing reference of the rejected group at once', async () => {
+    const {handle} = fixture();
+    const result = await proposeSceneTimeline(handle, proposal([segment('good'),
+      segment('bad', {evidenceRefs: [missing, {evidenceRefId: 'also-missing', rowIndex: 0}]})]));
+    expect(result).toMatchObject({accepted: true, revision: 1});
+    expect(ids(result)).toEqual(['good']);
+    expect(result.rejectedGroups).toEqual([expect.objectContaining({segmentIds: ['bad'], segmentIndices: [1]})]);
+    expect(result.rejectedGroups![0].diagnostics.map(item => item.referenceIndex)).toEqual([0, 1]);
+    expect(result.rejectedGroups![0].diagnostics[0].detail).toContain('evidence_not_retained');
+    expect(sceneRunState(handle).pacing.committedSegments).toBe(1);
+  });
+  it('rejects a fingerprint-only dependent together with the change it reaches', async () => {
+    const {handle} = fixture();
+    await proposeSceneTimeline(handle, proposal([segment('x'), segment('u', {dependencies: ['x']})]));
+    const result = await proposeSceneTimeline(handle, proposal([segment('x', {userAction: 'Revised', evidenceRefs: [missing]}),
+      segment('n', {dependencies: ['u']}), segment('free')], 1, 'second'));
+    expect(ids(result)).toEqual(['free', 'u', 'x']);
+    expect(result.segments!.find(item => item.segment.id === 'x')!.segment.userAction).toBe('Observed touch movement');
+    expect([...result.rejectedGroups![0].segmentIds].sort()).toEqual(['n', 'x']);
+  });
+  it('keeps a cross-group cycle inside one rejected group', async () => {
+    const {handle} = fixture();
+    await proposeSceneTimeline(handle, proposal([segment('x'), segment('u', {dependencies: ['x']}),
+      segment('y'), segment('v', {dependencies: ['y']})]));
+    const result = await proposeSceneTimeline(handle, proposal([segment('x', {dependencies: ['v']}),
+      segment('y', {dependencies: ['u']}), segment('free')], 1, 'cycle'));
+    expect(ids(result)).toEqual(['free', 'u', 'v', 'x', 'y']);
+    expect(result.rejectedGroups).toHaveLength(1);
+    expect(result.rejectedGroups![0].diagnostics.some(item => item.code === 'dependency_cycle')).toBe(true);
+    expect(result.segments!.find(item => item.segment.id === 'x')!.segment.dependencies).toEqual([]);
+  });
+  it('rejects a whole split when one child fails and keeps the parent', async () => {
+    const {handle} = fixture();
+    await proposeSceneTimeline(handle, proposal([segment('parent')]));
+    const result = await proposeSceneTimeline(handle, proposal([segment('left', {supersedes: ['parent']}),
+      segment('right', {supersedes: ['parent'], evidenceRefs: [missing]})], 1, 'split'));
+    expect(result.accepted).toBe(false);
+    expect([...sceneRunState(handle).segments.keys()]).toEqual(['parent']);
+    expect([...result.rejectedGroups![0].segmentIds].sort()).toEqual(['left', 'right']);
+  });
+  it('applies a removal and a supersede of the same parent together', async () => {
+    const {handle} = fixture();
+    await proposeSceneTimeline(handle, proposal([segment('parent')]));
+    const result = await proposeSceneTimeline(handle, {...proposal([segment('child', {supersedes: ['parent']})], 1, 'replace'),
+      removeSegmentIds: ['parent']});
+    expect(ids(result)).toEqual(['child']);
+  });
+  it('rejects a supersede together with a new segment that still depends on the parent', async () => {
+    const {handle} = fixture();
+    await proposeSceneTimeline(handle, proposal([segment('parent')]));
+    const result = await proposeSceneTimeline(handle, proposal([segment('child', {supersedes: ['parent']}),
+      segment('reader', {dependencies: ['parent']}), segment('free')], 1, 'dangling'));
+    expect(ids(result)).toEqual(['free', 'parent']);
+    expect([...result.rejectedGroups![0].segmentIds].sort()).toEqual(['child', 'reader']);
+  });
+  it('does not chain independent segments through a stable shared context', async () => {
+    const {handle} = fixture();
+    await proposeSceneTimeline(handle, proposal([segment('context')]));
+    const result = await proposeSceneTimeline(handle, proposal([segment('a', {dependencies: ['context']}),
+      segment('b', {dependencies: ['context'], evidenceRefs: [missing]})], 1, 'shared'));
+    expect(ids(result)).toEqual(['a', 'context']);
+    expect(result.rejectedGroups![0].segmentIds).toEqual(['b']);
+  });
+  it('keeps the previous revision of a segment whose evidence was evicted while other groups commit', async () => {
+    const old = process.env[EVIDENCE_RETENTION_CELLS_ENV];
+    process.env[EVIDENCE_RETENTION_CELLS_ENV] = '3';
+    try {
+      const {handle, add} = fixture();
+      await proposeSceneTimeline(handle, proposal());
+      add('new');
+      const result = await proposeSceneTimeline(handle, proposal([segment('s', {userAction: 'Changed story'}),
+        segment('t', {evidenceRefs: [{evidenceRefId: 'new', rowIndex: 0}]})], 1, 'mixed'));
+      expect(ids(result)).toEqual(['s', 't']);
+      expect(result.segments!.find(item => item.segment.id === 's')!.segment.userAction).toBe('Observed touch movement');
+      expect(result.rejectedGroups![0]).toMatchObject({segmentIds: ['s']});
+      expect(result.rejectedGroups![0].diagnostics[0].detail).toContain('evicted');
+    } finally {if (old === undefined) delete process.env[EVIDENCE_RETENTION_CELLS_ENV]; else process.env[EVIDENCE_RETENTION_CELLS_ENV] = old;}
+  });
+  it('checks segment capacity on the map that would actually commit', async () => {
+    const {handle} = fixture({limits: {maxSegments: 2}});
+    await proposeSceneTimeline(handle, proposal([segment('x'), segment('u', {dependencies: ['x']})]));
+    const result = await proposeSceneTimeline(handle, {...proposal([segment('n')], 1, 'capacity'), removeSegmentIds: ['x']});
+    expect(result).toMatchObject({accepted: false, diagnostics: [{code: 'scene_candidate_budget_exhausted'}]});
+    expect([...sceneRunState(handle).segments.keys()]).toEqual(['x', 'u']);
+  });
+  it('replays a committed partial result before cumulative budgets are checked', async () => {
+    const {handle} = fixture({limits: {maxRunCandidates: 2}});
+    const request = proposal([segment('good'), segment('bad', {evidenceRefs: [missing]})]);
+    const first = await proposeSceneTimeline(handle, request);
+    expect(first.accepted).toBe(true);
+    expect(await proposeSceneTimeline(handle, request)).toBe(first);
+  });
+  it('treats explicit nulls and blank identifiers as absent without defaulting required fields', async () => {
+    const {handle} = fixture();
+    const result = await proposeSceneTimeline(handle, proposal([{...segment('n'), dependencies: null,
+      object: {kind: 'input_device', key: '7', machineId: null},
+      evidenceRefs: [{evidenceRefId: 'ev', artifactId: '', sourceToolCallId: null, rowIndex: 0, column: null}],
+      boundaries: {start: {source: 'evidence', evidenceIndex: 0, column: 'begin'}, end: {source: 'inferred', column: ' '}},
+    } as unknown as SceneTimelineSegment]));
+    expect(result.accepted).toBe(true);
+    const missingAction = await proposeSceneTimeline(handle, proposal([{...segment('m'), userAction: null} as unknown as SceneTimelineSegment], 1, 'required'));
+    expect(missingAction).toMatchObject({accepted: false, rejectedGroups: [{segmentIds: ['m'],
+      diagnostics: [expect.objectContaining({code: 'invalid_segment'})]}]});
+    expect(sceneProposalActionRequired(missingAction)).toBe('repair_scene_proposal');
+    const nullValue = await proposeSceneTimeline(handle, proposal([segment('v', {evidenceRefs: [{evidenceRefId: 'ev', rowIndex: 0,
+      column: 'begin', value: null}]})], 1, 'null-value'));
+    expect(nullValue.rejectedGroups![0].diagnostics[0]).toMatchObject({code: 'evidence_value_mismatch'});
+  });
+  it('accepts a numeric cell quoted as its exact decimal string only', async () => {
+    const {handle} = fixture({values: [123, 456]});
+    const cite = (value: unknown) => segment('s', {startNs: '123', endNs: '456',
+      evidenceRefs: [{evidenceRefId: 'ev', rowIndex: 0, column: 'begin', value: value as string}]});
+    const result = await proposeSceneTimeline(handle, proposal([cite('123')]));
+    expect(result.accepted).toBe(true);
+    expect(result.segments![0].checks.slice(0, 2).map(check => check.status)).toEqual(['passed', 'passed']);
+    expect((await proposeSceneTimeline(handle, proposal([cite('124')], 1, 'different'))).rejectedGroups![0].diagnostics[0])
+      .toMatchObject({code: 'evidence_value_mismatch', detail: 'column: begin; captured type: number'});
+    // The claim verifier's exact-number rule: equal decimal forms denote the same cell.
+    expect(sceneCellValueMatches(123, '0123')).toBe(true);
+    expect(sceneCellValueMatches(123, '1.23e2')).toBe(true);
+    expect(sceneCellValueMatches(1.5, '1.50')).toBe(true);
+    expect(sceneCellValueMatches(2 ** 53 + 2, String(2 ** 53 + 2))).toBe(false);
+    expect(sceneCellValueMatches(true, 'true')).toBe(false);
+    expect(sceneCellValueMatches(0, '')).toBe(false);
+  });
+  it('classifies only actionable rejections as policy refusals', () => {
+    const rejected = (code: string) => ({accepted: false, revision: 0, diagnostics: [{code}]});
+    expect(sceneProposalActionRequired(rejected('stale_base_revision'))).toBe('repair_scene_proposal');
+    expect(sceneProposalActionRequired(rejected('scene_revision_budget_exhausted'))).toBe('deliver_with_last_scene_revision');
+    expect(sceneProposalActionRequired(rejected('scene_evidence_read_failed'))).toBeUndefined();
+    expect(sceneProposalActionRequired({accepted: true, revision: 1, diagnostics: []})).toBeUndefined();
+  });
 });

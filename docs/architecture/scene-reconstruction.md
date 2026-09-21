@@ -42,6 +42,20 @@
 
 `propose_scene_timeline` 提交带 `baseRevision` 的增量候选，可增加、修订或移除片段。引用只能指向本轮真实工具执行保存的 artifact / evidence 及原始行位置；候选工具返回、模型笔记和历史报告都不是新证据。候选接受仅表示修订已保存，模型不能声明 verified。修订冲突、引用缺失、对象或边界矛盾应促使 Agent 回查事实。
 
+一次提交按**原子变更组**结算：本次新增、修订、删除或被 supersede 的片段，连同在旧依赖图或新依赖图上能到达它们的片段（包括只有依赖指纹变化的已提交片段）连成一组；未受影响的共享上下文不参与分组。任一成员的 schema、边界、supersedes、依赖闭包或证据引用不成立，整组不提交，成员保留已提交版本与血缘；其他组照常提交为同一个 revision。组外片段不会依赖组内片段，因此一次求值即可得到确定结果；片段总数等共享上限在最终合成图上检查。返回的 `rejectedGroups` 一次列出每组全部失败引用，引用诊断只含标识字段名、可用列名和行数，从不回显单元格值。
+
+注册表为证据类工具统一发布可选 `planPhaseId`，提案工具只把它用于计划归属，不进入严格的片段合同；显式 `null` 与空标识等同于未提供。MCP 宿主会在 handler 之前按工具发布的 schema 校验，因此发布的 schema 保留结构与必填项，但允许 `null`、空标识和嵌套未知键通过，最终由严格合同按组裁决；宿主可能丢弃顶层未知键，它们同样不会进入修订。数值单元格可以用其精确十进制字符串引用（纳秒字段在同一载荷里就是字符串）。提案回执携带 `success`/`planPhaseId`，被接受的修订可以完成计划阶段；可修复的拒绝以 `action_required` 返回，属于策略拒绝而不是工具故障，证据读取异常仍按故障处理。SQL 摘要结果的 `sampleRowIndices` 给出样本行在完整结果中的原始行号。
+
+## 提交节奏与预算
+
+策略要求尽早提交小修订，但实际 run 把全部预算用于采集，首个被接受的修订普遍出现在采集末尾。节奏由共享注册表在每次采集调用前执行，对五个 runtime 一致生效，并排在授权与生命周期拒绝之后：
+
+- 尚无已提交片段且已完成若干次采集时，采集结果附带提醒；达到次数上限或基础预算的一定比例后暂停采集，直到模型提交一次含片段的提案（被拒也算尝试，因此不会死锁），若仍无已提交片段会在几次采集后再次暂停。
+- 距采集上限不足若干个“最慢近期模型轮次”（上限为采集跨度的一部分）时关闭采集窗口，只保留提案、已保留 artifact 的读取与最终回答；关闭后不再重开。
+- 已有修订但长期未更新且移动截止时间临近时，采集结果提示先提交累积的片段。
+
+OpenAI runtime 的场景分派使用进度感知截止：返回的工具结果和流式输出推迟调查截止，但不超过固定上限并保留 delivery 预留。Claude runtime 的场景分派采用同一预算（`CLAUDE_MAX_RUN_TIMEOUT_MS`，缺省回退 `AGENT_MAX_RUN_TIMEOUT_MS`，再到 60 分钟）；非场景 Claude run 以及 Pi、OpenCode、Qoder 仍使用固定预算，但同样受上述节奏约束。未发生 delivery 调用时，未消耗的 delivery 预留在硬上限内用于最终语义复核，避免慢 provider 因复核超时而退化为 `quality_gate_failed`。
+
 长 Trace 按窗口调查并保留跨窗口的状态与未闭合边界。完整读取 artifact 分页不能补回 SQL 已被 LIMIT 截去的行；生产者截断、解析失败和未查询范围必须单独记录。资源上限导致明确的部分结果，不能静默丢掉末尾片段再宣称完整。
 
 ## 核验与覆盖边界
@@ -54,7 +68,7 @@
 - **采集完整性**回答 Trace 本身是否记录了所需事件。目前 `captureStatus` 保持 `unknown`；表存在、查询成功或返回零行都不能证明完整采集。
 - **查询覆盖状态**仅在全部必查来源具有匹配生产者、成功执行且完整覆盖请求范围时为 `complete`，否则保持 `unknown` 或 `partial`。成功重扫可以补足旧失败窗口，历史问题仍单独保留。查询完成不代表采集完整，也不代表故事正确。
 
-当前 `SceneTimelineAssessment.status` 保持 `partial`，与执行是否到达终态分开。成功结束一次调查不表示准确还原了每个动作；部分结果、失败和取消也不能通过报告生成或历史恢复变成“准确完成”。finalizer 只评估已有冻结快照，不补做查询或重新编故事。
+当前 `SceneTimelineAssessment.status` 保持 `partial`，与执行是否到达终态分开。交付判定只降不升：冻结快照中没有任何已提交片段时，run 的 `success` 为 false、置信度为 0，并说明本次没有交付场景时间线；已有时间线而原生运行失败（例如超时且无正文）时保持失败，同时说明保留了哪个 revision。已提交片段数量不会把原生失败改写为成功。成功结束一次调查不表示准确还原了每个动作；部分结果、失败和取消也不能通过报告生成或历史恢复变成“准确完成”。finalizer 只评估已有冻结快照，不补做查询或重新编故事。
 
 ## 一个版本，多种展示
 
@@ -66,7 +80,7 @@
 
 ## 归档、权限与失效
 
-统一 finalizer 签发的一次性 publication 绑定 scope、canonical revision 和实际 summary。`SceneStoryService` 消费后生成 v3 产品报告，由 `SceneEvidenceArchive` 原子发布 report、assessment 与证据分片的 manifest。只有归档成功后结果才附带 `sceneReport` 引用；失败保留 `scene_archive_unavailable`，不伪造可用报告。
+统一 finalizer 只为至少有一个已提交片段的 revision 签发一次性 publication，revision 0 不会发布为场景报告；publication 绑定 scope、canonical revision 和实际 summary。`SceneStoryService` 消费后生成 v3 产品报告，由 `SceneEvidenceArchive` 原子发布 report、assessment 与证据分片的 manifest。只有归档成功后结果才附带 `sceneReport` 引用；失败保留 `scene_archive_unavailable`，不伪造可用报告。
 
 归档默认保留 7 天，由 manifest 的到期时间决定。读取 `/api/agent/v1/scene-reconstruct/report/:reportId` 同时检查 owner 和当前 Trace 权限。校验和错误、到期、Trace 删除或授权不可用时不能回退到内存或旧 v2 缓存。删除 Trace 使相关归档失效，历史 SSE、状态或快照不能复活归档，也不能签发 live proof。
 

@@ -14,6 +14,7 @@ import { collectEnvCredentialSources, hasConcreteEnvValue, isEnabledEnvFlag, red
 import { resolveAgentRuntimeBudgetConfig } from '../../../config';
 import {
   DEFAULT_FULL_REQUEST_TIMEOUT_MS,
+  DEFAULT_MAX_RUN_TIMEOUT_MS,
   DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
 } from '../../runtimeLimits';
 
@@ -67,6 +68,11 @@ export interface ClaudeAgentConfig {
   fullPathPerTurnMs: number;
   /** Absolute wall-clock cap for a full analysis request. */
   fullRequestTimeoutMs: number;
+  /**
+   * Maximum run time a progressing scene run may be extended to, including its
+   * delivery and finalization reserve. Non-scene runs keep the fixed request cap.
+   */
+  maxRunTimeoutMs: number;
   /** Abort a provider stream when it emits no SDK events for this long. */
   streamIdleTimeoutMs: number;
   /** Per-turn timeout (ms) for the quick analysis pipeline. Default: 40_000 (40s/turn).
@@ -132,6 +138,12 @@ function loadClaudeConfigFromEnv(
           'AGENT_FULL_REQUEST_TIMEOUT_MS',
           DEFAULT_FULL_REQUEST_TIMEOUT_MS,
         ),
+      ),
+    maxRunTimeoutMs: overrides?.maxRunTimeoutMs
+      ?? parsePositiveIntEnvFrom(
+        env,
+        'CLAUDE_MAX_RUN_TIMEOUT_MS',
+        parsePositiveIntEnvFrom(env, 'AGENT_MAX_RUN_TIMEOUT_MS', DEFAULT_MAX_RUN_TIMEOUT_MS),
       ),
     streamIdleTimeoutMs: overrides?.streamIdleTimeoutMs
       ?? parsePositiveIntEnvFrom(
@@ -781,6 +793,9 @@ export function resolveRuntimeConfig(
     fullRequestTimeoutMs: providerEnv.CLAUDE_FULL_REQUEST_TIMEOUT_MS
       ? loaded.fullRequestTimeoutMs
       : baseConfig.fullRequestTimeoutMs,
+    maxRunTimeoutMs: providerEnv.CLAUDE_MAX_RUN_TIMEOUT_MS || providerEnv.AGENT_MAX_RUN_TIMEOUT_MS
+      ? loaded.maxRunTimeoutMs
+      : baseConfig.maxRunTimeoutMs,
     streamIdleTimeoutMs: providerEnv.CLAUDE_STREAM_IDLE_TIMEOUT_MS
       ? loaded.streamIdleTimeoutMs
       : baseConfig.streamIdleTimeoutMs,

@@ -94,6 +94,7 @@ import type { AnalysisNote, AnalysisPlanV3, ClaudeAnalysisContext, FailedApproac
 import { ArtifactStore } from '../../../agentv3/artifactStore';
 import {resolveRuntimeEvidenceStore} from '../../runtimeEvidenceContext';
 import {activateSceneRuntime, resolveSceneProductScope} from '../../../agent/scene/sceneRuntimeBinding';
+import type {ScenePacingInputs} from '../../../agent/scene/sceneProposalPacing';
 import {
   recordPlanOrPrePlanToolCall,
   resetPrePlanToolCallsForNewRun,
@@ -133,9 +134,12 @@ import { buildRuntimeCaseBackgroundContext } from '../../../services/caseEvoluti
 import { getProductionEngineCapabilities } from '../../runtimeDescriptors';
 import type { EngineCapabilities } from '../../runtimeDescriptorTypes';
 import {
+  createDeadlineRuntimeTimeout,
+  createProgressAwareRunDeadline,
   createResettableRuntimeTimeout,
   resolveFullRequestTimeoutMs,
   summarizeExternalToolResult,
+  type ProgressAwareRunDeadline,
   type RuntimeTimeoutKind,
 } from '../../runtimeLimits';
 import {buildRuntimeTracePairComparisonContext, buildRuntimeTracePairIdentityContext} from '../../runtimePromptContext';
@@ -803,6 +807,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       input: Omit<RuntimeFinalizationContextInput, 'deliveryContext' | 'sourceUse' | 'evidenceReadView' | 'protocolProjection'>;
       ownerKey: string;
     } | undefined;
+    // One run deadline for every run. Scene dispatch may extend it on progress, like the OpenAI
+    // runtime, so a slow but producing scene run is not cut before it commits its timeline; other
+    // runs set max = base, which leaves both reserves at zero and the deadline fixed.
+    let runDeadline: ProgressAwareRunDeadline | undefined;
+    let closeoutDeadlineAt: number | undefined;
     const attachAcceptedFinalization = (result: AnalysisResult, deliveryContext: AnalysisDeliveryContext, allowSemantic: boolean,
       protocolProjection?: RuntimeFinalizationContextInput['protocolProjection']) => {
       if (!finalizationSetup || attemptNumber === 0 ||
@@ -815,6 +824,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       ];
       attachFinalizationContext(result, {
         ...finalizationSetup.input, deliveryContext, protocolProjection,
+        ...(runDeadline ? {deadlineMs: runDeadline.finalizationDeadlineAt(Date.now(), closeoutDeadlineAt)} : {}),
         sourceUse: sourceUse?.getSourceUseDecision(),
         sourceScope: sourceUse?.getSourceExecutionScope?.(),
         evidenceReadView: store?.createEvidenceReadView({allowedTraces, ownerKey: finalizationSetup.ownerKey,
@@ -933,10 +943,15 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       metricsCollector.recordAnalysisMode(options.analysisMode ?? 'auto',
         options.analysisMode === 'fast' || options.analysisMode === 'full' ? 'user_explicit' : 'ai');
       runtimePerformance.finishClassification(turnIntent.status === 'resolved' ? 'ok' : 'error');
-      const requestDeadline = Date.now() + (turnPolicy.budgetMode === 'quick'
-        ? runtimeConfig.quickPathPerTurnMs * runtimeConfig.maxTurns
-        : resolveFullRequestTimeoutMs(runtimeConfig.fullPathPerTurnMs, runtimeConfig.maxTurns,
-          runtimeConfig.fullRequestTimeoutMs));
+      const quickBudgetMode = turnPolicy.budgetMode === 'quick';
+      const requestPerTurnMs = quickBudgetMode ? runtimeConfig.quickPathPerTurnMs : runtimeConfig.fullPathPerTurnMs;
+      const requestBudgetMs = quickBudgetMode ? requestPerTurnMs * runtimeConfig.maxTurns
+        : resolveFullRequestTimeoutMs(requestPerTurnMs, runtimeConfig.maxTurns, runtimeConfig.fullRequestTimeoutMs);
+      const deadline = runDeadline = createProgressAwareRunDeadline({baseBudgetMs: requestBudgetMs, perTurnMs: requestPerTurnMs,
+        maxRunMs: resolveSceneProductScope(options, {runId, sessionId, traceId}) ? runtimeConfig.maxRunTimeoutMs : requestBudgetMs});
+      const extensible = deadline.hardDeadlineAt > deadline.startedAt + deadline.baseBudgetMs;
+      // Latest end of any model call, keeping the finalization reserve after it.
+      const requestDeadline = deadline.hardDeadlineAt - deadline.finalizationReserveMs;
       const finalizationEnv = Object.freeze({...sdkEnv});
       const finalizationModel = resolvedConfig.model;
       const finalizationBinaryOptions = Object.freeze({...getSdkBinaryOption(finalizationEnv)});
@@ -990,8 +1005,12 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         executionLease,
         runtimePerformance,
         turnIntent, turnPolicy, strategyRegistry: intentResolver.strategyRegistry, runActivity,
-        toolObserver: closeoutTape.observe, analysisHistoryReader, acquisition,
-        sceneDeadlineMs: requestDeadline,
+        toolObserver: event => {
+          if (event.phase === 'completed') deadline.recordProgress();
+          return closeoutTape.observe(event);
+        },
+        analysisHistoryReader, acquisition,
+        sceneDeadlineMs: deadline.hardDeadlineAt, scenePacing: deadline,
       });
       sourceUse = ctx.sourceUse;
       executionLease.throwIfAborted();
@@ -1252,6 +1271,8 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           executionLease.throwIfAborted();
           if (timedOut) break;
           providerIdleTimeout.reset();
+          // Provider output, not bookkeeping, may extend a scene deadline that arrives mid-stream.
+          if ((msg as any).type === 'stream_event' || (msg as any).type === 'assistant') deadline.recordOutput();
           if (interruptionRecoveryState) interruptionRecoveryState.streamStarted = true;
           mainAttemptWorkObserved ||= sdkAttemptHasObservedWork(msg);
 
@@ -1438,14 +1459,23 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
                 if (allSameTool && allFailed && !watchdogFiredTools.has(toolName)) {
                   watchdogFiredTools.add(toolName);
                   console.warn(`[ClaudeRuntime] Watchdog: ${WATCHDOG_WINDOW} consecutive failures for ${toolName}`);
-                  // P1-2: Inject warning into next MCP tool result (Claude reads this)
-                  ctx.watchdogWarning.current = localize(
-                    outputLanguage,
-                    `${toolName} 已连续失败 ${WATCHDOG_WINDOW} 次。请切换分析策略：尝试不同的 SQL 查询、使用其他 skill、或调整参数。不要重复相同的失败操作。`,
-                    `${toolName} has failed ${WATCHDOG_WINDOW} times in a row. Switch analysis strategy: try a different SQL query, use another skill, or adjust parameters. Do not repeat the same failed action.`,
-                  );
+                  // A refused call already says what to do instead; switching queries cannot satisfy it,
+                  // and it is not a failed approach worth remembering.
+                  const refused = recent.every(t => t.policyRefusal);
+                  // P1-2: Inject warning into next MCP tool result (Claude reads this).
+                  ctx.watchdogWarning.current = refused
+                    ? localize(
+                      outputLanguage,
+                      `${toolName} 已连续 ${WATCHDOG_WINDOW} 次被拒绝。请按返回结果中的 action_required 和诊断处理，不要重复同样的调用。`,
+                      `${toolName} was refused ${WATCHDOG_WINDOW} times in a row. Follow the returned action_required and diagnostics instead of repeating the same call.`,
+                    )
+                    : localize(
+                      outputLanguage,
+                      `${toolName} 已连续失败 ${WATCHDOG_WINDOW} 次。请切换分析策略：尝试不同的 SQL 查询、使用其他 skill、或调整参数。不要重复相同的失败操作。`,
+                      `${toolName} has failed ${WATCHDOG_WINDOW} times in a row. Switch analysis strategy: try a different SQL query, use another skill, or adjust parameters. Do not repeat the same failed action.`,
+                    );
                   // P1: Record for negative memory
-                  failedApproaches.push({
+                  if (!refused) failedApproaches.push({
                     type: 'tool_failure',
                     approach: `连续调用 ${toolName} ${WATCHDOG_WINDOW} 次均失败`,
                     reason: '同一工具重复失败，需要切换策略',
@@ -1454,11 +1484,14 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
                     type: 'progress',
                     content: {
                       phase: 'analyzing',
-                      message: localize(
-                        outputLanguage,
-                        `⚠ 检测到 ${toolName} 连续 ${WATCHDOG_WINDOW} 次失败，已注入策略切换指令`,
-                        `⚠ Detected ${WATCHDOG_WINDOW} consecutive failures for ${toolName}; injected a strategy-switch instruction`,
-                      ),
+                      message: refused
+                        ? localize(outputLanguage, `⚠ ${toolName} 连续 ${WATCHDOG_WINDOW} 次被拒绝，已提示按拒绝原因处理`,
+                          `⚠ ${toolName} was refused ${WATCHDOG_WINDOW} times in a row; pointed the model at the refusal reason`)
+                        : localize(
+                          outputLanguage,
+                          `⚠ 检测到 ${toolName} 连续 ${WATCHDOG_WINDOW} 次失败，已注入策略切换指令`,
+                          `⚠ Detected ${WATCHDOG_WINDOW} consecutive failures for ${toolName}; injected a strategy-switch instruction`,
+                        ),
                     },
                     timestamp: Date.now(),
                   });
@@ -1624,7 +1657,6 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         }
       };
 
-      let safetyTimer: ReturnType<typeof setTimeout> | undefined;
       const providerIdleTimeout = createResettableRuntimeTimeout({
         timeoutMs: runtimeConfig.streamIdleTimeoutMs,
         message: `Claude provider stream idle timeout after ${runtimeConfig.streamIdleTimeoutMs}ms`,
@@ -1634,16 +1666,20 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           closeSdk();
         },
       });
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        safetyTimer = setTimeout(() => {
-          timedOut = true;
-          timeoutState.kind = 'request';
-          // Forcefully terminate the SDK subprocess — without this, queued
-          // MCP tool calls (e.g. execute_sql) keep executing in the background
-          // after the session logger has closed, producing orphan SQL errors.
-          closeSdk();
-          reject(new Error(`Analysis safety timeout after ${timeoutMs / 1000}s`));
-        }, timeoutMs);
+      const onRequestTimeout = () => {
+        timedOut = true;
+        timeoutState.kind = 'request';
+        // Forcefully terminate the SDK subprocess — without this, queued
+        // MCP tool calls (e.g. execute_sql) keep executing in the background
+        // after the session logger has closed, producing orphan SQL errors.
+        closeSdk();
+      };
+      // The deadline follows returned tool results and streaming output where it may extend.
+      const requestTimeout = createDeadlineRuntimeTimeout({
+        deadlineAt: deadline.current,
+        tryExtend: deadline.extendIfStreaming,
+        message: now => `Analysis safety timeout after ${Math.round((now - deadline.startedAt) / 1000)}s`,
+        onTimeout: onRequestTimeout,
       });
 
       let onAbort: (() => void) | undefined;
@@ -1653,7 +1689,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         if (executionLease.signal.aborted) onAbort();
       });
       try {
-        await Promise.race([processStream(), timeoutPromise, providerIdleTimeout.promise, abortPromise]);
+        await Promise.race([processStream(), requestTimeout.promise, providerIdleTimeout.promise, abortPromise]);
       } catch (err) {
         if (timedOut) {
           console.error('[ClaudeRuntime] Analysis safety timeout reached — SDK subprocess has been closed');
@@ -1674,7 +1710,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         }
       } finally {
         if (onAbort) executionLease.signal.removeEventListener('abort', onAbort);
-        if (safetyTimer) clearTimeout(safetyTimer);
+        requestTimeout.clear();
         providerIdleTimeout.clear();
         for (const timer of activeSubAgentTimers.values()) clearTimeout(timer);
         activeSubAgentTimers.clear();
@@ -1685,17 +1721,24 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       if (timedOut) {
         terminationReason = 'timeout';
         acceptedTerminal = {status: 'incomplete', reason: 'timeout'};
+        const elapsedSeconds = Math.round((Date.now() - deadline.startedAt) / 1000);
         terminationMessage = isStreamIdleTimeout()
           ? localize(
             outputLanguage,
             `AI provider 连续 ${Math.round(runtimeConfig.streamIdleTimeoutMs / 1000)} 秒没有流事件，已取消并保留部分结果。`,
             `The AI provider emitted no stream events for ${Math.round(runtimeConfig.streamIdleTimeoutMs / 1000)} seconds; the run was cancelled and partial results were preserved.`,
           )
-          : localize(
-            outputLanguage,
-            `完整分析超过 ${Math.round(timeoutMs / 1000)} 秒硬上限，已取消并保留部分结果。`,
-            `Full analysis exceeded the ${Math.round(timeoutMs / 1000)} second hard limit; the run was cancelled and partial results were preserved.`,
-          );
+          : extensible
+            ? localize(
+              outputLanguage,
+              `场景还原在 ${elapsedSeconds} 秒后没有新的工具进展，已取消并保留部分结果。`,
+              `Scene reconstruction made no further tool progress after ${elapsedSeconds} seconds; the run was cancelled and partial results were preserved.`,
+            )
+            : localize(
+              outputLanguage,
+              `完整分析超过 ${Math.round(timeoutMs / 1000)} 秒硬上限，已取消并保留部分结果。`,
+              `Full analysis exceeded the ${Math.round(timeoutMs / 1000)} second hard limit; the run was cancelled and partial results were preserved.`,
+            );
         flushPendingAnswer();
         this.emitUpdate({type: 'degraded', content: {
           module: 'claudeRuntime', fallback: 'partial_result_after_timeout',
@@ -1727,9 +1770,10 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           try {
             directory = await fs.promises.mkdtemp(path.join(tmpdir(), 'smartperfetto-claude-closeout-'));
             assertAuthorized();
+            closeoutDeadlineAt = deadline.deliveryReserveMs > 0 ? Date.now() + deadline.deliveryWindowMs() : undefined;
             const summary = await runClaudeIntentTransport({
               prompt, systemPrompt: ctx.systemPrompt, signal: executionLease.signal,
-              deadlineMs: requestDeadline, outputByteLimit: 128 * 1024,
+              deadlineMs: closeoutDeadlineAt ?? requestDeadline, outputByteLimit: 128 * 1024,
               config: {lightModel: runtimeConfig.model, cwd: directory},
               sdkEnv: finalizationEnv, sdkBinaryOptions: finalizationBinaryOptions,
               loadSdk: async () => ({query: input => {
@@ -2337,6 +2381,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       analysisHistoryReader?: ReturnType<typeof createRuntimeAnalysisHistoryReader>;
       acquisition?: {open: boolean};
       sceneDeadlineMs?: number;
+      scenePacing?: ScenePacingInputs;
     },
   ) {
     const {turnIntent, turnPolicy, strategyRegistry} = precomputed;
@@ -2687,7 +2732,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       precomputed.runActivity?.active !== false && !executionLease?.signal.aborted;
     const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
       deadlineMs: precomputed.sceneDeadlineMs ?? 0, traceProcessorService: this.traceProcessorService,
-      artifactStore, sceneCoverageRegistry, signal: executionLease?.signal, canInvokeTool});
+      artifactStore, sceneCoverageRegistry, signal: executionLease?.signal, canInvokeTool, pacing: precomputed.scenePacing});
     const { server: mcpServer, allowedTools, toolDefinitions, sourceUse } = createClaudeMcpServer({
       sceneRunContext,
       toolObserver: precomputed.toolObserver,

@@ -201,6 +201,21 @@ describe('Claude runtime limits', () => {
       streamIdleTimeoutMs: 6_789,
     });
   });
+
+  it('resolves the scene run extension ceiling from Claude, then shared, then default settings', () => {
+    delete process.env.CLAUDE_MAX_RUN_TIMEOUT_MS;
+    delete process.env.AGENT_MAX_RUN_TIMEOUT_MS;
+    try {
+      expect(loadClaudeConfig().maxRunTimeoutMs).toBe(60 * 60_000);
+      process.env.AGENT_MAX_RUN_TIMEOUT_MS = '3000000';
+      expect(loadClaudeConfig().maxRunTimeoutMs).toBe(3_000_000);
+      process.env.CLAUDE_MAX_RUN_TIMEOUT_MS = '2400000';
+      expect(loadClaudeConfig().maxRunTimeoutMs).toBe(2_400_000);
+    } finally {
+      delete process.env.CLAUDE_MAX_RUN_TIMEOUT_MS;
+      delete process.env.AGENT_MAX_RUN_TIMEOUT_MS;
+    }
+  });
 });
 
 describe('createQuickConfig', () => {

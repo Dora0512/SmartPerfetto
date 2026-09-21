@@ -7,6 +7,8 @@ import type {EvidenceReadView} from '../../services/evidence/evidenceReadView';
 import {MAX_EVIDENCE_READ_REFERENCES} from '../../services/evidence/evidenceReadView';
 import {DEFAULT_SCENE_RUN_LIMITS, type SceneScope, type SceneRunLimits, type SceneSegmentAssessment,
   type SceneProposalResult, type SceneTimelineSnapshot, type SceneDiagnostic, type SceneCoveragePlan, sceneNanosecondsSchema} from './sceneTimelineContract';
+import {createScenePacingState, DEFAULT_SCENE_PACING_PER_TURN_MS, type ScenePacingInputs,
+  type ScenePacingState} from './sceneProposalPacing';
 
 const optionKey = Symbol('active scene run');
 const contexts = new WeakMap<object, SceneRunState>();
@@ -16,6 +18,8 @@ export interface SceneRunContextOptions extends SceneScope {
   traceBounds: {startNs: string; endNs: string};
   createEvidenceReadView: () => EvidenceReadView;
   limits?: Partial<SceneRunLimits>;
+  /** Budget of a runtime whose deadline moves; a fixed-budget runtime omits it. */
+  pacing?: ScenePacingInputs;
 }
 export interface SceneRunContext {
   bindOptions<T extends object>(options: T): T;
@@ -30,6 +34,7 @@ export interface SceneRunState {
   coveragePlan?: SceneCoveragePlan; coveragePlanInitialized?: boolean;
   proposals: Map<string, {fingerprint: string; result: SceneProposalResult}>;
   unresolved: readonly string[]; diagnostics: SceneDiagnostic[];
+  pacing: ScenePacingState;
   consumed: {scanBytes: number; scanReceipts: number; candidates: number; bytes: number; references: number; receipts: number; dependencyEdges: number};
 }
 function assertSceneRunAuthorized(state: SceneRunState): void {
@@ -53,6 +58,7 @@ export function createSceneRunContext(options: SceneRunContextOptions): SceneRun
       limits.maxReferencesPerRead > MAX_EVIDENCE_READ_REFERENCES) throw new Error('invalid_scene_limits');
   const state: SceneRunState = {options: Object.freeze({...options, traceBounds: Object.freeze(bounds)}), limits,
     revision: 0, busy: false, revoked: false, segments: new Map(), scanReceipts: new Map(), scanDiagnostics: [], proposals: new Map(), unresolved: [], diagnostics: [],
+    pacing: createScenePacingState(resolvePacingInputs(options)),
     consumed: {scanBytes: 0, scanReceipts: 0, candidates: 0, bytes: 0, references: 0, receipts: 0, dependencyEdges: 0}};
   assertSceneRunActive(state);
   const handle: SceneRunContext = Object.freeze({bindOptions<T extends object>(target: T): T {
@@ -61,6 +67,14 @@ export function createSceneRunContext(options: SceneRunContextOptions): SceneRun
   }});
   contexts.set(handle, state);
   return handle;
+}
+/** A fixed-budget runtime supplies only its deadline: acquisition and the run end together. */
+function resolvePacingInputs(options: SceneRunContextOptions): ScenePacingInputs {
+  if (options.pacing) return options.pacing;
+  const startedAt = Date.now();
+  const deadline = options.deadlineMs;
+  return {startedAt, baseBudgetMs: Math.max(1, deadline - startedAt), investigationLimitAt: deadline,
+    current: () => deadline, perTurnMs: DEFAULT_SCENE_PACING_PER_TURN_MS};
 }
 export function resolveSceneRunContext(options: object, expected: SceneScope): SceneRunContext | undefined {
   const handle = (options as Record<symbol, unknown>)[optionKey];

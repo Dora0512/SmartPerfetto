@@ -46,7 +46,7 @@ import {analysisDeliveryFingerprint} from '../types/analysisDelivery';
 import type {AnalysisTurnIntent} from '../agentRuntime/analysisTurnIntent';
 import type {FinalInvestigationAssessment, InvestigationRequirementAssessment} from '../types/analysisInvestigationAssessment';
 import {sanitizeCandidateProtocolDiagnostic, type CandidateProtocolDiagnostic} from '../services/canonicalAnalysisResult';
-import {WorkingTraceProcessor} from '../services/workingTraceProcessor';
+import {TraceProcessorFactory, WorkingTraceProcessor} from '../services/workingTraceProcessor';
 import {analyzeRawSqlDirectProjection} from '../services/evidence/rawSqlDirectProjection';
 import {readRawSqlCaptureFields, resolveRawSqlNativeRowSchema, type RawSqlNativeRowSchema} from '../services/evidence/rawSqlNativeProvenance';
 import {resolveCapabilityTraceProcessorIdentity} from '../services/capabilityManifestRuntimeIdentity';
@@ -3631,7 +3631,12 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) {
-  main().catch((error) => {
+  main().then(() => {
+    // The verdict and artifacts are written; trace processors, SDK children and keep-alive
+    // sockets would otherwise hold the loop open, so batch callers needed an external watchdog.
+    TraceProcessorFactory.cleanup();
+    process.stdout.write('', () => process.exit(process.exitCode ?? 0));
+  }, (error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
   });

@@ -299,6 +299,34 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
     expect((runtime as any).artifactStores.has(f.scope.sessionId)).toBe(false);
   });
+  it('scene runtime: extends a producing scene run past its base request budget', async () => {
+    const f = createSceneRuntimeMatrixFixture('claude-deadline');
+    // The fixed cap alone would cancel this run at 300 ms; tool results keep arriving every 150 ms.
+    const runtime = new ClaudeRuntime(f.traceProcessorService, {model: 'scene-deadline-claude',
+      enableVerification: false, enableSubAgents: false, maxTurns: 3, fullPathPerTurnMs: 100,
+      fullRequestTimeoutMs: 300, maxRunTimeoutMs: 6_000, streamIdleTimeoutMs: 60_000});
+    const outcomes: unknown[] = [];
+    claudeSdkMock.__setQueryImplementation(async function* (params: any) {
+      const tools = params.options.mcpServers.smartperfetto.instance.tools;
+      const propose = tools.find((item: any) => item.name === 'propose_scene_timeline');
+      const sql = tools.find((item: any) => item.name === 'execute_sql');
+      outcomes.push((await propose.handler(f.proposal(), {})).structuredContent?.accepted);
+      for (let index = 0; index < 6; index++) {
+        await new Promise(resolve => setTimeout(resolve, 150));
+        outcomes.push((await sql.handler({sql: 'SELECT 1'}, {})).structuredContent?.success);
+      }
+      yield {type: 'result', subtype: 'success', num_turns: 3, result: 'Scene timeline submitted.'};
+    });
+    const updates: any[] = [];
+    runtime.on('update', update => updates.push(update));
+    try {
+      const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
+      expect(outcomes).toEqual([true, true, true, true, true, true, true]);
+      expect(result.terminationReason).not.toBe('timeout');
+      expect(updates.some(update => update.content?.fallback === 'partial_result_after_timeout')).toBe(false);
+      expect(f.seal().revision).toBe(1);
+    } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
+  });
   it.each([
     [{type: 'result', subtype: 'success', is_error: false, stop_reason: null}, 'completed', undefined],
     [{type: 'result', subtype: 'success', is_error: false}, 'completed', undefined],

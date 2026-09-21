@@ -1514,9 +1514,12 @@ export function applyFinalResultQualityGate(input: FinalResultQualityInput): Fin
   result.partial = true;
   result.confidence = Math.min(result.confidence || 0, 0.55);
   result.terminationReason ??= 'quality_gate_failed';
-  if (!result.terminationMessage) result.terminationMessage = issue.message;
-  else if (!result.terminationMessage.includes(issue.message)) {
-    result.terminationMessage = `${result.terminationMessage}\n\n${issue.message}`;
-  }
+  appendTerminationMessage(result, issue.message);
   return issue;
+}
+
+/** Add one explanation to a result's termination message without repeating it. */
+export function appendTerminationMessage(result: Pick<AgentRuntimeAnalysisResult, 'terminationMessage'>, message: string): void {
+  if (!result.terminationMessage) result.terminationMessage = message;
+  else if (!result.terminationMessage.includes(message)) result.terminationMessage = `${result.terminationMessage}\n\n${message}`;
 }

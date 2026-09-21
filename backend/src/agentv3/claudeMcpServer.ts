@@ -6,8 +6,9 @@ import {createRuntimeToolResult, runtimeToolReceiptMetadata} from '../agentRunti
 import {assertSceneRuntimeCapability} from '../agent/scene/sceneRuntimeBinding';
 import {sceneRunState, type SceneRunContext} from '../agent/scene/sceneRunContext';
 import {projectSceneRunCandidate} from '../agent/scene/sceneTimelineProjection';
-import {proposeSceneTimeline} from '../agent/scene/sceneTimelineProposal';
-import {sceneTimelineProposalSchema} from '../agent/scene/sceneTimelineContract';
+import {proposeSceneTimeline, sceneProposalActionRequired} from '../agent/scene/sceneTimelineProposal';
+import {createSceneAcquisitionPolicy} from '../agent/scene/sceneAcquisitionPolicy';
+import {sceneTimelineProposalToolShape} from '../agent/scene/sceneTimelineContract';
 import type {RuntimeToolObserver} from '../agentRuntime/runtimeToolObserver';
 import type {AnalysisHistoryReader} from '../agentRuntime/analysisHistory';
 import {renderRequiredLocalizedStrategyTemplate} from './localizedStrategyTemplate';
@@ -96,7 +97,9 @@ import {
   getRegisteredScenes,
   getStrategyDetailByRef,
   getStrategyDetails,
+  loadPromptSegment,
   loadPromptTemplate,
+  stripPromptComments,
 } from './strategyLoader';
 import { buildActivePhaseReminder } from './activePhaseReminder';
 import {loadSourceInvestigationPolicy} from './sourceInvestigationPolicy';
@@ -182,6 +185,7 @@ import {
 import {
   McpToolRegistry,
   MCP_NAME_PREFIX as REGISTRY_MCP_NAME_PREFIX,
+  splitPlanAttribution,
   type ToolRequestScope,
 } from './mcpToolRegistry';
 import { backendLogPath } from '../runtimePaths';
@@ -239,8 +243,7 @@ import {
 } from '../services/traceProcessorCancellation';
 
 export function requireToolDescription(templateName: string, loaded?: string): string {
-  const content = (loaded ?? loadPromptTemplate(templateName))
-    ?.replace(/<!--[\s\S]*?-->/g, '').trim();
+  const content = loaded === undefined ? loadPromptSegment(templateName) : stripPromptComments(loaded);
   if (!content) throw new Error(`Required tool description template is missing or empty: ${templateName}`);
   return content;
 }
@@ -2537,7 +2540,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     producerReason: string,
     suffix?: string,
   ): EvidenceProducerContext {
-    const {planPhaseId: _requestedPhaseId, ...evidenceInput} = input;
+    const {toolInput: evidenceInput} = splitPlanAttribution(input);
     const summary = summarizeToolCallInput(toolName, evidenceInput);
     const phaseResolution = activePlanPhaseForEvidence(toolName, input);
     const phase = phaseResolution.phase;
@@ -2808,6 +2811,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             columns: summaryResult.columns,
             columnStats: summaryResult.columnStats,
             sampleRows: summaryResult.sampleRows,
+            sampleRowIndices: summaryResult.sampleRowIndices,
             ...(columnUnits ? {columnUnits} : {}),
             ...(sqlArtifact ? {
               artifactId: sqlArtifact.artifactId,
@@ -7377,29 +7381,34 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     },
     {annotations: {readOnlyHint: true}},
   ) : null;
+  const sceneContext = options.sceneRunContext;
+  if (sceneContext) assertSceneRuntimeCapability(sceneContext, options);
   const registry = new McpToolRegistry({
     runManifestAttributionSink,
     toolObserver: options.toolObserver,
     acquisitionObserver: event => { artifactStore?.observeInvestigationTool?.(event); },
     requestScope: toolRequestScope,
     canInvokeTool: options.canInvokeTool,
+    // A scene run must commit its timeline before its acquisition budget runs out.
+    ...(sceneContext ? {acquisitionPolicy: createSceneAcquisitionPolicy(sceneContext)} : {}),
   });
   const sourceOnlyPhase = sourceUsePolicy?.phase === 'automatic_enrichment' ||
     sourceUsePolicy?.phase === 'deep_enrichment';
 
-  if (options.sceneRunContext) {
-    const context = options.sceneRunContext;
-    assertSceneRuntimeCapability(context, options);
-    const description = loadPromptTemplate('scene-tool-guidance');
-    if (!description?.trim()) throw new Error('scene_tool_guidance_unavailable');
+  if (sceneContext) {
+    const context = sceneContext;
+    const description = requireToolDescription('scene-tool-guidance');
     registry.registerShared({
       name: 'propose_scene_timeline', description, exposure: 'internal',
-      inputSchema: sceneTimelineProposalSchema.shape, evidenceEffect: 'read_existing',
+      inputSchema: sceneTimelineProposalToolShape, evidenceEffect: 'read_existing',
       handler: async (input, extra) => {
         extra.signal?.throwIfAborted();
         assertSceneRuntimeCapability(context, options);
+        // Plan attribution never reaches the strict proposal contract.
+        const {toolInput: proposalInput} = splitPlanAttribution(input);
+        const phase = activePlanPhaseForEvidence('propose_scene_timeline', input).phase;
         const previousRevision = sceneRunState(context).revision;
-        const result = await proposeSceneTimeline(context, input);
+        const result = await proposeSceneTimeline(context, proposalInput);
         extra.signal?.throwIfAborted();
         const candidate = result.accepted && result.revision === sceneRunState(context).revision
           ? projectSceneRunCandidate(context) : undefined;
@@ -7408,13 +7417,21 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         }
         const changedIds = result.segments?.filter(item => item.issuedRevision === result.revision)
           .map(item => item.segment.id) ?? [];
-        const removedIds = result.accepted && Array.isArray(input.removeSegmentIds)
-          ? input.removeSegmentIds.filter((id): id is string => typeof id === 'string') : [];
-        const diagnostics = result.diagnostics.slice(0, 24).map(item => ({...item,
-          ...(item.detail ? {detail: item.detail.slice(0, 256)} : {})}));
-        return createRuntimeToolResult({accepted: result.accepted, revision: result.revision,
+        const removedIds = result.removedSegmentIds ?? [];
+        // Diagnostic details are already bounded by the proposal contract; only counts are cut here.
+        const diagnostics = result.diagnostics.slice(0, 24);
+        const rejectedGroups = (result.rejectedGroups ?? []).slice(0, 16).map(group => ({
+          segmentIds: group.segmentIds.slice(0, 16), segmentIndices: group.segmentIndices.slice(0, 16),
+          removedSegmentIds: group.removedSegmentIds.slice(0, 16), diagnostics: group.diagnostics.slice(0, 8)}));
+        const actionRequired = sceneProposalActionRequired(result);
+        // success/planPhaseId are the same receipt facts evidence tools emit, so an accepted revision
+        // can satisfy a plan phase; an actionable rejection is a policy refusal, a read failure is not.
+        return createRuntimeToolResult({success: result.accepted, accepted: result.accepted, revision: result.revision,
+          ...(phase ? {planPhaseId: phase.id} : {}), ...(actionRequired ? {action_required: actionRequired} : {}),
           changedSegmentIds: changedIds.slice(0, 32), omittedChangedSegmentCount: Math.max(0, changedIds.length - 32),
           removedSegmentIds: removedIds.slice(0, 32), omittedRemovedSegmentCount: Math.max(0, removedIds.length - 32),
+          ...(rejectedGroups.length ? {rejectedGroups,
+            omittedRejectedGroupCount: (result.rejectedGroups?.length ?? 0) - rejectedGroups.length} : {}),
           diagnostics, omittedDiagnosticCount: result.diagnostics.length - diagnostics.length,
           ...(candidate ? {coverage: {
             status: candidate.coverage.status, captureStatus: candidate.coverage.captureStatus,

@@ -2286,7 +2286,8 @@ describe('createClaudeMcpServer', () => {
       expect(await view.resolveReferences(requests)).toEqual([
         {key: 'issued', status: 'missing', reason: 'execution_witness_unavailable'},
         {key: 'fake', status: 'missing', reason: 'evidence_not_retained'},
-        {key: 'conflict', status: 'missing', reason: 'identifier_conflict'},
+        {key: 'conflict', status: 'missing', reason: 'identifier_conflict',
+          locatorDetail: {matchedFields: ['evidenceRefId'], conflictingFields: ['sourceToolCallId']}},
       ]);
       expect(await store.createEvidenceReadView({...options, allowedTraces: []}).resolveReferences([requests[0]]))
         .toEqual([{key: 'issued', status: 'denied', reason: 'trace_outside_read_scope'}]);

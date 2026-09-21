@@ -30,6 +30,11 @@ export interface SqlSummary {
   totalRows: number;
   columnStats: ColumnStat[];
   sampleRows: any[][];
+  /**
+   * Original row index of each sample row. Samples are re-ordered by interest,
+   * so their position is not the row a citation must name.
+   */
+  sampleRowIndices: number[];
   columns: string[];
 }
 
@@ -43,12 +48,13 @@ export function summarizeSqlResult(
   rows: any[][],
 ): SqlSummary {
   const columnStats = columns.map((col, colIdx) => computeColumnStat(col, colIdx, rows));
-  const sampleRows = selectSampleRows(columns, rows, 10);
+  const sampleRowIndices = selectSampleRowIndices(columns, rows, 10);
 
   return {
     totalRows: rows.length,
     columnStats,
-    sampleRows,
+    sampleRows: sampleRowIndices.map(index => rows[index]),
+    sampleRowIndices,
     columns,
   };
 }
@@ -95,24 +101,24 @@ function computeColumnStat(column: string, colIdx: number, rows: any[][]): Colum
  * Select the most "interesting" rows as samples.
  * Prioritizes rows with high values in columns that look like duration/latency/jank metrics.
  */
-function selectSampleRows(columns: string[], rows: any[][], maxSamples: number): any[][] {
-  if (rows.length <= maxSamples) return rows;
+function selectSampleRowIndices(columns: string[], rows: any[][], maxSamples: number): number[] {
+  if (rows.length <= maxSamples) return rows.map((_, index) => index);
 
   // Find the best "interest" column (dur, latency, jank, count, etc.)
   const interestColIdx = findInterestColumn(columns);
 
   if (interestColIdx >= 0) {
     // Sort by interest column descending, take top samples
-    const indexed = rows.map((row, idx) => ({ row, idx, val: Number(row[interestColIdx]) || 0 }));
+    const indexed = rows.map((row, idx) => ({ idx, val: Number(row[interestColIdx]) || 0 }));
     indexed.sort((a, b) => b.val - a.val);
-    return indexed.slice(0, maxSamples).map(i => i.row);
+    return indexed.slice(0, maxSamples).map(i => i.idx);
   }
 
   // No clear interest column — take evenly spaced samples
   const step = Math.max(1, Math.floor(rows.length / maxSamples));
-  const samples: any[][] = [];
+  const samples: number[] = [];
   for (let i = 0; i < rows.length && samples.length < maxSamples; i += step) {
-    samples.push(rows[i]);
+    samples.push(i);
   }
   return samples;
 }

@@ -60,6 +60,19 @@ describe('SceneEvidenceArchive', () => {
   beforeEach(async () => {dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scene-archive-')); archive = new SceneEvidenceArchive(dir, limits);});
   afterEach(async () => {jest.restoreAllMocks(); await fs.rm(dir, {recursive: true, force: true});});
 
+  it('archives a live-accepted numeric cell quoted as its exact decimal string', async () => {
+    const sample = detailedInput(), [entry] = sample.assessment.segments;
+    const withCell = (value: number) => [{...entry, segment: {...entry.segment,
+      evidenceRefs: [{...entry.segment.evidenceRefs[0], column: 'ts', value: '0'}]},
+      evidence: [{...entry.evidence[0], row: {ts: value}}]}];
+    // The live proposal accepted "0" for the numeric cell 0; the archive must apply the same rule.
+    sample.assessment.segments = withCell(0);
+    await archive.save(sample, current);
+    expect((await archive.load(sample.ownerKey, sample.reportId))!.assessment).toEqual(sample.assessment);
+    await expect(archive.save({...sample, reportId: 'report-two',
+      assessment: {...sample.assessment, segments: withCell(1)}}, current)).rejects.toThrow();
+  });
+
   it('reads legacy scanned history unchanged without filling a current coverage policy', async () => {
     const sample = scannedInput();
     // The old source projection grouped these summaries together; migration must preserve that result.

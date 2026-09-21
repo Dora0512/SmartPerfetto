@@ -1331,6 +1331,18 @@ strategies:
   backend/strategies/scene-tool-guidance.template.md:
     disposition: product-only
     reason: SmartPerfetto structured scene proposal protocol
+  backend/strategies/scene-pacing-first-revision-due.template.md:
+    disposition: product-only
+    reason: SmartPerfetto issued scene-run acquisition pacing notice
+  backend/strategies/scene-pacing-window-closed.template.md:
+    disposition: product-only
+    reason: SmartPerfetto issued scene-run acquisition pacing notice
+  backend/strategies/scene-pacing-no-revision.template.md:
+    disposition: product-only
+    reason: SmartPerfetto issued scene-run acquisition pacing notice
+  backend/strategies/scene-pacing-deadline-near.template.md:
+    disposition: product-only
+    reason: SmartPerfetto issued scene-run acquisition pacing notice
   backend/strategies/scene-coverage-policy.yaml:
     disposition: product-only
     reason: SmartPerfetto issued run required-source scan policy and producer bindings

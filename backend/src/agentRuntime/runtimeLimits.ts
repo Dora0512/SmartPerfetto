@@ -68,12 +68,17 @@ export function serializedByteLength(value: unknown): number {
  */
 export interface ProgressAwareRunDeadline {
   readonly startedAt: number;
+  /** Initial deadline span before any extension. */
+  readonly baseBudgetMs: number;
+  readonly perTurnMs: number;
   /** Fixed when the run starts; never extended. */
   readonly hardDeadlineAt: number;
   /** Fixed when the run starts; time kept for one no-tool delivery call and finalization. */
   readonly deliveryReserveMs: number;
   /** Fixed part of the delivery reserve that a delivery call may not consume. */
   readonly finalizationReserveMs: number;
+  /** Fixed latest investigation deadline: `hardDeadlineAt - deliveryReserveMs`. */
+  readonly investigationLimitAt: number;
   /** Current investigation deadline; monotone non-decreasing. */
   current(): number;
   /** A tool result returned to the model. */
@@ -84,7 +89,12 @@ export interface ProgressAwareRunDeadline {
   extendIfStreaming(now?: number): boolean;
   /** Window a delivery call may use from now, keeping the finalization reserve. */
   deliveryWindowMs(now?: number): number;
-  /** Deadline handed to finalization; never past the hard deadline. */
+  /**
+   * Deadline handed to finalization; never past the hard deadline. When no
+   * delivery call ran, the unused delivery reserve funds finalization (at most
+   * that reserve from now): its one no-tool semantic review is exactly the
+   * call the reserve exists for, and a slow provider otherwise times it out.
+   */
   finalizationDeadlineAt(now?: number, deliveryDeadlineAt?: number): number;
   snapshot(now?: number): RunDeadlineSnapshot;
 }
@@ -133,9 +143,12 @@ export function createProgressAwareRunDeadline(input: {
   const current = () => Math.min(deadlineAt, investigationLimitAt);
   return {
     startedAt,
+    baseBudgetMs,
+    perTurnMs,
     hardDeadlineAt,
     deliveryReserveMs,
     finalizationReserveMs,
+    investigationLimitAt,
     current,
     recordProgress(now = Date.now()) {
       progressCount++;
@@ -160,11 +173,11 @@ export function createProgressAwareRunDeadline(input: {
       return Math.max(0, Math.min(deliveryReserveMs, hardDeadlineAt - now) - finalizationReserveMs);
     },
     finalizationDeadlineAt(now = Date.now(), deliveryDeadlineAt?: number) {
-      // A delivery window already excluded the reserve; an investigation that ended
-      // early keeps exactly its own deadline, one that ended at it gets the reserve.
+      // A delivery window already excluded the reserve. Without a delivery call the
+      // reserve is unspent: finalization may use it, bounded from now and by the hard deadline.
       return Math.min(hardDeadlineAt, deliveryDeadlineAt !== undefined
         ? deliveryDeadlineAt + finalizationReserveMs
-        : Math.max(current(), now + finalizationReserveMs));
+        : Math.max(current(), now + finalizationReserveMs, now + deliveryReserveMs));
     },
     snapshot(now = Date.now()) {
       return {baseBudgetMs, maxRunMs, elapsedMs: now - startedAt, deadlineMs: current() - startedAt, deliveryReserveMs,

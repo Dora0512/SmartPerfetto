@@ -37,7 +37,18 @@ export type EvidenceReadResolution = {
   readonly key: string;
   readonly status: 'missing' | 'ambiguous' | 'incomplete' | 'denied';
   readonly reason: string;
+  /** Locator repair hints: identifier field names, column names and counts only, never cell values. */
+  readonly locatorDetail?: EvidenceLocatorDetail;
 };
+export interface EvidenceLocatorDetail {
+  /** Supplied identifier fields that identify a retained record. */
+  readonly matchedFields?: readonly string[];
+  /** Supplied identifier fields that disagree with that record. */
+  readonly conflictingFields?: readonly string[];
+  readonly availableColumns?: readonly string[];
+  readonly rowCount?: number;
+}
+const MAX_LOCATOR_DETAIL_COLUMNS = 32;
 export interface EvidenceReadView {
   investigationEvidence?(): InvestigationEvidenceSnapshot;
   resolveReferences(requests: readonly EvidenceReadRequest[], signal?: AbortSignal): Promise<readonly EvidenceReadResolution[]>;
@@ -112,17 +123,36 @@ export function isIssuedEvidenceReadResolution(resolution: EvidenceReadResolutio
 }
 
 const normalized = (value: string) => value.trim().toLowerCase();
-function recordIdentifiers(record: CapturedEvidenceRecord, ref: ConclusionContractClaimReference): boolean[] {
+function recordIdentifierChecks(record: CapturedEvidenceRecord, ref: ConclusionContractClaimReference): {field: string; ok: boolean}[] {
   const meta = record.meta;
-  const checks: boolean[] = [];
-  if (ref.evidenceRefId) checks.push(ref.evidenceRefId === meta.evidenceRefId ||
-    (Boolean(meta.artifactId) && [meta.artifactId, `data:${meta.artifactId}`, `ev_${meta.artifactId}`].includes(ref.evidenceRefId)));
-  if (ref.artifactId) checks.push(ref.artifactId === meta.artifactId);
-  if (ref.sourceArtifactId) checks.push(ref.sourceArtifactId === meta.artifactId);
-  if (ref.sourceToolCallId) checks.push(ref.sourceToolCallId === meta.sourceToolCallId);
-  if (ref.sourceRef) checks.push([...(record.sourceRefs || []), record.display.title, meta.source, meta.skillId, meta.stepId]
-    .some(alias => typeof alias === 'string' && normalized(alias) === normalized(ref.sourceRef!)));
+  const checks: {field: string; ok: boolean}[] = [];
+  if (ref.evidenceRefId) checks.push({field: 'evidenceRefId', ok: ref.evidenceRefId === meta.evidenceRefId ||
+    (Boolean(meta.artifactId) && [meta.artifactId, `data:${meta.artifactId}`, `ev_${meta.artifactId}`].includes(ref.evidenceRefId))});
+  if (ref.artifactId) checks.push({field: 'artifactId', ok: ref.artifactId === meta.artifactId});
+  if (ref.sourceArtifactId) checks.push({field: 'sourceArtifactId', ok: ref.sourceArtifactId === meta.artifactId});
+  if (ref.sourceToolCallId) checks.push({field: 'sourceToolCallId', ok: ref.sourceToolCallId === meta.sourceToolCallId});
+  if (ref.sourceRef) checks.push({field: 'sourceRef', ok: [...(record.sourceRefs || []), record.display.title, meta.source, meta.skillId, meta.stepId]
+    .some(alias => typeof alias === 'string' && normalized(alias) === normalized(ref.sourceRef!))});
   return checks;
+}
+/**
+ * One pass over retained records: records every supplied identifier names, and
+ * the best partial match, whose agreeing and conflicting fields locate a repair.
+ */
+function matchRecords(records: readonly EvidenceReadRecord[], ref: ConclusionContractClaimReference) {
+  const exact: EvidenceReadRecord[] = [];
+  let partial: {field: string; ok: boolean}[] | undefined;
+  let partialMatches = 0;
+  for (const entry of records) {
+    const checks = recordIdentifierChecks(entry.record, ref);
+    const matched = checks.filter(check => check.ok).length;
+    if (matched > 0 && matched === checks.length) exact.push(entry);
+    else if (matched > partialMatches) {partial = checks; partialMatches = matched;}
+  }
+  const conflict: EvidenceLocatorDetail | undefined = partial && {
+    matchedFields: partial.filter(check => check.ok).map(check => check.field),
+    conflictingFields: partial.filter(check => !check.ok).map(check => check.field)};
+  return {exact, conflict};
 }
 
 /** Runtime Store closure; no model-visible paging or Trace Processor fallback. */
@@ -143,16 +173,14 @@ export function createEvidenceReadView(records: () => readonly EvidenceReadRecor
     const expired = () => Boolean(signal?.aborted) || Date.now() >= deadline;
     const out: EvidenceReadResolution[] = [];
     for (const request of requests) {
-      const fail = (status: 'missing' | 'ambiguous' | 'incomplete' | 'denied', reason: string) =>
-        out.push(Object.freeze({key: request.key, status, reason}));
+      const fail = (status: 'missing' | 'ambiguous' | 'incomplete' | 'denied', reason: string, locatorDetail?: EvidenceLocatorDetail) =>
+        out.push(freezeEvidenceValue({key: request.key, status, reason, ...(locatorDetail ? {locatorDetail} : {})}));
       if (out.length >= budget.maxReferences || expired()) {fail('incomplete', signal?.aborted ? 'read_cancelled' : 'read_budget_exhausted'); continue;}
-      const candidates = available.filter(({record}) => {
-        const checks = recordIdentifiers(record, request.reference);
-        return checks.length > 0 && checks.every(Boolean);
-      });
+      const {exact: candidates, conflict} = matchRecords(available, request.reference);
       if (candidates.length !== 1) {
-        fail(candidates.length > 1 ? 'ambiguous' : 'missing', candidates.length > 1 ? 'multiple_evidence_records' :
-          available.some(({record}) => recordIdentifiers(record, request.reference).some(Boolean)) ? 'identifier_conflict' : 'evidence_not_retained');
+        if (candidates.length > 1) fail('ambiguous', 'multiple_evidence_records');
+        else if (conflict) fail('missing', 'identifier_conflict', conflict);
+        else fail('missing', 'evidence_not_retained');
         continue;
       }
       const {record, witness} = candidates[0];
@@ -199,9 +227,12 @@ export function createEvidenceReadView(records: () => readonly EvidenceReadRecor
       }
       if (rowIndex === undefined && table.rows.length === 1) rowIndex = 0;
       if (rowIndex === undefined && ref.column) {fail('ambiguous', 'row_locator_required'); continue;}
-      if (rowIndex !== undefined && !table.rows[rowIndex]) {fail('missing', 'row_index_out_of_range'); continue;}
+      if (rowIndex !== undefined && !table.rows[rowIndex]) {fail('missing', 'row_index_out_of_range', {rowCount: table.rows.length}); continue;}
       const requested = new Set([...request.requiredColumns, ...(ref.column ? [ref.column] : []), ...Object.keys(ref.rowSelector || {})]);
-      if ([...requested].some(column => !table.columns.includes(column))) {fail('missing', 'required_column_missing'); continue;}
+      if ([...requested].some(column => !table.columns.includes(column))) {
+        fail('missing', 'required_column_missing', {availableColumns: table.columns.slice(0, MAX_LOCATOR_DETAIL_COLUMNS)});
+        continue;
+      }
       const needed = new Set([...requested, ...Object.keys(table.fields),
         ...['upid', 'pid', 'utid', 'tid', 'process_name', 'thread_name'].filter(column => table.columns.includes(column))]);
       const nativeRow = rowIndex !== undefined ? capturedNativeRow(witness, rowIndex) : undefined;

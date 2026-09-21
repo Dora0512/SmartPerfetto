@@ -123,6 +123,9 @@ const CLAUDE_RUNTIME_ENV_KEYS = [
   'CLAUDE_CLASSIFIER_TIMEOUT_MS',
   'CLAUDE_ENABLE_SUB_AGENTS',
   'CLAUDE_ENABLE_VERIFICATION',
+  // Bounds how far a progressing scene run may be extended; a session pins it like the per-turn budget.
+  'CLAUDE_MAX_RUN_TIMEOUT_MS',
+  'AGENT_MAX_RUN_TIMEOUT_MS',
 ];
 
 const OPENAI_RUNTIME_ENV_KEYS = [

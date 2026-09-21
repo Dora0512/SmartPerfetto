@@ -22,7 +22,8 @@ import {runClaimVerification, collectMatchedTraceEvidenceRefIdsByClaimId,
 import {assessFinalSemantics, buildFinalSemanticPrompt, FINAL_SEMANTIC_INPUT_BYTE_LIMIT,
   type FinalSemanticAssessment, type FinalSemanticSnapshot} from './finalSemanticAssessment';
 import {SEMANTIC_UNDECLARED_CLAIM_ISSUE_CODE, semanticClaimIssueCode} from './finalSemanticIssueCodes';
-import {applyFinalResultQualityGate, type FinalResultComparisonIdentity, type FinalResultQualityIssue} from './finalResultQualityGate';
+import {appendTerminationMessage, applyFinalResultQualityGate, type FinalResultComparisonIdentity,
+  type FinalResultQualityIssue} from './finalResultQualityGate';
 import {projectCodeAwareStructuredText, withOwnerCodeAwareProjection} from './security/codeAwareOutputRegistry';
 import {projectConclusionSemanticInput} from './security/conclusionProtocolProjection';
 import {projectStoredConclusionSourceMetadata} from './security/analysisDeliveryProjection';
@@ -42,7 +43,7 @@ import {assessSceneTimeline} from '../agent/scene/sceneTimelineAssessment';
 import {projectSceneTimelineForOwner} from '../agent/scene/sceneTimelineProjection';
 import type {SceneScope} from '../agent/scene/sceneTimelineContract';
 import {issueSceneTimelinePublication, type SceneTimelinePublication} from '../agent/scene/sceneTimelinePublication';
-import type {OutputLanguage} from '../agentv3/outputLanguage';
+import {localize, type OutputLanguage} from '../agentv3/outputLanguage';
 
 export interface AnalysisFinalizationOwner {
   runId: string;
@@ -256,6 +257,31 @@ function buildInvestigationAssessment(input: {
     }) : []};
 }
 
+/**
+ * A scene run's requested product is the committed timeline, read from the
+ * sealed, assessed run state rather than from the answer text. The outcome can
+ * only lower success: no committed segment means the product was not produced,
+ * while a committed timeline never upgrades a native failure (it is retained
+ * and stated instead). Completion, origin and quality facts stay as produced.
+ */
+function applySceneDeliveryOutcome(result: AnalysisResult, outputLanguage: OutputLanguage): void {
+  const timeline = result.sceneTimeline;
+  if (!timeline) return;
+  const segments = timeline.segments.length;
+  if (segments === 0) {
+    result.success = false;
+    result.partial = true;
+    result.confidence = 0;
+    appendTerminationMessage(result, localize(outputLanguage,
+      '场景还原未产出任何被接受的时间线修订，本次运行没有交付场景时间线。',
+      'Scene reconstruction produced no accepted timeline revision; this run delivered no scene timeline.'));
+  } else if (!result.success) {
+    appendTerminationMessage(result, localize(outputLanguage,
+      `运行未正常完成；已保留场景时间线修订 ${timeline.revision}（${segments} 段）。`,
+      `The run did not complete normally; scene timeline revision ${timeline.revision} (${segments} segments) is retained.`));
+  }
+}
+
 /** The only asynchronous final-verification boundary; all acquisition belongs to the run. */
 export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput): Promise<FinalizedAnalysisResult> {
   const {context, owner} = input;
@@ -454,8 +480,10 @@ export async function finalizeAnalysisResult(input: FinalizeAnalysisResultInput)
     if (sceneSnapshot && input.scene) {
       result.sceneTimeline = projectSceneTimelineForOwner(assessSceneTimeline(sceneSnapshot, input.scene.scope));
       if (result.sceneTimeline.status === 'partial') result.partial = true;
+      applySceneDeliveryOutcome(result, input.scene.outputLanguage);
     }
-    const scenePublication = result.sceneTimeline && input.scene ? issueSceneTimelinePublication({
+    // Revision 0 has nothing to archive: an empty timeline is not published as a scene report.
+    const scenePublication = result.sceneTimeline?.segments.length && input.scene ? issueSceneTimelinePublication({
       scope: input.scene.scope, assessment: result.sceneTimeline, summary: result.conclusion,
       outputLanguage: input.scene.outputLanguage, totalDurationMs: result.totalDurationMs,
       providerId: input.scene.providerId, runtimeKind: result.completion?.runtimeKind,

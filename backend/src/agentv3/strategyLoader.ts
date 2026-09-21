@@ -1261,6 +1261,17 @@ export function loadPromptTemplate(name: string): string | undefined {
   return content;
 }
 
+/** Authoring comments (SPDX, notes) never reach the model. */
+export function stripPromptComments(text: string): string {
+  return text.replace(/<!--[\s\S]*?-->/g, '').trim();
+}
+
+/** A template as a model-facing segment; a missing or blank template is undefined. */
+export function loadPromptSegment(name: string): string | undefined {
+  const template = loadPromptTemplate(name);
+  return template === undefined ? undefined : stripPromptComments(template) || undefined;
+}
+
 /** Load a structured YAML registry from `backend/strategies/<name>.registry.yaml`. */
 export function loadStrategyRegistry<T>(name: string): T | undefined {
   if (registryCache.has(name) && !DEV_MODE) return registryCache.get(name) as T;
