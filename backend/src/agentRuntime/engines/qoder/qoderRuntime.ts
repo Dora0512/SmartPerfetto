@@ -86,7 +86,7 @@ import {
 } from '../../runtimePerformance';
 import {createAnalysisRunSpec, type AnalysisRunSelection} from '../../analysisRunSpec';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
-import {resolveRuntimeTurnPolicy} from '../../runtimeTurnPolicy';
+import {resolveRuntimeTurnPolicy, usesLightweightToolCatalog} from '../../runtimeTurnPolicy';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
 import {
   acceptNativeDeclarationCompletion,
@@ -661,8 +661,8 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
     let acquisitionOpen = true;
 
     sessionState.armMainBudget(maxTurns * (isQuickMode ? this.config.quickPerTurnMs : this.config.fullPerTurnMs));
-    const skipFocusDetection = !policy.allowAutomaticPrefetch;
-    const skipTracePreflightDetection = !policy.allowAutomaticPrefetch;
+    const skipFocusDetection = policy.preflight === 'none';
+    const skipTracePreflightDetection = policy.preflight === 'none';
     const effectivePackageName = packageName;
     runtimePerformance.finishClassification(turnIntent.status === 'resolved' ? 'ok' : 'error');
     executionLease.throwIfAborted();
@@ -990,7 +990,7 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
       sceneRunContext,
       allowNewEvidence: policy.allowNewEvidence,
       strategyRegistry: intentResolver.strategyRegistry,
-      lightweight: isQuickMode,
+      lightweight: usesLightweightToolCatalog(policy),
       toolObserver,
       analysisHistoryReader,
       canInvokeTool,

@@ -39,9 +39,6 @@ keywords:
   - mediacodec
   - codec2
   - omx
-compound_patterns:
-  - "(视频|音频|解码|编码).*(卡顿|耗电|延迟|掉帧)"
-  - "(media|video|audio|codec|decoder).*(jank|power|latency|stutter)"
 
 phase_hints:
   - id: codec_activity

@@ -69,7 +69,7 @@ import {createDeadlineRuntimeTimeout, createProgressAwareRunDeadline, createRese
 import {randomUUID} from 'node:crypto';
 import {TransformStream} from 'node:stream/web';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
-import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
+import {resolveRuntimeTurnPolicy, usesLightweightToolCatalog, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {runOpenAiIntentTransport} from './openAiIntentTransport';
 import {attachFinalizationContext, reportReviewUsesRemainingBudget} from '../../analysisFinalizationContext';
 import {buildRuntimeTracePairIdentityContext} from '../../runtimePromptContext';
@@ -729,7 +729,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       analysisAbortScope.throwIfAborted();
       const resolvedPolicy = resolveRuntimeTurnPolicy(turnIntent, options.analysisMode);
       const policy = options.assistantSurface === 'conversation' && options.conversationTraceAttached !== true
-        ? {...resolvedPolicy, allowAutomaticPrefetch: false} : resolvedPolicy;
+        ? {...resolvedPolicy, allowAutomaticPrefetch: false, preflight: 'none' as const} : resolvedPolicy;
       const quickMode = policy.budgetMode === 'quick';
       const sceneType = turnIntent.sceneId;
       // A failed light-model classifier does not authorize a provider switch.
@@ -1437,18 +1437,18 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       }
     };
     let effectivePackageName = options.packageName;
-    const focusResult: FocusAppDetectionResult = policy.allowAutomaticPrefetch
+    const focusResult: FocusAppDetectionResult = policy.preflight !== 'none'
       ? await preflight('focus', () => detectFocusApps(this.traceProcessorService, traceId, {
           timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
         }))
       : {apps: [], method: 'none', timeRange: focusAppTimeRangeFromSelection(options.selectionContext)};
     effectivePackageName ??= focusResult.primaryApp;
-    const architecture = policy.allowAutomaticPrefetch
+    const architecture = policy.preflight !== 'none'
       ? await preflight('architecture', () => this.detectArchitecture(traceId, effectivePackageName)) : undefined;
-    const detectedVendor = policy.allowAutomaticPrefetch
+    const detectedVendor = policy.preflight !== 'none'
       ? await this.detectVendor(traceId) : null;
     executionLease?.throwIfAborted();
-    const traceCompleteness = policy.allowAutomaticPrefetch
+    const traceCompleteness = policy.preflight !== 'none'
       ? await preflight('completeness', () => this.detectCompleteness(traceId, architecture)) : undefined;
     const comparisonContext = options.referenceTraceId && policy.allowAutomaticPrefetch
       ? await preflight('comparison', () => this.buildComparisonContext(traceId, options.referenceTraceId!, config.outputLanguage, options.tracePairContext))
@@ -1501,6 +1501,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       referenceTraceId: options.referenceTraceId, comparisonContext,
       allowNewEvidence: policy.allowNewEvidence, strategyRegistry: runtime.strategyRegistry,
       skillNotesBudget: createRuntimeSkillNotesBudget(policy.budgetMode === 'quick'),
+      lightweight: usesLightweightToolCatalog(policy),
       outputLanguage: config.outputLanguage, knowledgeScope,
       codeAwareMode: options.codeAwareMode, codebaseIds: options.codebaseIds, knowledgeSourceIds: options.knowledgeSourceIds,
       sourceUsePolicy: options.sourceUsePolicy, analysisContextFingerprint: options.analysisContextFingerprint,
@@ -1509,7 +1510,12 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
     const traceInfo = this.traceProcessorService.getTrace(traceId);
     const promptContext: ClaudeAnalysisContext = {
       query, turnIntent: runtime.turnIntent, strategyRegistry: runtime.strategyRegistry,
-      onDemandContext: policy.onDemandContext, architecture, packageName: effectivePackageName,
+      onDemandContext: policy.onDemandContext,
+      // The run's own preflight, not one recomputed from the intent: a
+      // conversation turn with no attached trace read no trace facts and the
+      // prompt must not advertise them.
+      preflight: policy.preflight,
+      architecture, packageName: effectivePackageName,
       focusApps: focusResult.apps.length ? focusResult.apps : undefined, focusMethod: focusResult.method,
       knowledgeBaseContext, sceneType,
       selectionContext: options.selectionContext, comparison: comparisonContext, traceCompleteness,

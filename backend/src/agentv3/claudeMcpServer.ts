@@ -3481,6 +3481,33 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     return sentence.length > maxChars ? `${sentence.slice(0, maxChars)}…` : sentence;
   };
 
+  /**
+   * Which matched skills get their description inside the bounded window.
+   * The registry's own order is alphabetical by directory, so without this a
+   * question about the network reads descriptions for `anr_*` and `binder_*`
+   * and finds `network_analysis` as a bare id. Ranking only reorders: the cap
+   * applies to descriptions, never to the matched set.
+   *
+   * Pure and stable — equal hit counts keep the incoming order.
+   */
+  const rankSkillsByQuery = <T extends {id: string; keywords?: string[]; tags?: string[]}>(
+    items: readonly T[],
+    query: string | undefined,
+  ): Array<T & {matchedByQuery: boolean}> => {
+    const haystack = (query ?? '').toLowerCase();
+    const hits = (skill: T): number => {
+      if (!haystack) return 0;
+      const terms = [...(skill.keywords ?? []), ...(skill.tags ?? []), skill.id];
+      // A one-character term matches nearly any question; it ranks nothing.
+      return new Set(terms.map(term => term.trim().toLowerCase())
+        .filter(term => term.length > 1 && haystack.includes(term))).size;
+    };
+    return items
+      .map((skill, index) => ({skill, index, hits: hits(skill)}))
+      .sort((a, b) => b.hits - a.hits || a.index - b.index)
+      .map(({skill, hits: count}) => ({...skill, matchedByQuery: count > 0}));
+  };
+
   const listSkills = tool(
     'list_skills',
     'List all available SmartPerfetto analysis skills. ' +
@@ -3513,8 +3540,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           // Full descriptions for the leading matches, bare ids for the rest:
           // the catalog stays affordable in a few-turn run without any match
           // becoming invisible.
-          const described = filtered.slice(0, QUICK_SKILL_DESCRIBED_MATCHES);
-          const remainingIds = filtered.slice(QUICK_SKILL_DESCRIBED_MATCHES).map(s => s.id);
+          const ranked = rankSkillsByQuery(filtered, options.userQuery);
+          const described = ranked.slice(0, QUICK_SKILL_DESCRIBED_MATCHES);
+          const remainingIds = ranked.slice(QUICK_SKILL_DESCRIBED_MATCHES).map(s => s.id);
           return {
             _meta: runtimeToolReceiptMetadata({success: true}),
             content: [{
@@ -3525,6 +3553,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
                   id: s.id,
                   displayName: s.displayName,
                   description: firstSentence(s.description, QUICK_SKILL_DESCRIPTION_CHARS),
+                  matchedByQuery: s.matchedByQuery,
                   exactProcessScope: scopeCapability(s.id),
                 })),
                 ...(remainingIds.length > 0

@@ -163,7 +163,8 @@ describe('OpenAI typed intent integration', () => {
     const result = await runtime.analyze('任意不参与控制流的问法', `typed-${analysisMode}`, 'trace', {analysisMode, providerId: null});
     expect(intentTransport.runOpenAiIntentTransport).toHaveBeenCalledTimes(1);
     expect(intentTransport.runOpenAiIntentTransport).toHaveBeenCalledWith(expect.objectContaining({purpose: 'classification', maxOutputTokens: 1024}));
-    expect(prepare.mock.calls[0][4]).toMatchObject({policy: {onDemandContext: true, allowAutomaticPrefetch: false, requiresReport: false}, turnIntent: decision});
+    expect(prepare.mock.calls[0][4]).toMatchObject({policy: {onDemandContext: true, preflight: 'trace_facts',
+      allowAutomaticPrefetch: false, requiresReport: false}, turnIntent: decision});
     expect(run).toHaveBeenCalledTimes(1);
     expect((run.mock.calls[0][0] as any).model).toBe(analysisMode === 'full' ? 'pinned-primary' : 'pinned-light');
     expect(run.mock.calls[0][2]).toMatchObject({maxTurns: analysisMode === 'full' ? 2 : 1});
@@ -177,7 +178,8 @@ describe('OpenAI typed intent integration', () => {
     const prepare = prepareStub(runtime); const run = mockRun();
     const result = await runtime.analyze('query', 'malformed', 'trace', {analysisMode: 'auto', providerId: null});
     expect(result.turnIntent).toMatchObject({status: 'unavailable', unavailableReason: 'invalid_response'});
-    expect(prepare.mock.calls[0][4]).toMatchObject({policy: {budgetMode: 'quick', onDemandContext: true, allowAutomaticPrefetch: false}});
+    expect(prepare.mock.calls[0][4]).toMatchObject({policy: {budgetMode: 'quick', onDemandContext: true,
+      preflight: 'trace_facts', allowAutomaticPrefetch: false}});
     expect((run.mock.calls[0][0] as any).model).toBe('pinned-primary');
     expect(run.mock.calls[0][2]).toMatchObject({maxTurns: 1});
     expect(result.quickRun.modeDecision).toBe('ai_unavailable');
@@ -190,19 +192,26 @@ describe('OpenAI typed intent integration', () => {
       signal: expect.any(AbortSignal),
     }));
   });
-  it('keeps reference and RAG capabilities in explicit fast mode without automatic preflight', async () => {
+  // A bounded comparison reads the trace facts it is about; what a quick
+  // budget and a bounded scope skip is the scene-wide memory tier.
+  it('keeps reference and RAG capabilities in explicit fast mode with trace-fact preflight only', async () => {
     const query = jest.fn(async () => ({columns: [], rows: [], durationMs: 0}));
     const runtime = createOpenAiRuntimeForTest({query, getTrace: jest.fn()} as unknown as TraceProcessorService);
     classify({...decision, taskKind: 'comparison'});
     const prompt = jest.spyOn(systemPrompt, 'buildSystemPrompt').mockReturnValue('typed prompt');
     const mcp = jest.spyOn(mcpModule, 'createClaudeMcpServer');
     const focus = jest.spyOn(focusDetector, 'detectFocusApps');
+    const architecture = jest.spyOn(runtime, 'detectArchitecture');
+    const vendor = jest.spyOn(runtime, 'detectVendor');
+    const completeness = jest.spyOn(runtime, 'detectCompleteness');
     const run = mockRun();
     const result = await runtime.analyze('compare selected facts', 'fast-pair', 'current', {
       analysisMode: 'fast', providerId: null, referenceTraceId: 'reference', knowledgeSourceIds: ['kb-a'],
     });
     expect(result.quickRun.requestedMode).toBe('fast');
-    expect(query).not.toHaveBeenCalled(); expect(focus).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalled(); expect(architecture).toHaveBeenCalled();
+    expect(vendor).toHaveBeenCalled(); expect(completeness).toHaveBeenCalled();
+    expect(prompt.mock.calls[0][0].knowledgeBaseContext).toBeUndefined();
     expect(mcp.mock.calls[0][0]).toMatchObject({referenceTraceId: 'reference', knowledgeSourceIds: ['kb-a'], allowNewEvidence: true,
       comparisonContext: {referenceTraceId: 'reference', capabilityProbeStatus: 'not_checked'}});
     expect(prompt.mock.calls[0][0]).toMatchObject({turnIntent: {taskKind: 'comparison'}, onDemandContext: true,

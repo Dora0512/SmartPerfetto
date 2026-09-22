@@ -50,18 +50,6 @@ keywords:
   - VRR
   - setFrameRate
   - HWC overlay
-compound_patterns:
-  - "什么.*管线"
-  - "什么.*pipeline"
-  - "识别.*渲染"
-  - "检测.*管线"
-  - "渲染.*路径"
-  - "pipeline.*type"
-  - '(BufferQueue|BLASTBufferQueue|BLAST).*(fence|dequeueBuffer|queueBuffer|latch|backpressure|槽位|背压|release|acquire|present)'
-  - '(dequeueBuffer|queueBuffer).*(release fence|acquire fence|present fence|BufferQueue|SurfaceFlinger|SF)'
-  - '(GraphicBuffer|dma[-_ ]?buf).*(BufferQueue|槽位|backpressure|队列|fence|区别|边界)'
-  - '(refresh rate|刷新率|ARR|VRR|setFrameRate|View\.setRequestedFrameRate).*(policy|策略|budget|预算|帧预算|VSync|vsync|vote|投票)'
-  - '(SurfaceFlinger|SF|HWC).*(present|release fence|acquire fence|BufferQueue|合成|display|commit|composite)'
 
 final_report_contract:
   required_sections:

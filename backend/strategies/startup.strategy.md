@@ -53,11 +53,6 @@ keywords:
   - START_TIMESTAMP
   - START_REASON
   - START_COMPONENT
-compound_patterns:
-  - "打开.*(应用|app|软件)"
-  - "打开.*(速度|时间|耗时)"
-  - "(App Performance Score|Android Vitals|Play Vitals|online APM|\\bAPM\\b|A/B|experiment).*(startup|launch|TTID|TTFD|启动|冷启动|温启动|热启动)"
-  - "(startup|launch|TTID|TTFD|启动|冷启动|温启动|热启动).*(App Performance Score|Android Vitals|Play Vitals|online APM|\\bAPM\\b|A/B|experiment)"
 
 final_report_contract:
   required_sections:

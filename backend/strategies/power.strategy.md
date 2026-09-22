@@ -64,21 +64,6 @@ keywords:
   - wakeup alarm
   - Android vitals
   - partial wakelock
-compound_patterns:
-  - "电池.*掉"
-  - "耗电.*原因"
-  - "功耗.*分析"
-  - "battery.*drain"
-  - "power.*analysis"
-  - '(JobScheduler|WorkManager|JobParameters|WorkInfo).*(quota|stop reason|pending reason|timeout|standby bucket|expedited|foreground worker|后台|耗电|power|battery)'
-  - '(quota|stop reason|pending reason|timeout|standby bucket|expedited).*(JobScheduler|WorkManager|JobParameters|WorkInfo)'
-  - '(Foreground Service|foreground service|\bFGS\b|dataSync|mediaProcessing|shortService).*(timeout|quota|battery|power|耗电|后台|前台服务|前景服务)'
-  - '(timeout|quota).*(Foreground Service|foreground service|\bFGS\b|dataSync|mediaProcessing|shortService)'
-  - '(UIDT|user[- ]initiated data transfer).*(transfer|job|quota|power|battery|耗电|后台)'
-  - '(allow[- ]while[- ]idle|setExactAndAllowWhileIdle|exact alarm|wakeup alarm|AlarmManager).*(battery|power|wake|wakeup|doze|idle|耗电|唤醒|待机)'
-  - '(wakelock|wake lock|partial wakelock|Vitals|excessive wakeups).*(background|battery|power|24h|2h|1h|stuck|excessive|耗电|后台|唤醒)'
-  - '(限频|降频|温控).*(谁|原因|触发|之前|before)'
-  - '(frequency|freq).*(limit|cap).*(who|why|cause)'
 
 final_report_contract:
   required_sections:

@@ -40,11 +40,6 @@ keywords:
   - game performance
   - godot
   - cocos
-compound_patterns:
-  - "游戏.*卡"
-  - "游戏.*帧"
-  - "game.*jank"
-  - "game.*fps"
 
 phase_hints:
   - id: game_loop_jank

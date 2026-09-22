@@ -989,9 +989,11 @@ describe('QoderRuntime', () => {
       ]));
       const result = await createRuntime({QODER_MAX_TURNS: '12', QODER_QUICK_MAX_TURNS: '3'})
         .analyze(query, 'full-bounded', 'trace-1', {analysisMode: 'full'});
-      expect(createArchitectureDetector).not.toHaveBeenCalled();
-      expect(detectFocusApps).not.toHaveBeenCalled();
-      expect(probeTraceCompleteness).not.toHaveBeenCalled();
+      // The scene-wide memory tier stays off for a bounded question; the trace
+      // facts it is asked about do not.
+      expect(createArchitectureDetector).toHaveBeenCalled();
+      expect(detectFocusApps).toHaveBeenCalled();
+      expect(probeTraceCompleteness).toHaveBeenCalled();
       expect((mockQuery.mock.calls[0][0] as any).options.maxTurns).toBe(11);
       expect(mockCreateClaudeMcpServer).toHaveBeenCalledWith(expect.objectContaining({
         lightweight: false, allowNewEvidence: true,
@@ -1095,8 +1097,8 @@ describe('QoderRuntime', () => {
       const result = await createRuntime({QODER_MAX_TURNS: '11'})
         .analyze('Start a full detailed scrolling analysis', 'unavailable-intent', 'trace-1', {analysisMode: 'full'});
       expect(result.turnIntent).toMatchObject({status: 'unavailable', source: 'fallback', sceneId: 'general'});
-      expect(createArchitectureDetector).not.toHaveBeenCalled();
-      expect(detectFocusApps).not.toHaveBeenCalled();
+      expect(createArchitectureDetector).toHaveBeenCalled();
+      expect(detectFocusApps).toHaveBeenCalled();
       expect((mockQuery.mock.calls[0][0] as any).options.maxTurns).toBe(10);
     });
 
@@ -1345,6 +1347,20 @@ describe('QoderRuntime', () => {
       );
     });
 
+    // A quick budget compacts the catalog, but a full scene investigation is
+    // exactly the turn that needs the map of what can be measured.
+    it.each([
+      ['a scene-wide investigation keeps the complete catalog', {}, false],
+      ['a bounded question compacts it', {scope: 'bounded_question'}, true],
+    ])('%s under a quick budget', async (_label, intent, lightweight) => {
+      respondWithIntent(intent);
+      mockQuery.mockReturnValue(createMockSdkStream([
+        { type: 'result', subtype: 'success', is_error: false, result: 'done' },
+      ]));
+      await createRuntime().analyze('test', 'session-lightweight', 'trace-1', {analysisMode: 'fast'});
+      expect(mockCreateClaudeMcpServer).toHaveBeenCalledWith(expect.objectContaining({lightweight}));
+    });
+
     it('keeps the full authorized MCP context with a quick budget hint', async () => {
       const messages = [
         { type: 'result', subtype: 'success', is_error: false, result: 'done' },
@@ -1364,7 +1380,7 @@ describe('QoderRuntime', () => {
 
       expect(mockCreateClaudeMcpServer).toHaveBeenCalledWith(
         expect.objectContaining({
-          lightweight: true,
+          lightweight: false,
           sourceUsePolicy: {
             phase: 'explicit',
             maxSearchCalls: 1,

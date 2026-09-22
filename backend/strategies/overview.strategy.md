@@ -38,11 +38,6 @@ keywords:
   - analyze the trace
   - performance overview
   - 全局分析
-compound_patterns:
-  - "整体.*分析"
-  - "分析.*整体"
-  - "trace.*中.*问题"
-  - "performance.*overview"
 ---
 
 #### overview Core Strategy

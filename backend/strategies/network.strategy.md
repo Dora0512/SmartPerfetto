@@ -24,24 +24,25 @@ optional_capabilities:
   - power_rails
   - battery_counters
 keywords:
+  - network
+  - okhttp
+  - cronet
+  - dns
+  - tls
+  - tcp
   - 网络
+  - 请求
   - 流量
   - 数据包
-  - network
   - traffic
   - packet
   - wifi
   - cellular
   - 4g
   - 5g
-  - tcp
   - udp
-  - dns
-  - tls
   - ttfb
   - httpdns
-  - okhttp
-  - cronet
   - httpengine
   - http/3
   - quic
@@ -49,14 +50,6 @@ keywords:
   - networkcallback
   - networkcapabilities
   - local network permission
-compound_patterns:
-  - "网络.*(流量|耗电|唤醒|请求|包)"
-  - "network.*(traffic|power|wakeup|packet)"
-  - "(网络|network).*(慢|延迟|latency|slow|请求慢|request.*slow)"
-  - "(请求|request).*(慢|耗时|延迟|latency|slow)"
-  - "(OkHttp|Cronet|HttpEngine|HTTPDNS|NetworkCallback|NetworkCapabilities).*(DNS|TLS|TTFB|request|请求|cache|缓存|validated|metered|bandwidth|带宽)"
-  - "(DNS|TLS|TTFB|HTTPDNS|ECH|HTTP/3|HTTP3|QUIC).*(网络|请求|耗时|失败|latency|slow|failure)"
-  - "(local network permission|ACCESS_LOCAL_NETWORK|Certificate Transparency|Encrypted Client Hello).*(Android|targetSdk|网络|请求|失败|permission|policy)"
 
 final_report_contract:
   required_sections:

@@ -191,7 +191,10 @@ provider 的模型质量。真实 Claude、OpenAI、Pi、OpenCode 和 Qoder 必�
 typed intent 分开声明 task kind、scene、scope、复杂度建议、deliverable 和 evidence access，
 scene 必须属于本 run 固定的 registry。声明通过 schema 校验不等于语义正确，更不扩大
 请求权限。`existing_only` 只读已保留证据；`read_new` 仍受授权限制。bounded/unavailable
-intent 不自动预取；计划按需产生，阶段完成标记必须有真实成功证据或明确处置。
+`RuntimeTurnPolicy.preflight` 分三档，与预算档无关：`existing_only` 为 `none`，什么都不取；
+已解析的 `scene_wide` 读取为 `full`，额外预取记忆类上下文（知识库、模式、案例、SQL 修复对）；
+bounded 问题和 unavailable 分类为 `trace_facts`，仍然检测焦点应用、架构、厂商和 trace 完整性——
+问题再窄，也是针对一份模型没见过的 trace 提出的。计划按需产生，阶段完成标记必须有真实成功证据或明确处置。
 未结束的探索计划和假设保留原状态，不自动触发续跑，也不单独决定回答是否完整。
 
 ## 轮次预算与收尾

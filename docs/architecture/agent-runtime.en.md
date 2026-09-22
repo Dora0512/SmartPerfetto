@@ -288,7 +288,11 @@ Typed intent separates task kind, scene, scope, complexity recommendation,
 deliverable and evidence access. A scene must belong to the run's pinned registry.
 Schema validation does not establish semantic correctness or widen permission.
 `existing_only` reads retained evidence; `read_new` remains authorization-bound.
-Bounded/unavailable intent does not trigger automatic prefetch. Planning is on
+`RuntimeTurnPolicy.preflight` is three-valued and independent of budget: `none`
+(`existing_only`) gathers nothing, `full` (resolved `scene_wide` read) adds
+memory-type prefetch, and `trace_facts` — a bounded question, or an unavailable
+classification — still detects focus app, architecture, vendor and trace
+completeness. Planning is on
 demand; completed phases require real successful evidence or an explicit valid
 disposition. Unfinished exploration plans and hypotheses retain their state;
 they neither trigger automatic continuation nor determine answer completeness alone.

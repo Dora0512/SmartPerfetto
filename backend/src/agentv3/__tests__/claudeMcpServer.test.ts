@@ -1048,6 +1048,44 @@ describe('createClaudeMcpServer', () => {
       expect(tools.has('list_stdlib_modules')).toBe(true);
     });
 
+    // The bounded window is a description budget, not a filter: the registry's
+    // own order is alphabetical by directory, so a network question used to
+    // read fifteen unrelated descriptions and find `network_analysis` as a
+    // bare id — the one skill that answers it, indistinguishable from noise.
+    it('ranks the described quick catalog by the question without hiding a match', async () => {
+      const filler = Array.from({length: 15}, (_, index) => ({
+        id: `anr_check_${index}`, displayName: `ANR check ${index}`, description: `Unrelated skill ${index}.`,
+        type: 'atomic', keywords: ['anr', '无响应'], tags: ['anr'],
+      }));
+      const relevant = [
+        {id: 'network_analysis', displayName: '网络活动分析', description: '分析网络包收发活动、协议分布和功耗影响。',
+          type: 'composite', keywords: ['网络', '流量', '数据包', 'network', 'traffic'], tags: ['network', 'packet']},
+        {id: 'media_codec_activity', displayName: 'MediaCodec 活动', description: '分析编解码器活动。',
+          type: 'atomic', keywords: ['MediaCodec', '解码卡顿', '音视频'], tags: ['media']},
+      ];
+      const adapter = {
+        adaptSkillResult: jest.fn((r: unknown) => r),
+        setSkillRegistry: jest.fn(),
+        listSkills: jest.fn(async () => [...filler, ...relevant]),
+      } as unknown as ReturnType<typeof createSkillAnalysisAdapter>;
+      (createSkillAnalysisAdapter as jest.MockedFunction<typeof createSkillAnalysisAdapter>)
+        .mockReturnValueOnce(adapter);
+      const { tools } = createTestServer({ lightweight: true, userQuery: '网络加载很慢 解码卡顿' });
+
+      const result = await callTool(tools, 'list_skills', {});
+      const describedIds = result.skills.map((skill: any) => skill.id);
+
+      expect(result.matched).toBe(17);
+      expect(describedIds.slice(0, 2)).toEqual(['network_analysis', 'media_codec_activity']);
+      expect(result.skills.slice(0, 2).every((skill: any) => skill.matchedByQuery === true)).toBe(true);
+      expect(result.skills.slice(2).every((skill: any) => skill.matchedByQuery === false)).toBe(true);
+      expect(describedIds).toHaveLength(15);
+      // Ties keep the registry order; nothing matched is dropped from the ids.
+      expect(describedIds.slice(2)).toEqual(filler.slice(0, 13).map(skill => skill.id));
+      expect([...describedIds, ...result.otherMatchedIds].sort())
+        .toEqual([...filler, ...relevant].map(skill => skill.id).sort());
+    });
+
     it('audits first-wave safe reads as bounded metadata-only handlers', async () => {
       const runtimePerformanceRecorder = createRuntimePerformanceRecorder();
       const runManifestAttributionSink = createNoopAttributionSink(runtimePerformanceRecorder);

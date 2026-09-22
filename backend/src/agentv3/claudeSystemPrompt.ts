@@ -6,7 +6,7 @@ import type {ClaudeAnalysisContext} from './types';
 import {getFinalReportContract, loadPromptTemplate, renderTemplate} from './strategyLoader';
 import {loadSourceUseDecisionPrompt} from '../services/codebase/sourceUseDecision';
 import {DEFAULT_OUTPUT_LANGUAGE} from './outputLanguage';
-import {resolveRuntimeTurnPolicy} from '../agentRuntime/runtimeTurnPolicy';
+import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../agentRuntime/runtimeTurnPolicy';
 import {resolveAnalysisInvestigationRequirements} from '../agentRuntime/analysisInvestigationRequirements';
 import {CONCLUSION_CONTRACT_SIDECAR_MARKER} from '../agent/core/conclusionContract';
 import {SUPPORTED_DETERMINISTIC_CLAIM_RULES} from '../services/verifier/deterministicClaimVerifier';
@@ -104,6 +104,25 @@ type TypedTurnPromptContext = Partial<ClaudeAnalysisContext> & {
   quickMemoryContext?: string;
 };
 
+/** Narrow to broad; a run that gathered less than the intent implies wins. */
+const PREFLIGHT_WIDTH: Readonly<Record<RuntimeTurnPolicy['preflight'], number>> =
+  {none: 0, trace_facts: 1, full: 2};
+
+/**
+ * The run's own preflight, when it narrowed what the intent alone implies. A
+ * conversation turn with no attached trace gathers no trace facts, and the
+ * prompt must describe that run rather than advertise data nobody read. A
+ * caller can only narrow, never widen: the intent's authorization is the
+ * ceiling, exactly as it is for the density hint.
+ */
+function narrowerPreflight(
+  policy: RuntimeTurnPolicy['preflight'],
+  requested: RuntimeTurnPolicy['preflight'] | undefined,
+): RuntimeTurnPolicy['preflight'] {
+  if (requested === undefined) return policy;
+  return PREFLIGHT_WIDTH[requested] < PREFLIGHT_WIDTH[policy] ? requested : policy;
+}
+
 /**
  * The typed path has one presentation contract for every runtime budget. Pinned
  * investigation evidence obligations apply within the question and access scope;
@@ -129,6 +148,11 @@ function buildTypedTurnSystemPromptParts(
   }
   const policy = resolveRuntimeTurnPolicy(intent);
   const onDemandContext = policy.onDemandContext || context.onDemandContext === true;
+  // A runtime may have gathered less than the intent alone implies — a
+  // conversation turn with no attached trace has no trace to read facts from —
+  // and the prompt has to describe the run that happened. Like the density hint
+  // above, a caller can only narrow this, never widen it.
+  const preflight = narrowerPreflight(policy.preflight, context.preflight);
   const language = context.outputLanguage ?? DEFAULT_OUTPUT_LANGUAGE;
   const segments: PromptSegment[] = [];
   const push = (tier: PromptTier, label: string, content: string, droppable = false, truncatable = false) => {
@@ -159,13 +183,20 @@ function buildTypedTurnSystemPromptParts(
     schemaVersion: intent.schemaVersion, status: intent.status, taskKind: intent.taskKind,
     scope: intent.scope, deliverable: intent.deliverable, evidenceAccess: intent.evidenceAccess,
     sceneId: intent.sceneId, registryFingerprint: registry.registryFingerprint, onDemandContext,
+    preflight,
   });
   data(3, 'source_authorization', {
     mode: context.codeAwareMode ?? 'off', codebaseIds: context.codebaseIds ?? [],
     evidenceAccess: intent.evidenceAccess,
   });
 
-  if (!onDemandContext && strategy) {
+  // Scene meaning is a trace fact, not a scene-wide budget: a bounded question
+  // still has to be read against the scene it is about. Only a run that read no
+  // trace facts drops it — `existing_only`, which may acquire nothing, or a
+  // runtime with no trace to read — and an unavailable classification,
+  // which has no scene to describe, keeps the same neutrality as
+  // `scene_strategy_details` below rather than presenting its fallback as one.
+  if (preflight !== 'none' && intent.status === 'resolved' && strategy) {
     data(3, 'scene_context', {
       sceneId: strategy.scene, description: strategy.classificationDescription,
       requiredCapabilities: strategy.requiredCapabilities, optionalCapabilities: strategy.optionalCapabilities,

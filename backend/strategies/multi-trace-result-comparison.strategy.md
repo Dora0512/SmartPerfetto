@@ -36,11 +36,6 @@ keywords:
   - multi trace result comparison
   - compare snapshots
   - compare analysis results
-compound_patterns:
-  - "对比.*(分析结果|结果|snapshot|snapshots|SID|sid)"
-  - "对比.*(另一个\\s*Trace|另外一个\\s*Trace|两个\\s*Trace|多个\\s*Trace|多\\s*Trace).*(分析结果|结果|snapshot|snapshots|SID|sid)"
-  - "(分析结果|结果|snapshot|snapshots).*(对比|compare)"
-  - "compare.*(analysis results|result snapshots|snapshots|snapshot ids|SIDs|session results|multi trace results)"
 
 phase_hints:
   - id: result_snapshot_selection

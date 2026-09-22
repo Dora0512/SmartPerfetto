@@ -52,10 +52,6 @@ keywords:
   - 数据库
   - 共享偏好
   - 内容提供者
-compound_patterns:
-  - "(?:磁盘|存储|文件|I/O|io|fsync|fdatasync).*(?:慢|卡|阻塞|等待|ANR|启动|延迟)"
-  - "(?:SQLite|Room|database|DB|数据库).*(?:慢|卡|阻塞|等待|ANR|启动|迁移|checkpoint|WAL)"
-  - "(?:SharedPreferences|QueuedWork|ContentProvider|CursorWindow|MediaProvider|scoped storage).*(?:慢|卡|阻塞|等待|ANR|启动)"
 
 final_report_contract:
   required_sections:

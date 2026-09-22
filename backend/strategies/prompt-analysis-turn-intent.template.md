@@ -17,7 +17,7 @@ schemaVersion 是整数 1。taskKind、sceneId、scope、recommendedComplexity�
 - deliverable：通常为 answer；只有当前请求要求完整分析报告、系统性分析交付时为 report。不要因为问题含有“为什么”、已有报告、模型提到“可以进一步完整分析”，或用户引用这种建议，就要求新报告。
 - evidenceAccess：用户要求只使用已提供的证据、解释上一条且禁止再取证，或只是确认时为 existing_only；允许为回答收集新证据时为 read_new。已有发现不自动禁止新证据。
 
-对否定、转述、引用、代词和上一轮实体进行完整理解，不根据词语出现次数分类。不要猜进程身份、权限、来源授权或 Trace 对应关系。acknowledgement 必须是 bounded_question、quick、answer、existing_only。
+对否定、转述、引用、代词和上一轮实体进行完整理解。sceneId 可以把目录里的 keywords 当作词面线索，再用请求的真实语义确认；taskKind、scope、deliverable、recommendedComplexity 不按词语出现次数决定。不要猜进程身份、权限、来源授权或 Trace 对应关系。acknowledgement 必须是 bounded_question、quick、answer、existing_only。
 
 场景目录（同一轮固定）：
 {{sceneCatalog}}

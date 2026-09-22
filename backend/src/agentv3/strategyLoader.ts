@@ -154,7 +154,6 @@ export interface StrategyDefinition {
   priority: number;
   effort: string;
   keywords: string[];
-  compoundPatterns: RegExp[];
   /** Capability IDs required for this scene (missing = critical gap) */
   requiredCapabilities: string[];
   /** Capability IDs that enhance analysis but are not required */
@@ -540,9 +539,6 @@ function parseStrategyFile(filePath: string, investigationProfiles: Investigatio
   const frontmatter = yaml.load(match[1]) as Record<string, unknown>;
   const content = match[2].trim();
 
-  const compoundPatternStrings = (frontmatter.compound_patterns as string[] | undefined) || [];
-  const compoundPatterns = compoundPatternStrings.map(p => new RegExp(p, 'i'));
-
   const rawInvestigationRequirements = frontmatter.investigation_requirements;
   let investigationRequirements: string[] | undefined;
   if (rawInvestigationRequirements !== undefined) {
@@ -636,7 +632,6 @@ function parseStrategyFile(filePath: string, investigationProfiles: Investigatio
     priority: (frontmatter.priority as number) ?? 99,
     effort: (frontmatter.effort as string) ?? 'high',
     keywords: (frontmatter.keywords as string[]) || [],
-    compoundPatterns,
     requiredCapabilities: (frontmatter.required_capabilities as string[]) || [],
     optionalCapabilities: (frontmatter.optional_capabilities as string[]) || [],
     ...(investigationRequirements ? {investigationRequirements} : {}),
@@ -665,9 +660,6 @@ function cloneStrategyDefinition(definition: StrategyDefinition): StrategyDefini
   return deepFreezeStrategy({
     ...definition,
     keywords: [...definition.keywords],
-    compoundPatterns: definition.compoundPatterns.map(
-      pattern => new RegExp(pattern.source, pattern.flags),
-    ),
     requiredCapabilities: [...definition.requiredCapabilities],
     optionalCapabilities: [...definition.optionalCapabilities],
     ...(definition.investigationRequirements
@@ -745,13 +737,7 @@ function cloneStrategyDefinition(definition: StrategyDefinition): StrategyDefini
 
 function strategyFingerprintPayload(definition: StrategyDefinition): unknown {
   const {sourcePath: _sourcePath, ...semanticDefinition} = definition;
-  return {
-    ...semanticDefinition,
-    compoundPatterns: definition.compoundPatterns.map(pattern => ({
-      source: pattern.source,
-      flags: pattern.flags,
-    })),
-  };
+  return semanticDefinition;
 }
 
 export function fingerprintStrategyDefinition(

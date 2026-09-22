@@ -40,17 +40,6 @@ keywords:
   - 触摸跟踪
   - touch latency
   - 输入延迟持续
-compound_patterns:
-  - "跟手.*度"
-  - "跟手.*延迟"
-  - "滑动.*跟手"
-  - "滑动.*跟随"
-  - "touch.*tracking"
-  - "follow.*finger"
-  - "input.*display.*latency"
-  - "持续.*延迟"
-  - "每帧.*延迟"
-  - "per.*frame.*latency"
 
 plan_template:
   mandatory_aspects:

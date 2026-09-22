@@ -38,16 +38,6 @@ keywords:
   - out of memory
   - dmabuf
   - 内存占用
-compound_patterns:
-  - "内存.*泄漏"
-  - "内存.*压力"
-  - "内存.*不足"
-  - "memory.*leak"
-  - "memory.*pressure"
-  - "(ApplicationExitInfo|getHistoricalProcessExitReasons|REASON_LOW_MEMORY|REASON_FREEZER|REASON_EXCESSIVE_RESOURCE_USAGE).*(OOM|LMK|freezer|memory|low memory|kill|内存|杀进程)"
-  - "(OOM|LMK|freezer|memory|low memory|kill|内存|杀进程).*(ApplicationExitInfo|getHistoricalProcessExitReasons|REASON_LOW_MEMORY|REASON_FREEZER|REASON_EXCESSIVE_RESOURCE_USAGE)"
-  - "(ProfilingManager|ProfilingTrigger|heap dump|heap profile|Java heap dump).*(OOM|memory|heap|leak|内存|泄漏)"
-  - "(OOM|memory|heap|leak|内存|泄漏).*(ProfilingManager|ProfilingTrigger|heap dump|heap profile|Java heap dump)"
 
 final_report_contract:
   required_sections:

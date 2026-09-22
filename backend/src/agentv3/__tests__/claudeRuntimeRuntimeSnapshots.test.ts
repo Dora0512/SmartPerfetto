@@ -1082,11 +1082,33 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       expect(result.turnIntent).toMatchObject({scope: 'bounded_question', deliverable: 'answer'});
       expect(rawClaudeSdkMock.__getQueryCalls().filter(isClassifierCall)).toHaveLength(1);
       expect(claudeSdkMock.__getQueryCalls()).toHaveLength(2);
-      expect(focus).not.toHaveBeenCalled(); expect(architecture).not.toHaveBeenCalled();
-      expect(knowledge).not.toHaveBeenCalled(); expect(traceProcessor.query).not.toHaveBeenCalled();
+      // A bounded question still gets the trace facts: which app is in focus
+      // and what it renders with. What it skips is the scene-wide memory tier.
+      expect(focus).toHaveBeenCalled(); expect(architecture).toHaveBeenCalled();
+      expect(knowledge).not.toHaveBeenCalled();
       const tools = claudeSdkMock.__getQueryCalls()[0].options.allowedTools;
       expect(tools).toContain('mcp__smartperfetto__fetch_artifact');
       expect(tools).toContain('mcp__smartperfetto__submit_plan');
+    } finally {focus.mockRestore(); architecture.mockRestore(); knowledge.mockRestore();}
+  });
+
+  it('acquires nothing at all for an existing_only bounded answer', async () => {
+    intentDecision = {...defaultIntent, sceneId: 'general', taskKind: 'fact', scope: 'bounded_question',
+      recommendedComplexity: 'quick', deliverable: 'answer', evidenceAccess: 'existing_only'};
+    const traceProcessor = {query: jest.fn(async () => ({columns: [], rows: []})), getTrace: () => undefined};
+    const focus = jest.spyOn(focusAppDetector, 'detectFocusApps');
+    const architecture = jest.spyOn(architectureDetector, 'createArchitectureDetector');
+    const knowledge = jest.spyOn(sqlKnowledgeBase, 'getExtendedKnowledgeBase');
+    const runtime = new ClaudeRuntime(traceProcessor as any, {enableVerification: false, enableSubAgents: false});
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      yield {type: 'result', subtype: 'success', is_error: false, stop_reason: null,
+        session_id: 'sdk-existing-only', num_turns: 1, result: '之前的证据已经够回答这个问题'};
+    });
+    try {
+      const result = await runtime.analyze('A scoped question', 'bounded-existing-only', 'bounded-trace', {analysisMode: 'full'});
+      expect(result.turnIntent).toMatchObject({scope: 'bounded_question', evidenceAccess: 'existing_only'});
+      expect(focus).not.toHaveBeenCalled(); expect(architecture).not.toHaveBeenCalled();
+      expect(knowledge).not.toHaveBeenCalled(); expect(traceProcessor.query).not.toHaveBeenCalled();
     } finally {focus.mockRestore(); architecture.mockRestore(); knowledge.mockRestore();}
   });
 
@@ -1111,20 +1133,27 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     } finally {mcp.mockRestore();}
   });
 
-  it('uses the pinned primary model after classifier failure without prefetch or repeating classification', async () => {
+  // A failed classifier is the turn that knows least about the trace, so it
+  // keeps the trace-fact preflight; what it loses is the scene, and with it
+  // the scene-wide memory tier.
+  it('uses the pinned primary model after classifier failure without memory prefetch or repeated classification', async () => {
     classifierResult = {type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['light model missing']};
     const traceProcessor = {query: jest.fn(async () => ({columns: [], rows: []})), getTrace: () => undefined};
+    const knowledge = jest.spyOn(sqlKnowledgeBase, 'getExtendedKnowledgeBase');
     const runtime = new ClaudeRuntime(traceProcessor as any, {
       model: 'pinned-primary', lightModel: 'broken-light', enableSubAgents: false,
     });
     claudeSdkMock.__setQueryImplementation(async function* () {
       yield {type: 'result', subtype: 'success', num_turns: 1, result: 'short answer'};
     });
-    const result = await runtime.analyze('A question', 'classifier-unavailable', 'trace', {analysisMode: 'fast'});
-    expect(result.turnIntent?.status).toBe('unavailable');
-    expect(claudeSdkMock.__getQueryCalls()[0].options.model).toBe('pinned-primary');
-    expect(rawClaudeSdkMock.__getQueryCalls().filter(isClassifierCall)).toHaveLength(1);
-    expect(traceProcessor.query).not.toHaveBeenCalled();
+    try {
+      const result = await runtime.analyze('A question', 'classifier-unavailable', 'trace', {analysisMode: 'fast'});
+      expect(result.turnIntent?.status).toBe('unavailable');
+      expect(claudeSdkMock.__getQueryCalls()[0].options.model).toBe('pinned-primary');
+      expect(rawClaudeSdkMock.__getQueryCalls().filter(isClassifierCall)).toHaveLength(1);
+      expect(traceProcessor.query).toHaveBeenCalled();
+      expect(knowledge).not.toHaveBeenCalled();
+    } finally {knowledge.mockRestore();}
   });
 
   it('cancels native intent classification before any main SDK or trace work', async () => {
@@ -1362,6 +1391,9 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       const pinnedFingerprint = buildAnalysisContextAuthorizationFingerprint(options, resolveKnowledgeScope(options));
       options.analysisContextFingerprint = pinnedFingerprint;
       const result = await runtime.analyze('Question', sessionId, 'current-trace', options);
+      // Trace-fact preflight already ran inside the turn; finalization reads
+      // retained captures and must add nothing to that count.
+      const preflightQueries = traceProcessor.query.mock.calls.length;
       context = takeFinalizationContext(result);
       expect(context).toBeDefined();
       options.analysisContextFingerprint = 'later-auth-context';
@@ -1384,7 +1416,7 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       ], ownerKey: expect.any(String)});
       const reads = await context!.resolveReferences([{key: 'missing-ref', reference: {artifactId: 'not-captured'}, requiredColumns: ['dur']}], new AbortController().signal);
       expect(reads).toEqual([{key: 'missing-ref', status: 'missing', reason: 'evidence_not_retained'}]);
-      expect(traceProcessor.query).not.toHaveBeenCalled();
+      expect(traceProcessor.query.mock.calls).toHaveLength(preflightQueries);
       const originalDeadline = context!.deadlineMs;
       process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '2048';
       const review = await context!.dispatchText({prompt: 'Review current claim semantics', systemPrompt: 'Semantic review',

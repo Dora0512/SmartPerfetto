@@ -12,6 +12,7 @@ import type {SourceUseStatus} from '../services/codebase/sourceUseDecision';
 import type {CapabilityManifestResolutionV1} from '../types/capabilityManifest';
 import type {AnalysisRecoveryKind, AnalysisMissingReportSection} from '../types/analysisDelivery';
 import type {AnalysisTurnIntent} from '../agentRuntime/analysisTurnIntent';
+import type {RuntimeTurnPolicy} from '../agentRuntime/runtimeTurnPolicy';
 import type {ReadonlyStrategyRegistrySnapshot} from '../services/selfEvolution/effectiveRuntimeRegistryContext';
 
 // =============================================================================
@@ -102,6 +103,13 @@ export interface ClaudeAnalysisContext {
   strategyRegistry?: ReadonlyStrategyRegistrySnapshot;
   turnIntent?: AnalysisTurnIntent;
   onDemandContext?: boolean;
+  /**
+   * The preflight the run actually performed. A runtime may narrow what the
+   * intent alone implies — a conversation turn with no attached trace gathers
+   * no trace facts — and the prompt must describe that run, not a policy
+   * recomputed from the intent. It can only narrow, never widen.
+   */
+  preflight?: RuntimeTurnPolicy['preflight'];
   architecture?: ArchitectureInfo;
   packageName?: string;
   focusApps?: DetectedFocusApp[];
