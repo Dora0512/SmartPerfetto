@@ -85,6 +85,9 @@ rg --files backend/skills | rg '\.skill\.yaml$' | wc -l
 | `vrr_detection` | VRR 检测 | atomic | 可变刷新率 (LTPO) 使用情况分析 |
 | `game_fps_analysis` | 游戏帧率分析 | atomic | 30/45/60/90/120fps 游戏稳定性 |
 | `gpu_metrics` | GPU 指标分析 | atomic | GPU 频率、利用率、渲染耗时 |
+| `cpu_frequency_limit_attribution` | CPU 限频归因 | composite | 从 cpufreq policy 限频事件出发：谁触发、限频前负载、异常线程、厂商信号候选 |
+| `cpu_freq_limit_timeline` | CPU 限频时间线 | atomic | 限频概览、去抖动限频区段与逐次限频变更事件 |
+| `thermal_cooling_device_timeline` | 散热设备状态时间线 | atomic | 内核 cooling device 档位区段与转换；缺失不等于未热控 |
 | `thermal_throttling` | 热节流分析 | composite | 温度监控与频率限制分析 |
 | `io_pressure` | IO 压力分析 | composite | 系统 IO 负载与阻塞分析 |
 | `cpu_profiling` | CPU Profiling | deep | 深度 CPU 调度与负载分析 |

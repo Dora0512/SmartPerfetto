@@ -1,0 +1,248 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2024-2026 Gracker (Chris)
+# This file is part of SmartPerfetto. See LICENSE for details.
+
+# =============================================================================
+# CPU Anomalous Threads In Range
+# =============================================================================
+# Flags thread behaviours that are worth a human look inside one window:
+# sustained runners, spin-like churn, heavy kernel daemons and wakeup storms.
+#
+# Every threshold is an input with a documented default. A flag means the
+# thread matched a declared numeric rule in this window; it does not mean the
+# thread is buggy, and it does not attribute any downstream effect to it.
+# When nothing is flagged the skill returns an explicit status row rather than
+# an empty result, so "no anomaly" is distinguishable from "not measured".
+# =============================================================================
+
+name: cpu_anomalous_threads_in_range
+version: "1.0"
+type: atomic
+category: cpu
+tier: A
+
+meta:
+  display_name: "窗口异常线程识别"
+  description: "在指定窗口内按阈值标记持续占用、疑似空转、内核守护重载与唤醒风暴线程；标记即观测，不代表根因"
+  icon: "troubleshoot"
+  tags: [cpu, sched, anomaly, thread, range, evidence]
+
+triggers:
+  keywords:
+    zh: [异常线程, 线程空转, 持续占用, 唤醒风暴]
+    en: [anomalous threads, spinning thread, sustained runner, wakeup storm]
+  patterns:
+    - ".*(异常|空转|占满|唤醒风暴).*线程.*"
+    - ".*(anomalous|spinning|runaway).*thread.*"
+
+prerequisites:
+  required_tables:
+    - sched_slice
+    - thread
+  modules:
+    - android.process_metadata
+
+process_scope:
+  role: global_context
+
+inputs:
+  - name: start_ts
+    type: timestamp
+    required: true
+    description: "窗口起始时间戳(ns)"
+  - name: end_ts
+    type: timestamp
+    required: true
+    description: "窗口结束时间戳(ns)"
+  - name: package
+    type: string
+    required: false
+    description: "目标包名/进程名；用于标注 actor_class=target_app"
+  - name: process_name
+    type: string
+    required: false
+    description: "目标进程名别名；package 为空时使用"
+  - name: sustained_pct
+    type: number
+    required: false
+    default: 80
+    description: "持续占用阈值：线程运行时长占窗口时长的百分比"
+  - name: spin_avg_slice_us
+    type: number
+    required: false
+    default: 200
+    description: "疑似空转阈值：平均调度片时长上限(us)"
+  - name: spin_switches_per_s
+    type: number
+    required: false
+    default: 2000
+    description: "疑似空转阈值：每秒调度片数下限"
+  - name: waker_per_s
+    type: number
+    required: false
+    default: 500
+    description: "唤醒风暴阈值：每秒发出唤醒次数下限"
+  - name: kernel_daemon_share_pct
+    type: number
+    required: false
+    default: 10
+    description: "内核守护重载阈值：占窗口内全部运行时长的百分比"
+  - name: top_n
+    type: number
+    required: false
+    default: 30
+    description: "最多返回的被标记线程数"
+
+steps:
+  - id: anomalous_threads
+    type: atomic
+    name: "窗口异常线程"
+    process_scope:
+      role: global_context
+    sql_fragments:
+      - fragments/system_sched_spans.sql
+      - fragments/actor_class_labels.sql
+    display:
+      level: summary
+      layer: list
+      title: "窗口异常线程（阈值标记，非根因）"
+      columns:
+        - {name: window_start_ts, label: "window_start_ts", type: timestamp, unit: ns, hidden: true}
+        - {name: window_end_ts, label: "window_end_ts", type: timestamp, unit: ns, hidden: true}
+        - {name: window_dur_ns, label: "窗口时长", type: duration, unit: ns}
+        - {name: upid, label: "upid", type: number, hidden: true}
+        - {name: utid, label: "utid", type: number, hidden: true}
+        - {name: process_name, label: "进程", type: string}
+        - {name: thread_name, label: "线程", type: string}
+        - {name: actor_class, label: "角色", type: string}
+        - {name: running_ns, label: "运行时长", type: duration, unit: ns}
+        - {name: running_pct_of_window, label: "占窗口时长", type: percentage}
+        - {name: sched_slice_count, label: "调度片数", type: number}
+        - {name: avg_slice_us, label: "平均片长(us)", type: number}
+        - {name: switches_per_s, label: "每秒调度片", type: number}
+        - {name: wakeups_sent_per_s, label: "每秒发出唤醒", type: number}
+        - {name: waker_evidence, label: "唤醒证据", type: string}
+        - {name: sustained_runner, label: "持续占用", type: boolean}
+        - {name: spin_like, label: "疑似空转", type: boolean}
+        - {name: kernel_daemon_heavy, label: "内核守护重载", type: boolean}
+        - {name: waker_storm, label: "唤醒风暴", type: boolean}
+        - {name: signal_count, label: "命中信号数", type: number}
+        - {name: share_of_running_pct, label: "占窗口运行时长", type: percentage}
+        - {name: thresholds, label: "阈值", type: string}
+        - {name: status, label: "状态", type: string}
+        - {name: evidence_scope, label: "证据范围", type: string}
+    on_empty: "窗口内没有调度数据可供判定；确认 trace 含 ftrace sched/sched_switch 且窗口落在数据范围内。"
+    sql: |
+      WITH threshold_text AS (
+        SELECT printf('sustained_pct=%s;spin_avg_slice_us=%s;spin_switches_per_s=%s;waker_per_s=%s;kernel_daemon_share_pct=%s',
+          ${sustained_pct|80}, ${spin_avg_slice_us|200}, ${spin_switches_per_s|2000},
+          ${waker_per_s|500}, ${kernel_daemon_share_pct|10}) AS text
+      ),
+      system_windows AS (
+        SELECT 0 AS window_id, ${start_ts} AS window_start_ts, ${end_ts} AS window_end_ts
+      ),
+      window_facts AS (
+        SELECT w.window_id, w.window_start_ts, w.window_end_ts,
+          w.window_end_ts - w.window_start_ts AS window_dur_ns,
+          (w.window_end_ts - w.window_start_ts) / 1e9 AS window_sec
+        FROM system_windows w
+      ),
+      busy_spans AS (
+        SELECT s.window_id, s.utid, s.upid, s.dur_ns
+        FROM system_sched_spans s
+        WHERE COALESCE(s.is_idle, 0) = 0 AND s.dur_ns > 0
+      ),
+      per_thread AS (
+        SELECT window_id, utid, upid, SUM(dur_ns) AS running_ns, COUNT(*) AS sched_slice_count
+        FROM busy_spans GROUP BY window_id, utid, upid
+      ),
+      total_running AS (
+        SELECT SUM(running_ns) AS total_running_ns FROM per_thread
+      ),
+      waker_available AS (
+        SELECT COUNT(*) AS n FROM thread_state
+        WHERE waker_utid IS NOT NULL
+          AND ts < (SELECT window_end_ts FROM window_facts)
+          AND ts >= (SELECT window_start_ts FROM window_facts)
+      ),
+      wakeups AS (
+        SELECT waker_utid AS utid, COUNT(*) AS wakeups_sent
+        FROM thread_state
+        WHERE waker_utid IS NOT NULL
+          AND ts < (SELECT window_end_ts FROM window_facts)
+          AND ts >= (SELECT window_start_ts FROM window_facts)
+        GROUP BY waker_utid
+      ),
+      scored AS (
+        SELECT
+          wf.window_start_ts, wf.window_end_ts, wf.window_dur_ns, wf.window_sec,
+          pt.upid, pt.utid,
+          COALESCE(p.name, '') AS process_name,
+          COALESCE(th.name, '') AS thread_name,
+          COALESCE(ac.actor_class, 'kernel') AS actor_class,
+          pt.running_ns, pt.sched_slice_count,
+          100.0 * pt.running_ns / NULLIF(wf.window_dur_ns, 0) AS running_pct_of_window,
+          pt.running_ns / 1000.0 / NULLIF(pt.sched_slice_count, 0) AS avg_slice_us,
+          pt.sched_slice_count / NULLIF(wf.window_sec, 0) AS switches_per_s,
+          CASE WHEN (SELECT n FROM waker_available) > 0
+            THEN COALESCE(wk.wakeups_sent, 0) / NULLIF(wf.window_sec, 0) END AS wakeups_sent_per_s,
+          CASE WHEN (SELECT n FROM waker_available) > 0 THEN 'observed'
+            ELSE 'unavailable_no_waker_utid_in_window' END AS waker_evidence,
+          100.0 * pt.running_ns / NULLIF((SELECT total_running_ns FROM total_running), 0) AS share_of_running_pct
+        FROM per_thread pt
+        CROSS JOIN window_facts wf
+        LEFT JOIN thread th ON th.utid = pt.utid
+        LEFT JOIN process p ON p.upid = pt.upid
+        LEFT JOIN actor_class_by_upid ac ON ac.upid = pt.upid
+        LEFT JOIN wakeups wk ON wk.utid = pt.utid
+      ),
+      flagged AS (
+        SELECT s.*,
+          CASE WHEN s.running_pct_of_window >= ${sustained_pct|80} THEN 1 ELSE 0 END AS sustained_runner,
+          CASE WHEN s.avg_slice_us < ${spin_avg_slice_us|200}
+            AND s.switches_per_s > ${spin_switches_per_s|2000} THEN 1 ELSE 0 END AS spin_like,
+          CASE WHEN s.actor_class = 'kernel'
+            AND s.share_of_running_pct >= ${kernel_daemon_share_pct|10} THEN 1 ELSE 0 END AS kernel_daemon_heavy,
+          CASE WHEN s.wakeups_sent_per_s > ${waker_per_s|500} THEN 1 ELSE 0 END AS waker_storm
+        FROM scored s
+      ),
+      ranked AS (
+        SELECT f.window_start_ts, f.window_end_ts, f.window_dur_ns,
+          f.upid, f.utid, f.process_name, f.thread_name, f.actor_class,
+          f.running_ns,
+          ROUND(f.running_pct_of_window, 2) AS running_pct_of_window,
+          f.sched_slice_count,
+          ROUND(f.avg_slice_us, 1) AS avg_slice_us,
+          ROUND(f.switches_per_s, 1) AS switches_per_s,
+          ROUND(f.wakeups_sent_per_s, 1) AS wakeups_sent_per_s,
+          f.waker_evidence,
+          f.sustained_runner, f.spin_like, f.kernel_daemon_heavy, f.waker_storm,
+          f.sustained_runner + f.spin_like + f.kernel_daemon_heavy + f.waker_storm AS signal_count,
+          ROUND(f.share_of_running_pct, 2) AS share_of_running_pct,
+          (SELECT text FROM threshold_text) AS thresholds,
+          'flagged' AS status,
+          'observation_not_causal' AS evidence_scope
+        FROM flagged f
+        WHERE f.sustained_runner + f.spin_like + f.kernel_daemon_heavy + f.waker_storm > 0
+        ORDER BY signal_count DESC, f.running_ns DESC
+        LIMIT ${top_n|30}
+      )
+      SELECT * FROM ranked
+      UNION ALL
+      SELECT
+        (SELECT window_start_ts FROM window_facts), (SELECT window_end_ts FROM window_facts),
+        (SELECT window_dur_ns FROM window_facts),
+        NULL, NULL, '', '', 'none',
+        NULL, NULL, NULL, NULL, NULL, NULL,
+        (SELECT CASE WHEN n > 0 THEN 'observed' ELSE 'unavailable_no_waker_utid_in_window' END FROM waker_available),
+        NULL, NULL, NULL, NULL, 0, NULL,
+        (SELECT text FROM threshold_text),
+        CASE WHEN (SELECT COUNT(*) FROM per_thread) = 0
+          THEN 'no_sched_data_in_window'
+          ELSE 'no_thread_matched_declared_thresholds' END,
+        'observation_not_causal'
+      WHERE NOT EXISTS (SELECT 1 FROM ranked)
+    save_as: anomalous_threads
+
+output:
+  format: structured

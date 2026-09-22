@@ -4,15 +4,15 @@
 This directory is the source-controlled trace test and reference corpus.
 
 - [Real trace cases](./real/README.md): 6
-- [Constructed trace cases](./constructed/README.md): 16
+- [Constructed trace cases](./constructed/README.md): 17
 - [Machine-readable catalog](./catalog.json)
 - [Skill and Strategy coverage](./coverage.json)
 
-Evidence tiers: R1=6, R2=0, R3=16.
+Evidence tiers: R1=6, R2=0, R3=17.
 
-Pinned Perfetto SQL source: `add693d8b338ba9599dbcbc3e300b1ab8c000897`. The generated coverage ledger contains 242 Skill SQL source contracts and 2 canonical portable SQL source checks with exact source hashes and upstream module paths.
+Pinned Perfetto SQL source: `add693d8b338ba9599dbcbc3e300b1ab8c000897`. The generated coverage ledger contains 248 Skill SQL source contracts and 2 canonical portable SQL source checks with exact source hashes and upstream module paths.
 
-Skill execution quality: 222 source-column-backed semantic, 4 execution-only composition, 0 expected-empty negative, 11 explicit deferred prerequisite, 32 definition-only.
+Skill execution quality: 228 source-column-backed semantic, 4 execution-only composition, 0 expected-empty negative, 11 explicit deferred prerequisite, 32 definition-only.
 
 ## Commands
 
@@ -69,3 +69,4 @@ Constructed cases keep source scenarios and overlay protobufs in Git; combined t
 | [Source analysis semantic ground truth](./constructed/source-analysis-semantic/) | startup | Android 16 / API 36 (tested API 35-36) | android-startup-light | 0 target(s) |
 | [Startup and process lifecycle](./constructed/startup-lifecycle/) | startup | Android 16 / API 36 (tested API 35-36) | android-startup-heavy | 24 target(s) |
 | [System scheduling evidence with explicit handoffs](./constructed/system-scheduling-evidence/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 4 target(s) |
+| [Thermal and userspace CPU frequency limit attribution](./constructed/thermal-frequency-limit/) | power | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 7 target(s) |

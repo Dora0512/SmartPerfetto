@@ -360,7 +360,7 @@ invoke_skill("scrolling_analysis", { start_ts: "<trace_start>", end_ts: "<trace_
 |------|------|----------------|
 | `video_during_scroll = 1` | 滑动期间有视频解码活跃 | ⚠️ **视频播放并行**：滑动期间检测到视频解码活跃，workload_heavy 帧的负载归因不能全部归因于滑动渲染 |
 | `interpolation_active = 1` | 大量 frame_id=-1 的插帧 | ⚠️ **OEM 插帧模式活跃**：统计指标（帧率/掉帧率）可能受插帧影响失真 |
-| `thermal_trending = 1` | trace 尾部频率天花板明显低于峰值 | ⚠️ **温控持续降频**：thermal_throttling 帧的根因是系统级热管理，非 App 问题 |
+| `thermal_trending = 1` | trace 尾部频率天花板明显低于峰值 | ⚠️ **持续限频**：先按系统侧限频标注；要判定是否真由热管理触发、以及限频前是谁在跑，用 `invoke_skill("cpu_frequency_limit_attribution")`，无 cooling/温度证据时不能写成热降频 |
 | `background_cpu_heavy = 1` | 非 App 大核占比 >60% | ⚠️ **后台 CPU 干扰**：{non_app_big_core_pct}% 的大核 CPU 被非前台进程占用。需用 `execute_sql` 查询 top 占用进程 |
 
 ⚠️ 全局上下文标志**不改变 reason_code 分类**，仅在结论概述段增加修饰标注。多个标志同时为 1 时全部标注。
@@ -423,7 +423,7 @@ invoke_skill("scrolling_analysis", { start_ts: "<trace_start>", end_ts: "<trace_
 | **`reason_code = display_hal`** | 默认复用 FrameTimeline 直接证据；持续高占比且用户要求系统侧定位时，才补 `surfaceflinger_analysis` / display pipeline 证据 | 边界是 SF 已按时下发、HAL 未在目标 VSync 呈现，不调用 App 帧内工具。 |
 | **`reason_code = app_jank_unattributed`** | 明确写“App 责任已确认、底层原因证据不足”；仅在 trace capability 和用户目标表明会增加信息时，选择一个最小深钻工具 | 不把未归因标签改写成 Binder、GC、锁、调度或工作负载根因。 |
 | **`reason_code = frame_timeline_unattributed`** | 明确写“FrameTimeline 标记了 Unknown Jank，但当前 trace 无法归因到 App、SF 或帧内直接机制”；默认停止自动深钻 | 仍须报告观测到的异常与不确定性，不能写成噪声、假帧或不可感知。只有用户追问，或新 capability/证据能增加信息时，才选择一个最小工具。 |
-| **多帧 `reason_code = thermal_throttling` 或 `cpu_max_limited`** | 调用 `invoke_skill("thermal_throttling")`，或 `lookup_knowledge("thermal-throttling")` | 温度曲线？限频策略？是持续降频还是间歇性？thermal 还是 policy governor？ |
+| **多帧 `reason_code = thermal_throttling` 或 `cpu_max_limited`** | 温度/频率观测用 `invoke_skill("thermal_throttling")`；要回答“谁限的频、限频前跑了什么”用 `invoke_skill("cpu_frequency_limit_attribution")`；机制背景 `lookup_knowledge("thermal-throttling")` | 温度曲线？限频策略？是持续降频还是间歇性？thermal 还是 policy governor？有 cooling device 证据才能写成热触发 |
 | **多帧 `reason_code = gc_pressure_cascade`** | 查询 `android_garbage_collection_events` 全程分布 | GC 频率趋势？是否有内存泄漏迹象？哪种 GC 类型为主？ |
 | **多帧 `reason_code = render_thread_heavy`** | 对最严重帧调用 `invoke_skill("jank_frame_detail")` 查看 RT top slices | uploadBitmap？shader 初始化？syncFrameState？drawFrame 内部哪个阶段慢？ |
 | **多帧 `reason_code = gpu_fence_wait` 或 `shader_compile`** | 调用 `invoke_skill("gpu_analysis")`；若证据指向 BufferQueue/Fence，再补 `fence_wait_decomposition` / `present_fence_timing` / `vsync_config` | GPU 频率被限？shader 复杂度？GPU 负载过高？还是 acquire/present/release fence 或刷新率预算导致？ |
@@ -478,7 +478,7 @@ invoke_skill("scrolling_analysis", { start_ts: "<trace_start>", end_ts: "<trace_
 | **input_handling_slow** | 读取 `input_stage`、`input_slice_ms`、`input_handling_ms`、`input_events_json`；若 input slice 内有 Binder/IO/锁，再调用 `frame_blocking_calls` | 确认 input-bound 的直接机制：App input callback 慢、事件批处理过多、还是 input 内同步阻塞 |
 | **binder_overlap >5ms** | `invoke_skill("binder_root_cause", {start_ts, end_ts, process_name})` | 服务端还是客户端慢？具体原因（GC？锁？IO？内存回收？）|
 | **gc_overlap >3ms 或 gc_pressure_cascade** | 查询 `android_garbage_collection_events` WHERE gc_ts 在帧窗口内 | 哪种 GC？回收了多少？GC 运行耗时？是否有内存泄漏趋势？|
-| **thermal_throttling / cpu_max_limited** | `lookup_knowledge("thermal-throttling")` | 温度驱动 vs policy 驱动？限频比例？是否持续恶化？|
+| **thermal_throttling / cpu_max_limited** | `lookup_knowledge("thermal-throttling")`；需要归因到触发源时 `invoke_skill("cpu_frequency_limit_attribution")` | 温度驱动 vs policy 驱动？限频比例？是否持续恶化？参照系是观测到的最大上限，不是硬件峰值 |
 | **render_thread_heavy** | `invoke_skill("jank_frame_detail", {start_ts, end_ts})` 查看 render_slices_json | RT 内部瓶颈：uploadBitmap？syncFrameState？drawFrame？eglSwapBuffers？|
 | **sf_composition_slow** | `invoke_skill("surfaceflinger_analysis")`，必要时补 `buffer_transaction_lifecycle` / `fence_wait_decomposition` | SF 合成瓶颈：commit/composite/present 哪段慢？HWC delay？GPU 回退合成？Layer 过多？Fence/BufferQueue 背压？|
 | **freq_ramp_slow** | `lookup_knowledge("cpu-scheduler")` | 是 governor 升频延迟还是 thermal 限频？|

@@ -37,6 +37,58 @@ inputs:
     description: "分析结束时间戳(ns)"
 
 steps:
+  # Step 0: direct limit evidence. Observed frequency span cannot tell a cap
+  # from an idle workload; the cpufreq policy limit track can. When it exists,
+  # throttle_detected stops being NULL.
+  - id: limit_evidence
+    type: atomic
+    name: "限频证据"
+    optional: true
+    process_scope:
+      role: global_context
+    sql_fragments:
+      - fragments/system_sched_spans.sql
+      - fragments/system_cpu_freq_limit_spans.sql
+      - fragments/system_cpu_freq_limit_episodes.sql
+    display:
+      level: summary
+      layer: overview
+      title: "限频证据（cpufreq policy 上限）"
+      columns:
+        - {name: has_limit_track, label: "有限频轨道", type: boolean}
+        - {name: episode_count, label: "限频区段数", type: number}
+        - {name: policy_count, label: "涉及 policy 数", type: number}
+        - {name: deepest_depth_pct, label: "最大限频深度", type: percentage}
+        - {name: min_limit_khz, label: "最低上限", type: number}
+        - {name: reference_max_limit_khz, label: "参考上限", type: number}
+        - {name: reference_basis, label: "参考依据", type: string}
+        - {name: evidence_status, label: "证据状态", type: string}
+        - {name: next_step, label: "下一步", type: string}
+        - {name: evidence_scope, label: "证据范围", type: string}
+    sql: |
+      WITH system_windows AS (
+        SELECT 0 AS window_id, ${start_ts} AS window_start_ts, ${end_ts} AS window_end_ts
+      )
+      SELECT
+        CASE WHEN EXISTS (SELECT 1 FROM cpu_counter_track
+          WHERE type = 'cpu_max_frequency_limit') THEN 1 ELSE 0 END AS has_limit_track,
+        COUNT(e.episode_id) AS episode_count,
+        COUNT(DISTINCT e.policy_cpu) AS policy_count,
+        ROUND(MAX(e.depth_pct), 1) AS deepest_depth_pct,
+        MIN(e.min_limit_khz) AS min_limit_khz,
+        MAX(e.reference_max_limit_khz) AS reference_max_limit_khz,
+        MAX(e.reference_basis) AS reference_basis,
+        CASE
+          WHEN NOT EXISTS (SELECT 1 FROM cpu_counter_track WHERE type = 'cpu_max_frequency_limit')
+            THEN 'limit_track_unavailable'
+          WHEN COUNT(e.episode_id) > 0 THEN 'freq_limit_observed'
+          ELSE 'no_limit_episode_in_range'
+        END AS evidence_status,
+        '用 cpu_frequency_limit_attribution 判断触发方与限频前负载' AS next_step,
+        'observation_not_causal' AS evidence_scope
+      FROM system_cpu_freq_limit_episodes e
+    save_as: limit_evidence
+
   # Step 1: 初始化 CPU 拓扑视图（供后续步骤 JOIN）
   - id: init_cpu_topology
     type: skill
@@ -90,6 +142,11 @@ steps:
           type: boolean
     sql: |
       WITH
+      -- 上一步的限频证据读一次，供下面的判定复用
+      limit_status AS (
+        SELECT '${limit_evidence.data[0].evidence_status}' AS status,
+          ${limit_evidence.data[0].deepest_depth_pct|0} AS depth_pct
+      ),
       -- 频率采样（带拓扑分类）
       freq_samples AS (
         SELECT
@@ -129,9 +186,16 @@ steps:
         ROUND(MAX(max_freq), 0) as max_freq_mhz,
         ROUND(100.0 * (MAX(max_freq) - MIN(min_freq)) / NULLIF(MAX(max_freq), 0), 1) as freq_drop_pct,
         CASE WHEN MIN(min_freq) < MAX(max_freq) * 0.7 THEN 1 ELSE 0 END as frequency_variation_detected,
-        NULL as throttle_detected,
-        'thermal_evidence_missing' as evidence_status,
-        '频率变化可能来自负载下降或空闲 DVFS；需直接限频证据与同窗口负载才能确定热控原因' as interpretation
+        -- Only the cpufreq policy limit track can turn this from unknown into
+        -- a fact; an observed frequency span never can.
+        CASE WHEN (SELECT status FROM limit_status) = 'freq_limit_observed' THEN 1
+          WHEN (SELECT status FROM limit_status) = 'no_limit_episode_in_range' THEN 0
+          ELSE NULL END as throttle_detected,
+        CASE WHEN (SELECT status FROM limit_status) = 'freq_limit_observed'
+          THEN 'freq_limit_observed' ELSE 'thermal_evidence_missing' END as evidence_status,
+        CASE WHEN (SELECT status FROM limit_status) = 'freq_limit_observed'
+          THEN '区间内观测到 cpufreq policy 上限被下调（最大深度 ' || (SELECT depth_pct FROM limit_status) || '%）：限频确实发生；触发方仍需用 cpu_frequency_limit_attribution 判定'
+          ELSE '频率变化可能来自负载下降或空闲 DVFS；需直接限频证据与同窗口负载才能确定热控原因' END as interpretation
       FROM per_cpu_stats
       GROUP BY
         CASE

@@ -55,6 +55,22 @@ inputs:
     description: "分析结束时间戳(ns)"
 
 steps:
+  # The chain starts from the only signal that states a limit was APPLIED.
+  # Everything below it (temperature, DVFS, idle, GPU) is context for that fact,
+  # and none of it can establish throttling on its own.
+  - id: limit_attribution
+    type: skill
+    name: "限频归因（谁触发 / 限频前负载 / 异常线程）"
+    skill: cpu_frequency_limit_attribution
+    params:
+      package: "${package || process_name || ''}"
+      start_ts: "${start_ts}"
+      end_ts: "${end_ts}"
+    display:
+      level: key
+    save_as: limit_attribution
+    optional: true
+
   - id: thermal
     type: skill
     name: "温度/热节流分析"

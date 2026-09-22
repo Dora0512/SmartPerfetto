@@ -1,0 +1,420 @@
+{
+  "schema_version": 1,
+  "id": "thermal-frequency-limit",
+  "kind": "constructed",
+  "title": "Thermal and userspace CPU frequency limit attribution",
+  "description": "Deterministic thermal, cooling device, and CPU frequency limit attribution signals over the android-scroll-customer real base trace.",
+  "scene": "power",
+  "tags": [
+    "android",
+    "constructed",
+    "power"
+  ],
+  "aliases": [],
+  "trace": {
+    "file": "trace.overlay.pftrace",
+    "format": "perfetto-protobuf",
+    "sha256": "da163a5d17a1650074b357f5e4ad5e3583f4b91b308935020c316c15cf1938a0",
+    "materialization": "base-plus-overlay"
+  },
+  "android": {
+    "release": "16",
+    "api_level": 36,
+    "device": "OPPO PKH110 base",
+    "build_fingerprint": null,
+    "compatibility": {
+      "min_api": 35,
+      "max_api": 36
+    }
+  },
+  "source": {
+    "origin": "SmartPerfetto deterministic trace generator",
+    "captured_at": null,
+    "imported_at": "2026-07-13T00:00:00.000Z",
+    "license": "AGPL-3.0-or-later",
+    "consent": "generated",
+    "privacy_review": "not-applicable",
+    "sanitization_review": "not-applicable",
+    "publication": "public",
+    "evidence_tier": "R3"
+  },
+  "analysis": {
+    "results": [
+      "analysis/expected.json"
+    ],
+    "logs": []
+  },
+  "construction": {
+    "base_case_id": "android-scroll-customer",
+    "scenario_file": "scenario.json",
+    "generator_version": 1,
+    "seed": "thermal-frequency-limit-v1",
+    "output": "Trace/.generated/constructed/thermal-frequency-limit/trace.pftrace",
+    "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+  },
+  "coverage": {
+    "skills": [
+      "cpu_anomalous_threads_in_range",
+      "cpu_freq_limit_timeline",
+      "cpu_frequency_limit_attribution",
+      "cpu_frequency_limit_episode",
+      "cpu_workload_attribution_in_range",
+      "thermal_cooling_device_timeline"
+    ],
+    "strategies": [
+      "power"
+    ],
+    "expectations": [
+      {
+        "id": "execute-cpu_freq_limit_timeline",
+        "type": "skill",
+        "target": "cpu_freq_limit_timeline",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/cpu_freq_limit_timeline.skill.yaml",
+        "parameters": {
+          "episode_drop_pct": 10,
+          "merge_gap_ms": 500
+        },
+        "required_steps": [
+          "limit_data_check",
+          "limit_summary",
+          "limit_episodes",
+          "limit_events",
+          "limit_unavailable"
+        ],
+        "required_sql_steps": [
+          "limit_data_check",
+          "limit_summary",
+          "limit_episodes",
+          "limit_events",
+          "limit_unavailable"
+        ],
+        "forced_sql_steps": [
+          "limit_summary",
+          "limit_episodes",
+          "limit_events",
+          "limit_unavailable"
+        ],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "limit_episodes",
+        "required_columns": [
+          "episode_id",
+          "policy_cpu",
+          "core_type",
+          "topology_source",
+          "episode_start_ts",
+          "episode_end_ts",
+          "episode_dur_ns",
+          "min_limit_khz",
+          "reference_max_limit_khz",
+          "depth_pct",
+          "change_count",
+          "starts_at_data_start",
+          "ends_at_data_end",
+          "evidence_status",
+          "reference_basis",
+          "thresholds",
+          "evidence_scope"
+        ],
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      },
+      {
+        "id": "execute-thermal_cooling_device_timeline",
+        "type": "skill",
+        "target": "thermal_cooling_device_timeline",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/thermal_cooling_device_timeline.skill.yaml",
+        "parameters": {},
+        "required_steps": [
+          "cooling_data_check",
+          "cooling_summary",
+          "cooling_transitions",
+          "cooling_unavailable"
+        ],
+        "required_sql_steps": [
+          "cooling_data_check",
+          "cooling_summary",
+          "cooling_transitions",
+          "cooling_unavailable"
+        ],
+        "forced_sql_steps": [
+          "cooling_summary",
+          "cooling_transitions",
+          "cooling_unavailable"
+        ],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "cooling_transitions",
+        "required_columns": [
+          "ts",
+          "cdev_name",
+          "cdev_kind_hint",
+          "prev_state",
+          "state",
+          "direction",
+          "dur_ns",
+          "cooling_source",
+          "evidence_scope"
+        ],
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      },
+      {
+        "id": "execute-cpu_workload_attribution_in_range",
+        "type": "skill",
+        "target": "cpu_workload_attribution_in_range",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/cpu_workload_attribution_in_range.skill.yaml",
+        "parameters": {
+          "package": "com.smartperfetto.fixture",
+          "start_ts": "506732384657456",
+          "end_ts": "506733884657456",
+          "top_n": 30
+        },
+        "required_steps": [
+          "workload_by_thread",
+          "workload_summary"
+        ],
+        "required_sql_steps": [
+          "workload_by_thread",
+          "workload_summary"
+        ],
+        "forced_sql_steps": [],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "workload_by_thread",
+        "required_columns": [
+          "window_id",
+          "window_start_ts",
+          "window_end_ts",
+          "window_dur_ns",
+          "upid",
+          "utid",
+          "pid",
+          "tid",
+          "process_name",
+          "thread_name",
+          "actor_class",
+          "actor_class_basis",
+          "running_ns",
+          "running_pct_of_window",
+          "big_running_ns",
+          "medium_running_ns",
+          "little_running_ns",
+          "unknown_core_running_ns",
+          "freq_weighted_work_mhz_ms",
+          "share_of_total_work_pct",
+          "sched_slice_count",
+          "freq_covered_ns",
+          "frequency_evidence",
+          "sched_evidence",
+          "cpu_count",
+          "window_capacity_ns",
+          "normalization_basis",
+          "evidence_scope"
+        ],
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      },
+      {
+        "id": "execute-cpu_anomalous_threads_in_range",
+        "type": "skill",
+        "target": "cpu_anomalous_threads_in_range",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/cpu_anomalous_threads_in_range.skill.yaml",
+        "parameters": {
+          "package": "com.smartperfetto.fixture",
+          "start_ts": "506732384657456",
+          "end_ts": "506733884657456",
+          "top_n": 30
+        },
+        "required_steps": [
+          "anomalous_threads"
+        ],
+        "required_sql_steps": [
+          "anomalous_threads"
+        ],
+        "forced_sql_steps": [],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "anomalous_threads",
+        "required_columns": [
+          "window_start_ts",
+          "window_end_ts",
+          "window_dur_ns",
+          "upid",
+          "utid",
+          "process_name",
+          "thread_name",
+          "actor_class",
+          "running_ns",
+          "running_pct_of_window",
+          "sched_slice_count",
+          "avg_slice_us",
+          "switches_per_s",
+          "wakeups_sent_per_s",
+          "waker_evidence",
+          "sustained_runner",
+          "spin_like",
+          "kernel_daemon_heavy",
+          "waker_storm",
+          "signal_count",
+          "share_of_running_pct",
+          "thresholds",
+          "status",
+          "evidence_scope"
+        ],
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      },
+      {
+        "id": "execute-cpu_frequency_limit_episode",
+        "type": "skill",
+        "target": "cpu_frequency_limit_episode",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/cpu_frequency_limit_episode.skill.yaml",
+        "parameters": {
+          "episode_id": "policy10-ep1",
+          "episode_start_ts": "506733884657456",
+          "episode_end_ts": "506734884657456",
+          "policy_cpu": 10,
+          "core_type": "unknown",
+          "starts_at_data_start": 0,
+          "lookback_ms": 10000,
+          "who_window_ms": 2000,
+          "cooling_coincidence_ms": 50,
+          "package": "com.smartperfetto.fixture"
+        },
+        "required_steps": [
+          "episode_windows",
+          "who_cooling",
+          "who_daemon",
+          "temperature_context",
+          "before_workload",
+          "before_anomalies",
+          "non_cpu_heat_context",
+          "who_verdict"
+        ],
+        "required_sql_steps": [
+          "episode_windows",
+          "who_cooling",
+          "who_daemon",
+          "temperature_context",
+          "non_cpu_heat_context",
+          "who_verdict"
+        ],
+        "forced_sql_steps": [],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "who_verdict",
+        "required_columns": [
+          "episode_id",
+          "policy_cpu",
+          "core_type",
+          "who_verdict",
+          "cooling_transition_coincident",
+          "cooling_nearest_transition_ns",
+          "cooling_nearest_transition_ts",
+          "cooling_active_ns",
+          "cooling_devices_active",
+          "cooling_transitions_in_who_window",
+          "daemon_ran_before_limit_ns",
+          "daemon_threads_before_limit",
+          "onset_observed",
+          "onset_note",
+          "thresholds",
+          "verdict_basis",
+          "interpretation",
+          "evidence_scope"
+        ],
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      },
+      {
+        "id": "execute-cpu_frequency_limit_attribution",
+        "type": "skill",
+        "target": "cpu_frequency_limit_attribution",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/cpu_frequency_limit_attribution.skill.yaml",
+        "parameters": {
+          "package": "com.smartperfetto.fixture",
+          "lookback_ms": 10000,
+          "who_window_ms": 2000,
+          "max_episodes": 3
+        },
+        "required_steps": [
+          "data_check",
+          "analysis_window",
+          "limit_overview",
+          "cooling_overview",
+          "episodes",
+          "episode_drilldown",
+          "attribution_summary",
+          "vendor_signal_discovery",
+          "no_limit_throttle_observation",
+          "no_limit_capture_advice",
+          "diagnosis"
+        ],
+        "required_sql_steps": [
+          "data_check",
+          "analysis_window",
+          "episodes",
+          "attribution_summary",
+          "vendor_signal_discovery",
+          "no_limit_capture_advice"
+        ],
+        "forced_sql_steps": [
+          "episodes",
+          "attribution_summary",
+          "no_limit_capture_advice"
+        ],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "episodes",
+        "required_columns": [
+          "episode_id",
+          "policy_cpu",
+          "core_type",
+          "topology_source",
+          "episode_start_ts",
+          "episode_end_ts",
+          "episode_dur_ns",
+          "min_limit_khz",
+          "reference_max_limit_khz",
+          "reference_basis",
+          "depth_pct",
+          "change_count",
+          "starts_at_data_start",
+          "ends_at_data_end",
+          "evidence_status",
+          "impact_rank_score",
+          "before_start_ts",
+          "before_end_ts",
+          "window_clipped_to_data_start",
+          "who_start_ts",
+          "who_end_ts",
+          "package",
+          "process_name",
+          "lookback_ms",
+          "who_window_ms",
+          "cooling_coincidence_ms",
+          "top_n",
+          "sustained_pct",
+          "spin_avg_slice_us",
+          "spin_switches_per_s",
+          "waker_per_s",
+          "kernel_daemon_share_pct",
+          "thresholds",
+          "evidence_scope"
+        ],
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      },
+      {
+        "id": "strategy-power",
+        "type": "strategy",
+        "target": "power",
+        "query": "限频是谁触发的？限频之前系统在跑什么？",
+        "expected_strategy": "power",
+        "source_file": "backend/strategies/power.strategy.md",
+        "required_marker": "SmartPerfetto::CASE::thermal-frequency-limit"
+      }
+    ]
+  }
+}

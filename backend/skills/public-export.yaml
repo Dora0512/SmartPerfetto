@@ -47,6 +47,27 @@ sql_fragments:
   backend/skills/fragments/system_cpu_frequency_spans.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/system_cpu_frequency_spans.sql
+  backend/skills/fragments/system_cpu_freq_limit_spans.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/system_cpu_freq_limit_spans.sql
+  backend/skills/fragments/system_cpu_freq_limit_episodes.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/system_cpu_freq_limit_episodes.sql
+  backend/skills/fragments/thermal_cooling_spans.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/thermal_cooling_spans.sql
+  backend/skills/fragments/thermal_signal_signatures.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/thermal_signal_signatures.sql
+  backend/skills/fragments/observed_data_bounds.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/observed_data_bounds.sql
+  backend/skills/fragments/actor_class_labels.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/actor_class_labels.sql
+  backend/skills/fragments/system_cpu_freq_limit_episode_verdicts.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/system_cpu_freq_limit_episode_verdicts.sql
   backend/skills/fragments/effective_target_processes.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/effective_target_processes.sql
@@ -304,6 +325,31 @@ skills:
     workflow: cpu-scheduling
     disposition: exported
     destination: references/generated/skills/cpu_slice_analysis.md
+  cpu_anomalous_threads_in_range:
+    source: backend/skills/atomic/cpu_anomalous_threads_in_range.skill.yaml
+    workflow: cpu-scheduling
+    disposition: exported
+    destination: references/generated/skills/cpu_anomalous_threads_in_range.md
+  cpu_freq_limit_timeline:
+    source: backend/skills/atomic/cpu_freq_limit_timeline.skill.yaml
+    workflow: power-thermal
+    disposition: exported
+    destination: references/generated/skills/cpu_freq_limit_timeline.md
+  cpu_frequency_limit_attribution:
+    source: backend/skills/composite/cpu_frequency_limit_attribution.skill.yaml
+    workflow: power-thermal
+    disposition: exported
+    destination: references/generated/skills/cpu_frequency_limit_attribution.md
+  cpu_frequency_limit_episode:
+    source: backend/skills/composite/cpu_frequency_limit_episode.skill.yaml
+    workflow: power-thermal
+    disposition: exported
+    destination: references/generated/skills/cpu_frequency_limit_episode.md
+  cpu_workload_attribution_in_range:
+    source: backend/skills/atomic/cpu_workload_attribution_in_range.skill.yaml
+    workflow: cpu-scheduling
+    disposition: exported
+    destination: references/generated/skills/cpu_workload_attribution_in_range.md
   cpu_thread_utilization_period:
     source: backend/skills/atomic/cpu_thread_utilization_period.skill.yaml
     workflow: cpu-scheduling
@@ -769,6 +815,11 @@ skills:
     workflow: scrolling
     disposition: exported
     destination: references/generated/skills/textureview_producer_frame_timing.md
+  thermal_cooling_device_timeline:
+    source: backend/skills/atomic/thermal_cooling_device_timeline.skill.yaml
+    workflow: power-thermal
+    disposition: exported
+    destination: references/generated/skills/thermal_cooling_device_timeline.md
   thermal_predictor:
     source: backend/skills/atomic/thermal_predictor.skill.yaml
     workflow: power-thermal

@@ -7,11 +7,11 @@
     "authoredNarrativeRemainsVerbatim": true
   },
   "inventory": {
-    "skillCount": 242,
+    "skillCount": 248,
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
-    "stepCount": 1280,
-    "explicitColumnCount": 4391
+    "stepCount": 1326,
+    "explicitColumnCount": 4723
   },
   "skills": {
     "ams_module": {
@@ -10202,6 +10202,188 @@
         }
       }
     },
+    "cpu_anomalous_threads_in_range": {
+      "displayName": {
+        "zh-CN": "窗口异常线程识别",
+        "en": "CPU Anomalous Threads In Range"
+      },
+      "description": {
+        "zh-CN": "在指定窗口内按阈值标记持续占用、疑似空转、内核守护重载与唤醒风暴线程；标记即观测，不代表根因",
+        "en": "Analyzes CPU Anomalous Threads In Range using trace metrics and supporting evidence."
+      },
+      "type": "atomic",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "anomalous_threads": {
+          "title": {
+            "zh-CN": "窗口异常线程（阈值标记，非根因）",
+            "en": "Anomalous Threads"
+          },
+          "columns": {
+            "window_start_ts": {
+              "label": {
+                "zh-CN": "WindowStartTs",
+                "en": "window_start_ts"
+              }
+            },
+            "window_end_ts": {
+              "label": {
+                "zh-CN": "WindowEndTs",
+                "en": "window_end_ts"
+              }
+            },
+            "window_dur_ns": {
+              "label": {
+                "zh-CN": "窗口时长",
+                "en": "Window Dur ns"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "upid"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "utid"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "线程",
+                "en": "Thread Name"
+              }
+            },
+            "actor_class": {
+              "label": {
+                "zh-CN": "角色",
+                "en": "Actor Class"
+              }
+            },
+            "running_ns": {
+              "label": {
+                "zh-CN": "运行时长",
+                "en": "Running ns"
+              }
+            },
+            "running_pct_of_window": {
+              "label": {
+                "zh-CN": "占窗口时长",
+                "en": "Running Pct Of Window"
+              }
+            },
+            "sched_slice_count": {
+              "label": {
+                "zh-CN": "调度片数",
+                "en": "Sched Slice Count"
+              }
+            },
+            "avg_slice_us": {
+              "label": {
+                "zh-CN": "平均片长(us)",
+                "en": "Avg Slice µs"
+              }
+            },
+            "switches_per_s": {
+              "label": {
+                "zh-CN": "每秒调度片",
+                "en": "Switches Per S"
+              }
+            },
+            "wakeups_sent_per_s": {
+              "label": {
+                "zh-CN": "每秒发出唤醒",
+                "en": "Wakeups Sent Per S"
+              }
+            },
+            "waker_evidence": {
+              "label": {
+                "zh-CN": "唤醒证据",
+                "en": "Waker Evidence"
+              }
+            },
+            "sustained_runner": {
+              "label": {
+                "zh-CN": "持续占用",
+                "en": "Sustained Runner"
+              }
+            },
+            "spin_like": {
+              "label": {
+                "zh-CN": "疑似空转",
+                "en": "Spin Like"
+              }
+            },
+            "kernel_daemon_heavy": {
+              "label": {
+                "zh-CN": "内核守护重载",
+                "en": "Kernel Daemon Heavy"
+              }
+            },
+            "waker_storm": {
+              "label": {
+                "zh-CN": "唤醒风暴",
+                "en": "Waker Storm"
+              }
+            },
+            "signal_count": {
+              "label": {
+                "zh-CN": "命中信号数",
+                "en": "Signal Count"
+              }
+            },
+            "share_of_running_pct": {
+              "label": {
+                "zh-CN": "占窗口运行时长",
+                "en": "Share Of Running Pct"
+              }
+            },
+            "thresholds": {
+              "label": {
+                "zh-CN": "阈值",
+                "en": "Thresholds"
+              }
+            },
+            "status": {
+              "label": {
+                "zh-CN": "状态",
+                "en": "Status"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "窗口异常线程识别",
+            "en": "CPU Anomalous Threads In Range"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        }
+      }
+    },
     "cpu_cluster_load_in_range": {
       "displayName": {
         "zh-CN": "CPU 簇负载分析",
@@ -10334,6 +10516,415 @@
           "title": {
             "zh-CN": "CPU 大小核映射",
             "en": "CPU Cluster Mapping View"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        }
+      }
+    },
+    "cpu_freq_limit_timeline": {
+      "displayName": {
+        "zh-CN": "CPU 限频时间线",
+        "en": "CPU Freq Limit Timeline"
+      },
+      "description": {
+        "zh-CN": "从 cpufreq policy 限频轨道读取限频概览、去抖动限频区段与逐次限频变更事件",
+        "en": "Analyzes CPU Freq Limit Timeline using trace metrics and supporting evidence."
+      },
+      "type": "atomic",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "limit_data_check": {
+          "title": {
+            "zh-CN": "限频数据检测",
+            "en": "Limit Data Check"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "limit_episodes": {
+          "title": {
+            "zh-CN": "限频区段（去抖动合并）",
+            "en": "Limit Episodes"
+          },
+          "columns": {
+            "episode_id": {
+              "label": {
+                "zh-CN": "区段",
+                "en": "Episode Id"
+              }
+            },
+            "policy_cpu": {
+              "label": {
+                "zh-CN": "policy 首核",
+                "en": "Policy CPU"
+              }
+            },
+            "core_type": {
+              "label": {
+                "zh-CN": "核心类型",
+                "en": "Core Type"
+              }
+            },
+            "topology_source": {
+              "label": {
+                "zh-CN": "拓扑来源",
+                "en": "Topology Source"
+              }
+            },
+            "episode_start_ts": {
+              "label": {
+                "zh-CN": "开始",
+                "en": "Episode Start Ts"
+              }
+            },
+            "episode_end_ts": {
+              "label": {
+                "zh-CN": "结束",
+                "en": "Episode End Ts"
+              }
+            },
+            "episode_dur_ns": {
+              "label": {
+                "zh-CN": "持续",
+                "en": "Episode Dur ns"
+              }
+            },
+            "min_limit_khz": {
+              "label": {
+                "zh-CN": "最低上限",
+                "en": "Min Limit Khz"
+              }
+            },
+            "reference_max_limit_khz": {
+              "label": {
+                "zh-CN": "参考上限",
+                "en": "Reference Max Limit Khz"
+              }
+            },
+            "depth_pct": {
+              "label": {
+                "zh-CN": "限频深度",
+                "en": "Depth Pct"
+              }
+            },
+            "change_count": {
+              "label": {
+                "zh-CN": "合并变更数",
+                "en": "Change Count"
+              }
+            },
+            "starts_at_data_start": {
+              "label": {
+                "zh-CN": "起点未知",
+                "en": "Starts At Data Start"
+              }
+            },
+            "ends_at_data_end": {
+              "label": {
+                "zh-CN": "终点未知",
+                "en": "Ends At Data End"
+              }
+            },
+            "evidence_status": {
+              "label": {
+                "zh-CN": "证据状态",
+                "en": "Evidence Status"
+              }
+            },
+            "reference_basis": {
+              "label": {
+                "zh-CN": "参考依据",
+                "en": "Reference Basis"
+              }
+            },
+            "thresholds": {
+              "label": {
+                "zh-CN": "阈值",
+                "en": "Thresholds"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "limit_events": {
+          "title": {
+            "zh-CN": "限频变更事件",
+            "en": "Limit Events"
+          },
+          "columns": {
+            "ts": {
+              "label": {
+                "zh-CN": "时间",
+                "en": "Ts"
+              }
+            },
+            "policy_cpu": {
+              "label": {
+                "zh-CN": "policy 首核",
+                "en": "Policy CPU"
+              }
+            },
+            "core_type": {
+              "label": {
+                "zh-CN": "核心类型",
+                "en": "Core Type"
+              }
+            },
+            "kind": {
+              "label": {
+                "zh-CN": "限制类型",
+                "en": "Kind"
+              }
+            },
+            "prev_limit_khz": {
+              "label": {
+                "zh-CN": "变更前",
+                "en": "Prev Limit Khz"
+              }
+            },
+            "limit_khz": {
+              "label": {
+                "zh-CN": "变更后",
+                "en": "Limit Khz"
+              }
+            },
+            "delta_khz": {
+              "label": {
+                "zh-CN": "变化量",
+                "en": "Delta Khz"
+              }
+            },
+            "direction": {
+              "label": {
+                "zh-CN": "方向",
+                "en": "Direction"
+              }
+            },
+            "dur_ns": {
+              "label": {
+                "zh-CN": "保持时长",
+                "en": "Dur ns"
+              }
+            },
+            "reference_max_limit_khz": {
+              "label": {
+                "zh-CN": "参考上限",
+                "en": "Reference Max Limit Khz"
+              }
+            },
+            "limit_source": {
+              "label": {
+                "zh-CN": "数据来源",
+                "en": "Limit Source"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "limit_summary": {
+          "title": {
+            "zh-CN": "CPU 限频概览（按 cpufreq policy）",
+            "en": "Limit Summary"
+          },
+          "columns": {
+            "window_id": {
+              "label": {
+                "zh-CN": "WindowId",
+                "en": "window_id"
+              }
+            },
+            "window_start_ts": {
+              "label": {
+                "zh-CN": "WindowStartTs",
+                "en": "window_start_ts"
+              }
+            },
+            "window_end_ts": {
+              "label": {
+                "zh-CN": "WindowEndTs",
+                "en": "window_end_ts"
+              }
+            },
+            "window_dur_ns": {
+              "label": {
+                "zh-CN": "窗口时长",
+                "en": "Window Dur ns"
+              }
+            },
+            "policy_cpu": {
+              "label": {
+                "zh-CN": "policy 首核",
+                "en": "Policy CPU"
+              }
+            },
+            "ucpu": {
+              "label": {
+                "zh-CN": "Ucpu",
+                "en": "ucpu"
+              }
+            },
+            "machine_id": {
+              "label": {
+                "zh-CN": "MachineId",
+                "en": "machine_id"
+              }
+            },
+            "core_type": {
+              "label": {
+                "zh-CN": "核心类型",
+                "en": "Core Type"
+              }
+            },
+            "topology_source": {
+              "label": {
+                "zh-CN": "拓扑来源",
+                "en": "Topology Source"
+              }
+            },
+            "kind": {
+              "label": {
+                "zh-CN": "限制类型",
+                "en": "Kind"
+              }
+            },
+            "avg_limit_khz": {
+              "label": {
+                "zh-CN": "时间加权均值",
+                "en": "Avg Limit Khz"
+              }
+            },
+            "min_limit_khz": {
+              "label": {
+                "zh-CN": "最低上限",
+                "en": "Min Limit Khz"
+              }
+            },
+            "max_limit_khz": {
+              "label": {
+                "zh-CN": "最高上限",
+                "en": "Max Limit Khz"
+              }
+            },
+            "reference_max_limit_khz": {
+              "label": {
+                "zh-CN": "参考上限",
+                "en": "Reference Max Limit Khz"
+              }
+            },
+            "reference_basis": {
+              "label": {
+                "zh-CN": "参考依据",
+                "en": "Reference Basis"
+              }
+            },
+            "sample_count": {
+              "label": {
+                "zh-CN": "变更次数",
+                "en": "Sample Count"
+              }
+            },
+            "first_sample_ts": {
+              "label": {
+                "zh-CN": "首个变更",
+                "en": "First Sample Ts"
+              }
+            },
+            "last_sample_ts": {
+              "label": {
+                "zh-CN": "最后变更",
+                "en": "Last Sample Ts"
+              }
+            },
+            "pre_first_sample_ns": {
+              "label": {
+                "zh-CN": "首样本前未知时长",
+                "en": "Pre First Sample ns"
+              }
+            },
+            "first_sample_state_unknown": {
+              "label": {
+                "zh-CN": "首样本前状态未知",
+                "en": "First Sample State Unknown"
+              }
+            },
+            "limit_covered_ns": {
+              "label": {
+                "zh-CN": "限频覆盖",
+                "en": "Limit Covered ns"
+              }
+            },
+            "limit_evidence": {
+              "label": {
+                "zh-CN": "限频证据",
+                "en": "Limit Evidence"
+              }
+            },
+            "limit_source": {
+              "label": {
+                "zh-CN": "数据来源",
+                "en": "Limit Source"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "limit_unavailable": {
+          "title": {
+            "zh-CN": "限频数据不可用",
+            "en": "Limit Unavailable"
+          },
+          "columns": {
+            "limit_evidence": {
+              "label": {
+                "zh-CN": "限频证据",
+                "en": "Limit Evidence"
+              }
+            },
+            "required_ftrace_event": {
+              "label": {
+                "zh-CN": "需要采集的 ftrace 事件",
+                "en": "Required Ftrace Event"
+              }
+            },
+            "message": {
+              "label": {
+                "zh-CN": "说明",
+                "en": "Message"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "CPU 限频时间线",
+            "en": "CPU Freq Limit Timeline"
           },
           "columns": {},
           "synthesizeLabels": {}
@@ -10542,6 +11133,1181 @@
             "en": "CPU Freq Timeline"
           },
           "columns": {},
+          "synthesizeLabels": {}
+        }
+      }
+    },
+    "cpu_frequency_limit_attribution": {
+      "displayName": {
+        "zh-CN": "CPU 限频归因",
+        "en": "CPU Frequency Limit Attribution"
+      },
+      "description": {
+        "zh-CN": "从限频事件出发，回答谁触发了限频、限频前系统在做什么、是否存在异常线程，并列出可供进一步探索的厂商信号",
+        "en": "Analyzes CPU Frequency Limit Attribution using trace metrics and supporting evidence."
+      },
+      "type": "composite",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "analysis_window": {
+          "title": {
+            "zh-CN": "分析窗口",
+            "en": "Analysis Window"
+          },
+          "columns": {
+            "window_start_ts": {
+              "label": {
+                "zh-CN": "开始",
+                "en": "Window Start Ts"
+              }
+            },
+            "window_end_ts": {
+              "label": {
+                "zh-CN": "结束",
+                "en": "Window End Ts"
+              }
+            },
+            "window_dur_ns": {
+              "label": {
+                "zh-CN": "时长",
+                "en": "Window Dur ns"
+              }
+            },
+            "window_source": {
+              "label": {
+                "zh-CN": "窗口来源",
+                "en": "Window Source"
+              }
+            },
+            "data_start_ts": {
+              "label": {
+                "zh-CN": "数据起点",
+                "en": "Data Start Ts"
+              }
+            },
+            "data_end_ts": {
+              "label": {
+                "zh-CN": "数据终点",
+                "en": "Data End Ts"
+              }
+            },
+            "window_basis": {
+              "label": {
+                "zh-CN": "窗口依据",
+                "en": "Window Basis"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "attribution_summary": {
+          "title": {
+            "zh-CN": "限频归因汇总",
+            "en": "Attribution Summary"
+          },
+          "columns": {
+            "classification": {
+              "label": {
+                "zh-CN": "分类",
+                "en": "Classification"
+              }
+            },
+            "episode_count": {
+              "label": {
+                "zh-CN": "区段数",
+                "en": "Episode Count"
+              }
+            },
+            "deepest_depth_pct": {
+              "label": {
+                "zh-CN": "最大限频深度",
+                "en": "Deepest Depth Pct"
+              }
+            },
+            "longest_episode_ns": {
+              "label": {
+                "zh-CN": "最长区段",
+                "en": "Longest Episode ns"
+              }
+            },
+            "cooling_confirmed_episodes": {
+              "label": {
+                "zh-CN": "判定为内核热控的区段",
+                "en": "Cooling Confirmed Episodes"
+              }
+            },
+            "coincident_transition_episodes": {
+              "label": {
+                "zh-CN": "档位变更与限频重合的区段",
+                "en": "Coincident Transition Episodes"
+              }
+            },
+            "cooling_active_episodes": {
+              "label": {
+                "zh-CN": "区段内散热设备生效的区段",
+                "en": "Cooling Active Episodes"
+              }
+            },
+            "daemon_suspected_episodes": {
+              "label": {
+                "zh-CN": "守护进程先于限频活动的区段",
+                "en": "Daemon Suspected Episodes"
+              }
+            },
+            "onset_unknown_episodes": {
+              "label": {
+                "zh-CN": "起点不可观测的区段",
+                "en": "Onset Unknown Episodes"
+              }
+            },
+            "top_episode_id": {
+              "label": {
+                "zh-CN": "首要区段",
+                "en": "Top Episode Id"
+              }
+            },
+            "top_before_start_ts": {
+              "label": {
+                "zh-CN": "首要区段回溯窗口开始",
+                "en": "Top Before Start Ts"
+              }
+            },
+            "top_before_end_ts": {
+              "label": {
+                "zh-CN": "首要区段回溯窗口结束",
+                "en": "Top Before End Ts"
+              }
+            },
+            "target_running_ns": {
+              "label": {
+                "zh-CN": "目标应用限频前运行",
+                "en": "Target Running ns"
+              }
+            },
+            "total_running_ns": {
+              "label": {
+                "zh-CN": "限频前全部运行",
+                "en": "Total Running ns"
+              }
+            },
+            "target_share_pct": {
+              "label": {
+                "zh-CN": "目标应用占比",
+                "en": "Target Share Pct"
+              }
+            },
+            "target_dominated_before_limit": {
+              "label": {
+                "zh-CN": "目标应用主导限频前负载",
+                "en": "Target Dominated Before Limit"
+              }
+            },
+            "target_scope": {
+              "label": {
+                "zh-CN": "目标范围",
+                "en": "Target Scope"
+              }
+            },
+            "description": {
+              "label": {
+                "zh-CN": "描述",
+                "en": "Description"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "cooling_overview": {
+          "title": {
+            "zh-CN": "散热设备概览",
+            "en": "Cooling Overview"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "data_check": {
+          "title": {
+            "zh-CN": "数据可用性检测",
+            "en": "Data Check"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "diagnosis": {
+          "title": {
+            "zh-CN": "限频归因结论",
+            "en": "Diagnosis"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "episode_drilldown": {
+          "title": {
+            "zh-CN": "逐个限频区段的归因详情",
+            "en": "Episode Drilldown"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "episodes": {
+          "title": {
+            "zh-CN": "限频区段（按 深度 x 时长 x 核心能力 排序）",
+            "en": "Episodes"
+          },
+          "columns": {
+            "episode_id": {
+              "label": {
+                "zh-CN": "区段",
+                "en": "Episode Id"
+              }
+            },
+            "policy_cpu": {
+              "label": {
+                "zh-CN": "policy 首核",
+                "en": "Policy CPU"
+              }
+            },
+            "core_type": {
+              "label": {
+                "zh-CN": "核心类型",
+                "en": "Core Type"
+              }
+            },
+            "topology_source": {
+              "label": {
+                "zh-CN": "拓扑来源",
+                "en": "Topology Source"
+              }
+            },
+            "episode_start_ts": {
+              "label": {
+                "zh-CN": "开始",
+                "en": "Episode Start Ts"
+              }
+            },
+            "episode_end_ts": {
+              "label": {
+                "zh-CN": "结束",
+                "en": "Episode End Ts"
+              }
+            },
+            "episode_dur_ns": {
+              "label": {
+                "zh-CN": "持续",
+                "en": "Episode Dur ns"
+              }
+            },
+            "min_limit_khz": {
+              "label": {
+                "zh-CN": "最低上限",
+                "en": "Min Limit Khz"
+              }
+            },
+            "reference_max_limit_khz": {
+              "label": {
+                "zh-CN": "参考上限",
+                "en": "Reference Max Limit Khz"
+              }
+            },
+            "reference_basis": {
+              "label": {
+                "zh-CN": "参考依据",
+                "en": "Reference Basis"
+              }
+            },
+            "depth_pct": {
+              "label": {
+                "zh-CN": "限频深度",
+                "en": "Depth Pct"
+              }
+            },
+            "change_count": {
+              "label": {
+                "zh-CN": "合并变更数",
+                "en": "Change Count"
+              }
+            },
+            "starts_at_data_start": {
+              "label": {
+                "zh-CN": "起点未知",
+                "en": "Starts At Data Start"
+              }
+            },
+            "ends_at_data_end": {
+              "label": {
+                "zh-CN": "终点未知",
+                "en": "Ends At Data End"
+              }
+            },
+            "evidence_status": {
+              "label": {
+                "zh-CN": "证据状态",
+                "en": "Evidence Status"
+              }
+            },
+            "impact_rank_score": {
+              "label": {
+                "zh-CN": "排序分",
+                "en": "Impact Rank Score"
+              }
+            },
+            "before_start_ts": {
+              "label": {
+                "zh-CN": "回溯窗口开始",
+                "en": "Before Start Ts"
+              }
+            },
+            "before_end_ts": {
+              "label": {
+                "zh-CN": "回溯窗口结束",
+                "en": "Before End Ts"
+              }
+            },
+            "window_clipped_to_data_start": {
+              "label": {
+                "zh-CN": "回溯窗口被裁剪",
+                "en": "Window Clipped To Data Start"
+              }
+            },
+            "who_start_ts": {
+              "label": {
+                "zh-CN": "归因窗口开始",
+                "en": "Who Start Ts"
+              }
+            },
+            "who_end_ts": {
+              "label": {
+                "zh-CN": "归因窗口结束",
+                "en": "Who End Ts"
+              }
+            },
+            "package": {
+              "label": {
+                "zh-CN": "Package",
+                "en": "package"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程Name",
+                "en": "process_name"
+              }
+            },
+            "lookback_ms": {
+              "label": {
+                "zh-CN": "Lookbackms",
+                "en": "lookback_ms"
+              }
+            },
+            "who_window_ms": {
+              "label": {
+                "zh-CN": "WhoWindowms",
+                "en": "who_window_ms"
+              }
+            },
+            "cooling_coincidence_ms": {
+              "label": {
+                "zh-CN": "CoolingCoincidencems",
+                "en": "cooling_coincidence_ms"
+              }
+            },
+            "top_n": {
+              "label": {
+                "zh-CN": "TopN",
+                "en": "top_n"
+              }
+            },
+            "sustained_pct": {
+              "label": {
+                "zh-CN": "SustainedPct",
+                "en": "sustained_pct"
+              }
+            },
+            "spin_avg_slice_us": {
+              "label": {
+                "zh-CN": "SpinAvgSliceµs",
+                "en": "spin_avg_slice_us"
+              }
+            },
+            "spin_switches_per_s": {
+              "label": {
+                "zh-CN": "SpinSwitchesPerS",
+                "en": "spin_switches_per_s"
+              }
+            },
+            "waker_per_s": {
+              "label": {
+                "zh-CN": "WakerPerS",
+                "en": "waker_per_s"
+              }
+            },
+            "kernel_daemon_share_pct": {
+              "label": {
+                "zh-CN": "KernelDaemonSharePct",
+                "en": "kernel_daemon_share_pct"
+              }
+            },
+            "thresholds": {
+              "label": {
+                "zh-CN": "阈值",
+                "en": "Thresholds"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "limit_overview": {
+          "title": {
+            "zh-CN": "限频概览",
+            "en": "Limit Overview"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "no_limit_capture_advice": {
+          "title": {
+            "zh-CN": "无法直接观测限频",
+            "en": "No Limit Capture Advice"
+          },
+          "columns": {
+            "limit_evidence": {
+              "label": {
+                "zh-CN": "限频证据",
+                "en": "Limit Evidence"
+              }
+            },
+            "required_ftrace_event": {
+              "label": {
+                "zh-CN": "需要采集的 ftrace 事件",
+                "en": "Required Ftrace Event"
+              }
+            },
+            "also_useful": {
+              "label": {
+                "zh-CN": "同时建议采集",
+                "en": "Also Useful"
+              }
+            },
+            "message": {
+              "label": {
+                "zh-CN": "说明",
+                "en": "Message"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "no_limit_throttle_observation": {
+          "title": {
+            "zh-CN": "无限频数据时的频率观测",
+            "en": "No Limit Throttle Observation"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "CPU 限频归因",
+            "en": "CPU Frequency Limit Attribution"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "vendor_signal_discovery": {
+          "title": {
+            "zh-CN": "厂商温控/性能策略信号候选（名字匹配，供 execute_sql 进一步探索）",
+            "en": "Vendor Signal Discovery"
+          },
+          "columns": {
+            "candidate_kind": {
+              "label": {
+                "zh-CN": "候选类型",
+                "en": "Candidate Kind"
+              }
+            },
+            "candidate_name": {
+              "label": {
+                "zh-CN": "名称",
+                "en": "Candidate Name"
+              }
+            },
+            "track_type": {
+              "label": {
+                "zh-CN": "轨道类型",
+                "en": "Track Type"
+              }
+            },
+            "source_process": {
+              "label": {
+                "zh-CN": "来源进程",
+                "en": "Source Process"
+              }
+            },
+            "signature_kind": {
+              "label": {
+                "zh-CN": "签名类别",
+                "en": "Signature Kind"
+              }
+            },
+            "platform_hint": {
+              "label": {
+                "zh-CN": "平台提示",
+                "en": "Platform Hint"
+              }
+            },
+            "matched_pattern": {
+              "label": {
+                "zh-CN": "命中模式",
+                "en": "Matched Pattern"
+              }
+            },
+            "sample_count": {
+              "label": {
+                "zh-CN": "样本数",
+                "en": "Sample Count"
+              }
+            },
+            "first_ts": {
+              "label": {
+                "zh-CN": "首次",
+                "en": "First Ts"
+              }
+            },
+            "last_ts": {
+              "label": {
+                "zh-CN": "最后",
+                "en": "Last Ts"
+              }
+            },
+            "exploration_hint": {
+              "label": {
+                "zh-CN": "探索提示",
+                "en": "Exploration Hint"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        }
+      }
+    },
+    "cpu_frequency_limit_episode": {
+      "displayName": {
+        "zh-CN": "限频区段归因详情",
+        "en": "CPU Frequency Limit Episode"
+      },
+      "description": {
+        "zh-CN": "对单个限频区段回溯散热设备、温控守护、限频前负载、异常线程与非 CPU 热源；仅给出证据与候选，不断言因果",
+        "en": "Analyzes CPU Frequency Limit Episode using trace metrics and supporting evidence."
+      },
+      "type": "composite",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "before_anomalies": {
+          "title": {
+            "zh-CN": "限频前异常线程",
+            "en": "Before Anomalies"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "before_workload": {
+          "title": {
+            "zh-CN": "限频前负载归因",
+            "en": "Before Workload"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "episode_windows": {
+          "title": {
+            "zh-CN": "区段分析窗口",
+            "en": "Episode Windows"
+          },
+          "columns": {
+            "episode_id": {
+              "label": {
+                "zh-CN": "区段",
+                "en": "Episode Id"
+              }
+            },
+            "policy_cpu": {
+              "label": {
+                "zh-CN": "policy 首核",
+                "en": "Policy CPU"
+              }
+            },
+            "core_type": {
+              "label": {
+                "zh-CN": "核心类型",
+                "en": "Core Type"
+              }
+            },
+            "episode_start_ts": {
+              "label": {
+                "zh-CN": "区段开始",
+                "en": "Episode Start Ts"
+              }
+            },
+            "episode_end_ts": {
+              "label": {
+                "zh-CN": "区段结束",
+                "en": "Episode End Ts"
+              }
+            },
+            "before_start_ts": {
+              "label": {
+                "zh-CN": "回溯窗口开始",
+                "en": "Before Start Ts"
+              }
+            },
+            "before_end_ts": {
+              "label": {
+                "zh-CN": "回溯窗口结束",
+                "en": "Before End Ts"
+              }
+            },
+            "before_window_ns": {
+              "label": {
+                "zh-CN": "回溯窗口时长",
+                "en": "Before Window ns"
+              }
+            },
+            "window_clipped_to_data_start": {
+              "label": {
+                "zh-CN": "回溯窗口被数据起点裁剪",
+                "en": "Window Clipped To Data Start"
+              }
+            },
+            "who_start_ts": {
+              "label": {
+                "zh-CN": "归因窗口开始",
+                "en": "Who Start Ts"
+              }
+            },
+            "who_end_ts": {
+              "label": {
+                "zh-CN": "归因窗口结束",
+                "en": "Who End Ts"
+              }
+            },
+            "who_window_clipped": {
+              "label": {
+                "zh-CN": "归因窗口被数据边界裁剪",
+                "en": "Who Window Clipped"
+              }
+            },
+            "starts_at_data_start": {
+              "label": {
+                "zh-CN": "起点未知",
+                "en": "Starts At Data Start"
+              }
+            },
+            "data_start_ts": {
+              "label": {
+                "zh-CN": "数据起点",
+                "en": "Data Start Ts"
+              }
+            },
+            "data_end_ts": {
+              "label": {
+                "zh-CN": "数据终点",
+                "en": "Data End Ts"
+              }
+            },
+            "window_basis": {
+              "label": {
+                "zh-CN": "窗口依据",
+                "en": "Window Basis"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "non_cpu_heat_context": {
+          "title": {
+            "zh-CN": "限频前回溯窗口内的非 CPU 热源迹象（仅存在性观测）",
+            "en": "Non CPU Heat Context"
+          },
+          "columns": {
+            "source_kind": {
+              "label": {
+                "zh-CN": "来源类别",
+                "en": "Source Kind"
+              }
+            },
+            "source_key": {
+              "label": {
+                "zh-CN": "来源",
+                "en": "Source Key"
+              }
+            },
+            "detail": {
+              "label": {
+                "zh-CN": "明细",
+                "en": "Detail"
+              }
+            },
+            "observed_count": {
+              "label": {
+                "zh-CN": "观测数",
+                "en": "Observed Count"
+              }
+            },
+            "running_ns": {
+              "label": {
+                "zh-CN": "运行时长",
+                "en": "Running ns"
+              }
+            },
+            "first_ts": {
+              "label": {
+                "zh-CN": "首次",
+                "en": "First Ts"
+              }
+            },
+            "last_ts": {
+              "label": {
+                "zh-CN": "最后",
+                "en": "Last Ts"
+              }
+            },
+            "interpretation": {
+              "label": {
+                "zh-CN": "解释边界",
+                "en": "Interpretation"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "限频区段归因详情",
+            "en": "CPU Frequency Limit Episode"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "temperature_context": {
+          "title": {
+            "zh-CN": "限频前回溯窗口内的温度",
+            "en": "Temperature Context"
+          },
+          "columns": {
+            "sensor_name": {
+              "label": {
+                "zh-CN": "传感器/热区",
+                "en": "Sensor Name"
+              }
+            },
+            "sample_count_in_window": {
+              "label": {
+                "zh-CN": "窗口采样数",
+                "en": "Sample Count In Window"
+              }
+            },
+            "track_basis": {
+              "label": {
+                "zh-CN": "轨道依据",
+                "en": "Track Basis"
+              }
+            },
+            "unit_basis": {
+              "label": {
+                "zh-CN": "单位依据",
+                "en": "Unit Basis"
+              }
+            },
+            "sample_quality": {
+              "label": {
+                "zh-CN": "样本质量",
+                "en": "Sample Quality"
+              }
+            },
+            "first_temp_c": {
+              "label": {
+                "zh-CN": "窗口起始温度",
+                "en": "First Temp C"
+              }
+            },
+            "last_temp_c": {
+              "label": {
+                "zh-CN": "窗口结束温度",
+                "en": "Last Temp C"
+              }
+            },
+            "max_temp_c": {
+              "label": {
+                "zh-CN": "窗口最高温度",
+                "en": "Max Temp C"
+              }
+            },
+            "rise_c": {
+              "label": {
+                "zh-CN": "窗口内升温",
+                "en": "Rise C"
+              }
+            },
+            "first_ts": {
+              "label": {
+                "zh-CN": "首个采样",
+                "en": "First Ts"
+              }
+            },
+            "last_ts": {
+              "label": {
+                "zh-CN": "最后采样",
+                "en": "Last Ts"
+              }
+            },
+            "temperature_evidence": {
+              "label": {
+                "zh-CN": "温度证据",
+                "en": "Temperature Evidence"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "who_cooling": {
+          "title": {
+            "zh-CN": "限频前后的散热设备活动",
+            "en": "Who Cooling"
+          },
+          "columns": {
+            "ts": {
+              "label": {
+                "zh-CN": "时间",
+                "en": "Ts"
+              }
+            },
+            "rel_to_limit_ns": {
+              "label": {
+                "zh-CN": "相对限频时刻",
+                "en": "Rel To Limit ns"
+              }
+            },
+            "cdev_name": {
+              "label": {
+                "zh-CN": "散热设备",
+                "en": "Cdev Name"
+              }
+            },
+            "cdev_kind_hint": {
+              "label": {
+                "zh-CN": "疑似作用域",
+                "en": "Cdev Kind Hint"
+              }
+            },
+            "cdev_kind_basis": {
+              "label": {
+                "zh-CN": "判定依据",
+                "en": "Cdev Kind Basis"
+              }
+            },
+            "prev_state": {
+              "label": {
+                "zh-CN": "变更前",
+                "en": "Prev State"
+              }
+            },
+            "state": {
+              "label": {
+                "zh-CN": "变更后",
+                "en": "State"
+              }
+            },
+            "direction": {
+              "label": {
+                "zh-CN": "方向",
+                "en": "Direction"
+              }
+            },
+            "dur_ns": {
+              "label": {
+                "zh-CN": "保持时长",
+                "en": "Dur ns"
+              }
+            },
+            "cooling_source": {
+              "label": {
+                "zh-CN": "数据来源",
+                "en": "Cooling Source"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "who_daemon": {
+          "title": {
+            "zh-CN": "限频前后的温控/性能策略守护进程活动（名字匹配，仅候选）",
+            "en": "Who Daemon"
+          },
+          "columns": {
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "线程",
+                "en": "Thread Name"
+              }
+            },
+            "signature_kind": {
+              "label": {
+                "zh-CN": "签名类别",
+                "en": "Signature Kind"
+              }
+            },
+            "platform_hint": {
+              "label": {
+                "zh-CN": "平台提示",
+                "en": "Platform Hint"
+              }
+            },
+            "matched_pattern": {
+              "label": {
+                "zh-CN": "命中模式",
+                "en": "Matched Pattern"
+              }
+            },
+            "who_running_ns": {
+              "label": {
+                "zh-CN": "归因窗口运行",
+                "en": "Who Running ns"
+              }
+            },
+            "who_slice_count": {
+              "label": {
+                "zh-CN": "归因窗口调度片",
+                "en": "Who Slice Count"
+              }
+            },
+            "who_rate_ns_per_s": {
+              "label": {
+                "zh-CN": "归因窗口速率(ns/s)",
+                "en": "Who Rate ns Per S"
+              }
+            },
+            "baseline_rate_ns_per_s": {
+              "label": {
+                "zh-CN": "全 trace 基线速率(ns/s)",
+                "en": "Baseline Rate ns Per S"
+              }
+            },
+            "rate_ratio": {
+              "label": {
+                "zh-CN": "速率倍数",
+                "en": "Rate Ratio"
+              }
+            },
+            "ran_before_limit_ns": {
+              "label": {
+                "zh-CN": "限频前运行",
+                "en": "Ran Before Limit ns"
+              }
+            },
+            "last_run_end_before_ts": {
+              "label": {
+                "zh-CN": "限频前最后一次运行结束",
+                "en": "Last Run End Before Ts"
+              }
+            },
+            "lead_ns": {
+              "label": {
+                "zh-CN": "距离限频时刻",
+                "en": "Lead ns"
+              }
+            },
+            "match_basis": {
+              "label": {
+                "zh-CN": "匹配依据",
+                "en": "Match Basis"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "who_verdict": {
+          "title": {
+            "zh-CN": "谁触发了这次限频（证据判定）",
+            "en": "Who Verdict"
+          },
+          "columns": {
+            "episode_id": {
+              "label": {
+                "zh-CN": "区段",
+                "en": "Episode Id"
+              }
+            },
+            "policy_cpu": {
+              "label": {
+                "zh-CN": "policy 首核",
+                "en": "Policy CPU"
+              }
+            },
+            "core_type": {
+              "label": {
+                "zh-CN": "核心类型",
+                "en": "Core Type"
+              }
+            },
+            "who_verdict": {
+              "label": {
+                "zh-CN": "判定",
+                "en": "Who Verdict"
+              }
+            },
+            "cooling_transition_coincident": {
+              "label": {
+                "zh-CN": "档位变更与限频时刻重合",
+                "en": "Cooling Transition Coincident"
+              }
+            },
+            "cooling_nearest_transition_ns": {
+              "label": {
+                "zh-CN": "最近档位变更时间差",
+                "en": "Cooling Nearest Transition ns"
+              }
+            },
+            "cooling_nearest_transition_ts": {
+              "label": {
+                "zh-CN": "最近档位变更时刻",
+                "en": "Cooling Nearest Transition Ts"
+              }
+            },
+            "cooling_active_ns": {
+              "label": {
+                "zh-CN": "区段内散热设备生效时长",
+                "en": "Cooling Active ns"
+              }
+            },
+            "cooling_devices_active": {
+              "label": {
+                "zh-CN": "生效散热设备数",
+                "en": "Cooling Devices Active"
+              }
+            },
+            "cooling_transitions_in_who_window": {
+              "label": {
+                "zh-CN": "归因窗口内散热档位变更",
+                "en": "Cooling Transitions In Who Window"
+              }
+            },
+            "daemon_ran_before_limit_ns": {
+              "label": {
+                "zh-CN": "限频前守护进程运行",
+                "en": "Daemon Ran Before Limit ns"
+              }
+            },
+            "daemon_threads_before_limit": {
+              "label": {
+                "zh-CN": "限频前活跃守护线程数",
+                "en": "Daemon Threads Before Limit"
+              }
+            },
+            "onset_observed": {
+              "label": {
+                "zh-CN": "起点可观测",
+                "en": "Onset Observed"
+              }
+            },
+            "onset_note": {
+              "label": {
+                "zh-CN": "起点说明",
+                "en": "Onset Note"
+              }
+            },
+            "thresholds": {
+              "label": {
+                "zh-CN": "阈值",
+                "en": "Thresholds"
+              }
+            },
+            "verdict_basis": {
+              "label": {
+                "zh-CN": "判定依据",
+                "en": "Verdict Basis"
+              }
+            },
+            "interpretation": {
+              "label": {
+                "zh-CN": "解释边界",
+                "en": "Interpretation"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
           "synthesizeLabels": {}
         }
       }
@@ -11639,6 +13405,75 @@
           "columns": {},
           "synthesizeLabels": {}
         },
+        "limit_evidence": {
+          "title": {
+            "zh-CN": "限频证据（cpufreq policy 上限）",
+            "en": "Limit Evidence"
+          },
+          "columns": {
+            "has_limit_track": {
+              "label": {
+                "zh-CN": "有限频轨道",
+                "en": "Has Limit Track"
+              }
+            },
+            "episode_count": {
+              "label": {
+                "zh-CN": "限频区段数",
+                "en": "Episode Count"
+              }
+            },
+            "policy_count": {
+              "label": {
+                "zh-CN": "涉及 policy 数",
+                "en": "Policy Count"
+              }
+            },
+            "deepest_depth_pct": {
+              "label": {
+                "zh-CN": "最大限频深度",
+                "en": "Deepest Depth Pct"
+              }
+            },
+            "min_limit_khz": {
+              "label": {
+                "zh-CN": "最低上限",
+                "en": "Min Limit Khz"
+              }
+            },
+            "reference_max_limit_khz": {
+              "label": {
+                "zh-CN": "参考上限",
+                "en": "Reference Max Limit Khz"
+              }
+            },
+            "reference_basis": {
+              "label": {
+                "zh-CN": "参考依据",
+                "en": "Reference Basis"
+              }
+            },
+            "evidence_status": {
+              "label": {
+                "zh-CN": "证据状态",
+                "en": "Evidence Status"
+              }
+            },
+            "next_step": {
+              "label": {
+                "zh-CN": "下一步",
+                "en": "Next Step"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
         "root": {
           "title": {
             "zh-CN": "CPU 限频检测",
@@ -12101,6 +13936,287 @@
               "label": {
                 "zh-CN": "利用率",
                 "en": "Utilization"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        }
+      }
+    },
+    "cpu_workload_attribution_in_range": {
+      "displayName": {
+        "zh-CN": "窗口 CPU 负载归因",
+        "en": "CPU Workload Attribution In Range"
+      },
+      "description": {
+        "zh-CN": "在指定窗口内按线程聚合运行时长、核心分布与频率加权工作量；仅为观测，不构成因果",
+        "en": "Analyzes CPU Workload Attribution In Range using trace metrics and supporting evidence."
+      },
+      "type": "atomic",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "窗口 CPU 负载归因",
+            "en": "CPU Workload Attribution In Range"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "workload_by_thread": {
+          "title": {
+            "zh-CN": "窗口内 CPU 负载归因（观测，非因果）",
+            "en": "Workload By Thread"
+          },
+          "columns": {
+            "window_id": {
+              "label": {
+                "zh-CN": "WindowId",
+                "en": "window_id"
+              }
+            },
+            "window_start_ts": {
+              "label": {
+                "zh-CN": "WindowStartTs",
+                "en": "window_start_ts"
+              }
+            },
+            "window_end_ts": {
+              "label": {
+                "zh-CN": "WindowEndTs",
+                "en": "window_end_ts"
+              }
+            },
+            "window_dur_ns": {
+              "label": {
+                "zh-CN": "窗口时长",
+                "en": "Window Dur ns"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "upid"
+              }
+            },
+            "utid": {
+              "label": {
+                "zh-CN": "UTID",
+                "en": "utid"
+              }
+            },
+            "pid": {
+              "label": {
+                "zh-CN": "PID",
+                "en": "pid"
+              }
+            },
+            "tid": {
+              "label": {
+                "zh-CN": "TID",
+                "en": "tid"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "线程",
+                "en": "Thread Name"
+              }
+            },
+            "actor_class": {
+              "label": {
+                "zh-CN": "角色",
+                "en": "Actor Class"
+              }
+            },
+            "actor_class_basis": {
+              "label": {
+                "zh-CN": "角色判定依据",
+                "en": "Actor Class Basis"
+              }
+            },
+            "running_ns": {
+              "label": {
+                "zh-CN": "运行时长",
+                "en": "Running ns"
+              }
+            },
+            "running_pct_of_window": {
+              "label": {
+                "zh-CN": "窗口 CPU 占用",
+                "en": "Running Pct Of Window"
+              }
+            },
+            "big_running_ns": {
+              "label": {
+                "zh-CN": "大核运行",
+                "en": "Big Running ns"
+              }
+            },
+            "medium_running_ns": {
+              "label": {
+                "zh-CN": "中核运行",
+                "en": "Medium Running ns"
+              }
+            },
+            "little_running_ns": {
+              "label": {
+                "zh-CN": "小核运行",
+                "en": "Little Running ns"
+              }
+            },
+            "unknown_core_running_ns": {
+              "label": {
+                "zh-CN": "未知核型运行",
+                "en": "Unknown Core Running ns"
+              }
+            },
+            "freq_weighted_work_mhz_ms": {
+              "label": {
+                "zh-CN": "频率加权工作量",
+                "en": "Freq Weighted Work MHz ms"
+              }
+            },
+            "share_of_total_work_pct": {
+              "label": {
+                "zh-CN": "工作量占比",
+                "en": "Share Of Total Work Pct"
+              }
+            },
+            "sched_slice_count": {
+              "label": {
+                "zh-CN": "调度片数",
+                "en": "Sched Slice Count"
+              }
+            },
+            "freq_covered_ns": {
+              "label": {
+                "zh-CN": "频率覆盖",
+                "en": "Freq Covered ns"
+              }
+            },
+            "frequency_evidence": {
+              "label": {
+                "zh-CN": "频率证据",
+                "en": "Frequency Evidence"
+              }
+            },
+            "sched_evidence": {
+              "label": {
+                "zh-CN": "调度证据",
+                "en": "Sched Evidence"
+              }
+            },
+            "cpu_count": {
+              "label": {
+                "zh-CN": "CPU 数",
+                "en": "CPU Count"
+              }
+            },
+            "window_capacity_ns": {
+              "label": {
+                "zh-CN": "WindowCapacityns",
+                "en": "window_capacity_ns"
+              }
+            },
+            "normalization_basis": {
+              "label": {
+                "zh-CN": "归一化依据",
+                "en": "Normalization Basis"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "workload_summary": {
+          "title": {
+            "zh-CN": "窗口负载汇总（按角色 / 按核型）",
+            "en": "Workload Summary"
+          },
+          "columns": {
+            "window_start_ts": {
+              "label": {
+                "zh-CN": "WindowStartTs",
+                "en": "window_start_ts"
+              }
+            },
+            "window_end_ts": {
+              "label": {
+                "zh-CN": "WindowEndTs",
+                "en": "window_end_ts"
+              }
+            },
+            "window_dur_ns": {
+              "label": {
+                "zh-CN": "窗口时长",
+                "en": "Window Dur ns"
+              }
+            },
+            "breakdown_kind": {
+              "label": {
+                "zh-CN": "维度",
+                "en": "Breakdown Kind"
+              }
+            },
+            "breakdown_key": {
+              "label": {
+                "zh-CN": "分组",
+                "en": "Breakdown Key"
+              }
+            },
+            "running_ns": {
+              "label": {
+                "zh-CN": "运行时长",
+                "en": "Running ns"
+              }
+            },
+            "busy_pct": {
+              "label": {
+                "zh-CN": "占用率",
+                "en": "Busy Pct"
+              }
+            },
+            "thread_count": {
+              "label": {
+                "zh-CN": "线程数",
+                "en": "Thread Count"
+              }
+            },
+            "denominator_basis": {
+              "label": {
+                "zh-CN": "分母依据",
+                "en": "Denominator Basis"
+              }
+            },
+            "sched_evidence": {
+              "label": {
+                "zh-CN": "调度证据",
+                "en": "Sched Evidence"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
               }
             }
           },
@@ -38851,6 +40967,256 @@
         }
       }
     },
+    "thermal_cooling_device_timeline": {
+      "displayName": {
+        "zh-CN": "散热设备状态时间线",
+        "en": "Thermal Cooling Device Timeline"
+      },
+      "description": {
+        "zh-CN": "读取内核 cooling device 目标状态的区段与转换；缺失不等于未发生热控",
+        "en": "Analyzes Thermal Cooling Device Timeline using trace metrics and supporting evidence."
+      },
+      "type": "atomic",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "cooling_data_check": {
+          "title": {
+            "zh-CN": "散热设备数据检测",
+            "en": "Cooling Data Check"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "cooling_summary": {
+          "title": {
+            "zh-CN": "散热设备状态概览",
+            "en": "Cooling Summary"
+          },
+          "columns": {
+            "window_id": {
+              "label": {
+                "zh-CN": "WindowId",
+                "en": "window_id"
+              }
+            },
+            "window_start_ts": {
+              "label": {
+                "zh-CN": "WindowStartTs",
+                "en": "window_start_ts"
+              }
+            },
+            "window_end_ts": {
+              "label": {
+                "zh-CN": "WindowEndTs",
+                "en": "window_end_ts"
+              }
+            },
+            "window_dur_ns": {
+              "label": {
+                "zh-CN": "窗口时长",
+                "en": "Window Dur ns"
+              }
+            },
+            "cdev_name": {
+              "label": {
+                "zh-CN": "散热设备",
+                "en": "Cdev Name"
+              }
+            },
+            "cdev_kind_hint": {
+              "label": {
+                "zh-CN": "疑似作用域",
+                "en": "Cdev Kind Hint"
+              }
+            },
+            "cdev_kind_basis": {
+              "label": {
+                "zh-CN": "判定依据",
+                "en": "Cdev Kind Basis"
+              }
+            },
+            "max_state": {
+              "label": {
+                "zh-CN": "最高档位",
+                "en": "Max State"
+              }
+            },
+            "min_state": {
+              "label": {
+                "zh-CN": "最低档位",
+                "en": "Min State"
+              }
+            },
+            "mean_state": {
+              "label": {
+                "zh-CN": "时间加权均值",
+                "en": "Mean State"
+              }
+            },
+            "transition_count": {
+              "label": {
+                "zh-CN": "状态转换数",
+                "en": "Transition Count"
+              }
+            },
+            "active_ns": {
+              "label": {
+                "zh-CN": "非零档位时长",
+                "en": "Active ns"
+              }
+            },
+            "active_pct": {
+              "label": {
+                "zh-CN": "非零档位占比",
+                "en": "Active Pct"
+              }
+            },
+            "first_ts": {
+              "label": {
+                "zh-CN": "首个样本",
+                "en": "First Ts"
+              }
+            },
+            "last_ts": {
+              "label": {
+                "zh-CN": "最后样本",
+                "en": "Last Ts"
+              }
+            },
+            "covered_ns": {
+              "label": {
+                "zh-CN": "覆盖时长",
+                "en": "Covered ns"
+              }
+            },
+            "cooling_evidence": {
+              "label": {
+                "zh-CN": "散热证据",
+                "en": "Cooling Evidence"
+              }
+            },
+            "cooling_source": {
+              "label": {
+                "zh-CN": "数据来源",
+                "en": "Cooling Source"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "cooling_transitions": {
+          "title": {
+            "zh-CN": "散热设备状态转换",
+            "en": "Cooling Transitions"
+          },
+          "columns": {
+            "ts": {
+              "label": {
+                "zh-CN": "时间",
+                "en": "Ts"
+              }
+            },
+            "cdev_name": {
+              "label": {
+                "zh-CN": "散热设备",
+                "en": "Cdev Name"
+              }
+            },
+            "cdev_kind_hint": {
+              "label": {
+                "zh-CN": "疑似作用域",
+                "en": "Cdev Kind Hint"
+              }
+            },
+            "prev_state": {
+              "label": {
+                "zh-CN": "变更前",
+                "en": "Prev State"
+              }
+            },
+            "state": {
+              "label": {
+                "zh-CN": "变更后",
+                "en": "State"
+              }
+            },
+            "direction": {
+              "label": {
+                "zh-CN": "方向",
+                "en": "Direction"
+              }
+            },
+            "dur_ns": {
+              "label": {
+                "zh-CN": "保持时长",
+                "en": "Dur ns"
+              }
+            },
+            "cooling_source": {
+              "label": {
+                "zh-CN": "数据来源",
+                "en": "Cooling Source"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "cooling_unavailable": {
+          "title": {
+            "zh-CN": "无内核散热设备数据",
+            "en": "Cooling Unavailable"
+          },
+          "columns": {
+            "cooling_evidence": {
+              "label": {
+                "zh-CN": "散热证据",
+                "en": "Cooling Evidence"
+              }
+            },
+            "required_ftrace_event": {
+              "label": {
+                "zh-CN": "需要采集的 ftrace 事件",
+                "en": "Required Ftrace Event"
+              }
+            },
+            "message": {
+              "label": {
+                "zh-CN": "说明",
+                "en": "Message"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "散热设备状态时间线",
+            "en": "Thermal Cooling Device Timeline"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        }
+      }
+    },
     "thermal_module": {
       "displayName": {
         "zh-CN": "热管理分析",
@@ -39124,6 +41490,75 @@
           "columns": {},
           "synthesizeLabels": {}
         },
+        "direct_limit_evidence": {
+          "title": {
+            "zh-CN": "直接限频证据（限频区段 x 散热设备）",
+            "en": "Direct Limit Evidence"
+          },
+          "columns": {
+            "episode_count": {
+              "label": {
+                "zh-CN": "限频区段数",
+                "en": "Episode Count"
+              }
+            },
+            "policy_count": {
+              "label": {
+                "zh-CN": "涉及 policy 数",
+                "en": "Policy Count"
+              }
+            },
+            "deepest_depth_pct": {
+              "label": {
+                "zh-CN": "最大限频深度",
+                "en": "Deepest Depth Pct"
+              }
+            },
+            "longest_episode_ns": {
+              "label": {
+                "zh-CN": "最长区段",
+                "en": "Longest Episode ns"
+              }
+            },
+            "cooling_confirmed_episodes": {
+              "label": {
+                "zh-CN": "与散热设备同期的区段",
+                "en": "Cooling Confirmed Episodes"
+              }
+            },
+            "onset_unknown_episodes": {
+              "label": {
+                "zh-CN": "起点不可观测的区段",
+                "en": "Onset Unknown Episodes"
+              }
+            },
+            "has_cdev_data": {
+              "label": {
+                "zh-CN": "有内核散热设备数据",
+                "en": "Has Cdev Data"
+              }
+            },
+            "thermal_throttling_evidence": {
+              "label": {
+                "zh-CN": "热节流证据",
+                "en": "Thermal Throttling Evidence"
+              }
+            },
+            "next_step": {
+              "label": {
+                "zh-CN": "下一步",
+                "en": "Next Step"
+              }
+            },
+            "evidence_scope": {
+              "label": {
+                "zh-CN": "证据范围",
+                "en": "Evidence Scope"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
         "expert_analysis_window": {
           "title": {
             "zh-CN": "热分析窗口",
@@ -39341,6 +41776,24 @@
               "label": {
                 "zh-CN": "严重降频次数",
                 "en": "Severe Drop Count"
+              }
+            },
+            "thermal_throttling_evidence": {
+              "label": {
+                "zh-CN": "热节流证据",
+                "en": "Thermal Throttling Evidence"
+              }
+            },
+            "limit_episode_count": {
+              "label": {
+                "zh-CN": "限频区段数",
+                "en": "Limit Episode Count"
+              }
+            },
+            "next_step": {
+              "label": {
+                "zh-CN": "下一步",
+                "en": "Next Step"
               }
             },
             "description": {
@@ -39653,6 +42106,14 @@
           "title": {
             "zh-CN": "GPUWorkPeriod",
             "en": "GPU Work Period"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "limit_attribution": {
+          "title": {
+            "zh-CN": "限频归因（谁触发 / 限频前负载 / 异常线程）",
+            "en": "Limit Attribution"
           },
           "columns": {},
           "synthesizeLabels": {}

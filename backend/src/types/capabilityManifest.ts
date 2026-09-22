@@ -30,6 +30,15 @@ export interface CapabilityManifestCapabilityDefinition {
   displayName: string;
   primaryTable: string;
   requiredModules?: string[];
+  /**
+   * Bounded count query used instead of the `primaryTable` row count. A single
+   * SELECT returning one integer. It is part of the definition identity because
+   * one capability can be rewritten to count something else — a different track
+   * type, a different threshold — while keeping its id, displayName and
+   * primaryTable. Two manifests are comparable only if they agree on what was
+   * counted, so the content hash has to carry the query itself.
+   */
+  probeSql?: string;
 }
 
 export interface CapabilityManifestLegacyProbeResult {
@@ -88,6 +97,7 @@ export interface CapabilityManifestEntryV1 {
   displayName: string;
   primaryTable: string;
   requiredModules?: string[];
+  probeSql?: string;
   status: CapabilityManifestStatus;
   sourceState: CapabilitySourceState;
   reasonCode?: CapabilityReasonCode;

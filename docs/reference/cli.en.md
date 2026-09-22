@@ -441,7 +441,13 @@ smp capture android --preset game --app com.example.game --duration 20 --out gam
 ```
 
 Available presets: `startup`, `scrolling`, `camera`, `anr`, `game`, `memory`, `cpu`,
-`power`, `overview`, and `full`. `power` enables `android.power` battery
+`power`, `overview`, and `full`. Every preset enables `power/cpu_frequency` and
+`power/cpu_frequency_limits`; the latter carries each CPU's frequency bounds and
+separates "low frequency because the load is low" from "clamped". `cpu` and
+`power` also enable `thermal/thermal_temperature` and `thermal/cdev_update` so a
+clamp can be matched against thermal-zone temperature in the same window. Those
+tracepoints depend on device and kernel support and are not exposed everywhere.
+`power` additionally enables `android.power` battery
 counters, power rails, suspend/wakeup ftrace, and `android.network_packets`.
 `camera` collects Camera/HAL/vendor atrace candidates, Binder, scheduler,
 FrameTimeline, and DMA-BUF or legacy ION events. These tracepoints are optional

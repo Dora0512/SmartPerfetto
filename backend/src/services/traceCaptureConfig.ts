@@ -43,6 +43,8 @@ export interface CapturePresetDefinition {
   ftraceEvents: string[];
   dataSources: string[];
   description: string;
+  /** Chinese rendering of `description`; the proposal rationale is derived from these two. */
+  descriptionZh: string;
 }
 
 const COMMON_DATA_SOURCES = [
@@ -63,8 +65,19 @@ const COMMON_FTRACE_EVENTS = [
   'task/task_newtask',
   'task/task_rename',
   'power/cpu_frequency',
+  // Actual frequency alone cannot show a clamp. cpu_frequency_limits carries the
+  // scheduler/thermal min+max bounds as typed counter tracks.
+  'power/cpu_frequency_limits',
   'power/cpu_idle',
   'ftrace/print',
+];
+
+// Thermal zone temperature and cooling-device state. Both the power and the
+// CPU/scheduler preset need them: a frequency clamp is only attributable once
+// the thermal side of the same window is in the trace.
+const THERMAL_EVENTS = [
+  'thermal/thermal_temperature',
+  'thermal/cdev_update',
 ];
 
 const BINDER_EVENTS = [
@@ -108,8 +121,7 @@ const POWER_EVENTS = [
   'power/wakeup_source_activate',
   'power/wakeup_source_deactivate',
   'power/gpu_frequency',
-  'thermal/thermal_temperature',
-  'thermal/cdev_update',
+  ...THERMAL_EVENTS,
 ];
 
 export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
@@ -123,6 +135,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS, ...IO_EVENTS],
     dataSources: [...COMMON_DATA_SOURCES, 'android.surfaceflinger.frametimeline'],
     description: 'App launch and first-frame investigation with sched, binder, IO, logcat, and FrameTimeline.',
+    descriptionZh: '启动分析需要覆盖 launch、首帧、调度、binder、IO 和 FrameTimeline 信号。',
   },
   {
     id: 'scrolling',
@@ -134,6 +147,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS, 'power/gpu_frequency'],
     dataSources: [...COMMON_DATA_SOURCES, 'android.surfaceflinger.frametimeline', 'android.input.inputevent'],
     description: 'Scrolling and frame-jank capture with FrameTimeline, input, scheduler, and CPU/GPU frequency.',
+    descriptionZh: '滑动和卡顿分析需要 FrameTimeline、input、调度、CPU/GPU 频率和 binder 上下文。',
   },
   {
     id: 'camera',
@@ -145,6 +159,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS, ...CAMERA_MEMORY_EVENTS],
     dataSources: [...COMMON_DATA_SOURCES, 'android.surfaceflinger.frametimeline'],
     description: 'Camera request, binder, scheduler, preview presentation, and DMA-BUF/ION allocation evidence.',
+    descriptionZh: 'Camera 分析需要覆盖 request activity、binder、调度、预览呈现和 DMA-BUF/ION 分配信号。',
   },
   {
     id: 'anr',
@@ -156,6 +171,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS, ...IO_EVENTS],
     dataSources: [...COMMON_DATA_SOURCES, 'android.input.inputevent'],
     description: 'ANR and main-thread blocking with input, binder, scheduler, IO, and logcat context.',
+    descriptionZh: 'ANR 分析需要 input、主线程调度、binder、IO 和 logcat 上下文。',
   },
   {
     id: 'game',
@@ -167,6 +183,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS, 'power/gpu_frequency'],
     dataSources: [...COMMON_DATA_SOURCES, 'android.surfaceflinger.frametimeline', 'gpu.counters', 'gpu.renderstages'],
     description: 'Game and native rendering capture with app/SF frame signals plus CPU/GPU scheduling context.',
+    descriptionZh: '渲染和游戏分析需要 app/SF frame 信号、GPU counters、渲染阶段和调度上下文。',
   },
   {
     id: 'memory',
@@ -178,6 +195,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...MEMORY_EVENTS, ...IO_EVENTS],
     dataSources: COMMON_DATA_SOURCES,
     description: 'Memory pressure, GC, process stats, LMK-adj, reclaim, IO, and logcat correlation.',
+    descriptionZh: '内存分析需要 process stats、reclaim、LMK-adj、GC、IO 和 logcat 上下文。',
   },
   {
     id: 'cpu',
@@ -186,9 +204,10 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     defaultDurationSeconds: 15,
     bufferSizeKb: 65536,
     atraceCategories: ['am', 'wm', 'view', 'gfx', 'input', 'binder_driver'],
-    ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS],
+    ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS, ...THERMAL_EVENTS],
     dataSources: COMMON_DATA_SOURCES,
-    description: 'Scheduler, CPU frequency/idle, process stats, and lightweight app context.',
+    description: 'Scheduler, CPU frequency/idle/limits, thermal zones, process stats, and lightweight app context.',
+    descriptionZh: 'CPU 分析需要 scheduler、CPU frequency/idle/limits、thermal zone、process stats 和轻量 app 上下文。',
   },
   {
     id: 'power',
@@ -199,7 +218,8 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     atraceCategories: ['am', 'pm', 'power', 'network', 'binder_driver'],
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...POWER_EVENTS],
     dataSources: [...COMMON_DATA_SOURCES, 'android.power', 'android.network_packets'],
-    description: 'Battery drain, power rails, suspend/wakeup, wakelock, CPU idle/frequency, and modem correlation.',
+    description: 'Battery drain, power rails, suspend/wakeup, wakelock, CPU idle/frequency/limits, thermal zones, and modem correlation.',
+    descriptionZh: '功耗分析需要电池、power rail、suspend/wakeup、wakelock、thermal zone、CPU 限频和网络耗电信号。',
   },
   {
     id: 'overview',
@@ -211,6 +231,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ftraceEvents: [...COMMON_FTRACE_EVENTS, ...BINDER_EVENTS],
     dataSources: [...COMMON_DATA_SOURCES, 'android.surfaceflinger.frametimeline', 'android.input.inputevent'],
     description: 'Balanced default for scene discovery and first-pass SmartPerfetto analysis.',
+    descriptionZh: 'Overview capture 是 SmartPerfetto 首轮分析的均衡默认配置。',
   },
   {
     id: 'full',
@@ -253,6 +274,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
       ...IO_EVENTS,
       ...MEMORY_EVENTS,
       ...CAMERA_MEMORY_EVENTS,
+      ...THERMAL_EVENTS,
       'irq/irq_handler_entry',
       'irq/irq_handler_exit',
       'sync/sync_timeline',
@@ -263,6 +285,7 @@ export const CAPTURE_PRESETS: CapturePresetDefinition[] = [
     ],
     dataSources: [...COMMON_DATA_SOURCES, 'android.surfaceflinger.frametimeline', 'android.input.inputevent'],
     description: 'Broad diagnostic preset based on the local full config pattern; higher overhead, richer evidence.',
+    descriptionZh: 'Full diagnostic capture 覆盖面广且开销更高，只应在明确要求最大覆盖时使用。',
   },
 ];
 

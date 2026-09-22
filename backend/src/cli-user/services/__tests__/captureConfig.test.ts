@@ -77,6 +77,9 @@ describe('capture config rendering', () => {
     expect(config).toContain('poll_ms: 250');
     expect(config).toContain('ftrace_events: "power/suspend_resume"');
     expect(config).toContain('ftrace_events: "power/wakeup_source_activate"');
+    expect(config).toContain('ftrace_events: "power/cpu_frequency_limits"');
+    expect(config).toContain('ftrace_events: "thermal/thermal_temperature"');
+    expect(config).toContain('ftrace_events: "thermal/cdev_update"');
   });
 
   it('extracts duration from pass-through config files without rewriting them', () => {

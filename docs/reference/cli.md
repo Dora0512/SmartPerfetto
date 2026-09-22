@@ -386,7 +386,12 @@ smp capture android --preset game --app com.example.game --duration 20 --out gam
 ```
 
 内置预设包括：`startup`、`scrolling`、`camera`、`anr`、`game`、`memory`、`cpu`、
-`power`、`overview`、`full`。`power` 会开启 `android.power` 的 battery
+`power`、`overview`、`full`。所有预设都会开启 `power/cpu_frequency` 与
+`power/cpu_frequency_limits`，后者提供每个 CPU 的频率上下限，用来区分“负载低所以
+频率低”和“被限频压住”。`cpu` 和 `power` 还会开启
+`thermal/thermal_temperature` 与 `thermal/cdev_update`，让限频可以和同一时间窗内
+的热区温度对应起来；这两个 tracepoint 依赖设备/内核支持，并非所有设备都暴露。
+`power` 另外会开启 `android.power` 的 battery
 counters、power rails、suspend/wakeup 相关 ftrace 和 `android.network_packets`。
 `camera` 会采集 Camera/HAL/厂商 atrace 候选、Binder、scheduler、FrameTimeline，
 以及 DMA-BUF 或旧版 ION 事件；这些 tracepoint 都是可选的，会随 Android 版本、
