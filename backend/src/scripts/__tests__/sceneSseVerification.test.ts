@@ -110,6 +110,21 @@ describe('scene SSE verification gate', () => {
       {runId: 'run', readUntilClose: true, terminalObservationMs: 5});
     expect(summary.terminalEvent).toBe('analysis_cancelled');
   });
+  it('records a failed run\'s error as its terminal and never the stream-closing end', () => {
+    const state = createSceneSseObservation();
+    for (const event of ['analysis_completed', 'end', 'error']) recordSceneSseEvent(state, event, {}, scope);
+    expect(state.terminals.map(terminal => terminal.event)).toEqual(['analysis_completed', 'error']);
+  });
+  it.each([true, false])('ends at a failed run\'s error event on a stream the server keeps open (readUntilClose=%s)', async readUntilClose => {
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => new Response(new ReadableStream({start(controller) {
+      controller.enqueue(new TextEncoder().encode('event: error\ndata: {"message":"database is locked"}\n\n'));
+      options?.signal?.addEventListener('abort', () => controller.error(options.signal?.reason), {once: true});
+    }})));
+    const summary = await collectSseSummary('http://verifier.invalid', 'session', 1000, {requiredText: [], forbiddenText: []},
+      {runId: 'run', readUntilClose, terminalObservationMs: 5});
+    expect(summary.terminalEvent).toBe('error');
+    expect(summary.errorEvents).toEqual(['database is locked']);
+  });
   it('checks independently queried exact source boundaries without promoting natural-language correctness', async () => {
     const spec = parseSceneOracleSpecs([{id: 'native-window', sql: 'SELECT ts, end_ts, upid FROM trusted_fixture',
       startColumn: 'ts', endColumn: 'end_ts', objectKind: 'upid', objectKeyColumn: 'upid'}]);

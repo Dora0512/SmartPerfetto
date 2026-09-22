@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2024-2026 Gracker (Chris)
 
+import {TERMINAL_SSE_EVENT_TYPES} from '../assistant/stream/sessionSseReplay';
 import {analysisDeliveryFingerprint} from '../types/analysisDelivery';
 import type {SceneTimelineView, SceneReportReference} from '../types/sceneTimeline';
 
@@ -8,6 +9,8 @@ const object = (value: unknown): Record<string, any> | undefined => value && typ
   ? value as Record<string, any> : undefined;
 const ns = (value: unknown): value is string => typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value) && value.length <= 40;
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+/** Run terminals as the product defines them; `end` only closes the stream after one. */
+export const SCENE_RUN_TERMINAL_EVENTS: ReadonlySet<string> = new Set([...TERMINAL_SSE_EVENT_TYPES].filter(type => type !== 'end'));
 export interface SceneVerificationScope {sessionId: string; runId: string; traceId: string}
 export interface SceneSseObservation {
   events: number; acquisitions: number; acquisitionIds: string[]; proposalCalls: number; issues: string[];
@@ -66,7 +69,7 @@ export function recordSceneSseEvent(state: SceneSseObservation, event: string, p
       state.acquisitionIds.push(key); state.acquisitions++;
     }
   }
-  if (['analysis_completed', 'analysis_cancelled', 'analysis_failed'].includes(event)) {
+  if (SCENE_RUN_TERMINAL_EVENTS.has(event)) {
     if (state.terminals.length < 8) state.terminals.push({event, eventIndex: state.events});
     else issue('terminal_event_budget_exhausted');
   }

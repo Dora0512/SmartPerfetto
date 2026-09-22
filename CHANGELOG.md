@@ -36,7 +36,8 @@ Detailed commit-level history is available via `git log`.
   read, so a commit from another process no longer fails the run with
   "database is locked".
 - Summarized SQL results list the original row index of each sample row, and
-  the Agent SSE verification script exits after writing its artifacts.
+  the Agent SSE verification script exits after writing its artifacts and
+  treats a failed run's `error` event as terminal, as the AI panel does.
 
 ## [1.13.0] - 2026-09-21
 

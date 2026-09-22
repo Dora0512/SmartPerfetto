@@ -59,7 +59,8 @@ import {
   successfulCodeLookupToolCounts,
 } from './agentSseVerificationEvidence';
 
-import {createSceneSseObservation, recordSceneSseEvent, evaluateSceneSseVerification, parseSceneOracleSpecs, collectSceneOracleRows, evaluateSceneOracleRows, type SceneOracleSpec, type SceneOracleObservation, type SceneSseObservation} from './sceneSseVerification';
+import {isTerminalSseEvent} from '../assistant/stream/sessionSseReplay';
+import {createSceneSseObservation, recordSceneSseEvent, evaluateSceneSseVerification, SCENE_RUN_TERMINAL_EVENTS, parseSceneOracleSpecs, collectSceneOracleRows, evaluateSceneOracleRows, type SceneOracleSpec, type SceneOracleObservation, type SceneSseObservation} from './sceneSseVerification';
 
 type CodeAwareMode = 'off' | 'metadata_only' | 'provider_send';
 type SmartAction = 'preview' | 'analyze';
@@ -2581,7 +2582,9 @@ export async function collectSseSummary(
           const payload = asRecord(parsedRecord?.data) ?? parsedRecord;
 
           await options.observeEvent?.(event, event === 'data' ? parsed : payload);
-          if (options.readUntilClose && !terminalObservation && ['analysis_completed', 'analysis_cancelled', 'analysis_failed', 'end'].includes(event)) {
+          // The product's own predicate: a failed run ends with `error` and leaves the stream open.
+          const terminal = isTerminalSseEvent(event, dataText);
+          if (options.readUntilClose && !terminalObservation && terminal) {
             terminalObservation = setTimeout(() => {observationFinished = true; controller.abort();}, options.terminalObservationMs ?? 2000);
           }
 
@@ -2854,7 +2857,7 @@ export async function collectSseSummary(
             }
           }
 
-          if (!options.readUntilClose && (event === 'analysis_completed' || event === 'end')) {
+          if (!options.readUntilClose && terminal) {
             shouldStop = true;
             break;
           }
@@ -3265,7 +3268,7 @@ async function main(): Promise<void> {
     const observeSceneEvent = sceneObservation ? async (event: string, payload: unknown) => {
       const observed = sceneObservation!;
       recordSceneSseEvent(observed, event, payload, sceneScope);
-      if (['scene_timeline_updated', 'analysis_completed', 'analysis_cancelled', 'analysis_failed'].includes(event)) persistSceneObservation();
+      if (event === 'scene_timeline_updated' || SCENE_RUN_TERMINAL_EVENTS.has(event)) persistSceneObservation();
       if (options.sceneScenario === 'cancel' && event === 'scene_timeline_updated' && observed.cancelRequestedAt === undefined) {
         observed.cancelRequestedAt = observed.events;
         persistSceneObservation();
