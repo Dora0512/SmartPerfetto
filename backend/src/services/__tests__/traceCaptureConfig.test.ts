@@ -55,10 +55,30 @@ describe('shared trace capture config rendering', () => {
       expect(config).toContain(`SmartPerfetto capture preset: ${preset.id}`);
       expect(config).toContain('name: "linux.ftrace"');
       expect(config).toContain('ftrace_events: "sched/sched_blocked_reason"');
+      // Actual frequency without its bounds cannot distinguish an idle CPU from
+      // a clamped one, so every preset carries both.
+      expect(config).toContain('ftrace_events: "power/cpu_frequency"');
+      expect(config).toContain('ftrace_events: "power/cpu_frequency_limits"');
       expect(config).toContain('duration_ms:');
       expect(config).toContain('atrace_apps: "com.example.app"');
     }
   });
+
+  it.each(['cpu', 'power', 'full'] as const)(
+    'gives the %s preset thermal zone and cooling device events',
+    (presetId) => {
+      const config = renderAndroidTraceConfig({
+        target: 'android',
+        preset: presetId,
+        app: 'com.example.app',
+        durationSeconds: 15,
+      });
+
+      expect(config).toContain('ftrace_events: "thermal/thermal_temperature"');
+      expect(config).toContain('ftrace_events: "thermal/cdev_update"');
+      expect(config).toContain('ftrace_events: "power/cpu_frequency_limits"');
+    },
+  );
 
   it('keeps template rendering and duration-scaled buffers in the shared service', () => {
     const rendered = renderTraceConfigTemplate([

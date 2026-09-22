@@ -217,6 +217,20 @@
       ],
       "split": "validation",
       "createdAt": "2026-09-09T00:00:00.000Z"
+    },
+    {
+      "caseId": "synthetic-thermal-frequency-limit-v1",
+      "catalogAlias": "thermal-frequency-limit",
+      "query": "Who applied the CPU frequency limit, what was the system running before it, and which threads look anomalous?",
+      "analysisMode": "full",
+      "expectedScene": "power",
+      "goldenPoints": [
+        "Read the applied limit from the typed cpufreq limit tracks as debounced episodes, never from the actual frequency alone.",
+        "Attribute the kernel-thermal episode to the coincident cooling-device transition and keep the daemon-only episode a candidate, not a confirmed thermal cause.",
+        "Separate the target app's pre-limit CPU work from system and kernel actors before recommending anything."
+      ],
+      "split": "holdout",
+      "createdAt": "2026-09-22T00:00:00.000Z"
     }
   ]
 }

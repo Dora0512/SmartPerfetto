@@ -59,7 +59,6 @@ export interface TraceConfigProposalV1 {
 interface IntentRule {
   preset: CapturePresetId;
   confidence: TraceConfigProposalConfidence;
-  rationale: string;
   requiredKeywords?: string[];
   keywords: string[];
 }
@@ -74,7 +73,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'camera',
     confidence: 'high',
-    rationale: 'Camera investigations need request activity, binder, scheduler, preview presentation, and DMA-BUF/ION allocation evidence.',
     requiredKeywords: [
       'camera', 'camera2', 'camerax', 'cameraserver', 'camera hal',
       '摄像头', '相机', '取景器',
@@ -88,7 +86,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'startup',
     confidence: 'high',
-    rationale: 'Startup investigations need launch, first-frame, scheduler, binder, IO, and FrameTimeline coverage.',
     keywords: [
       'startup',
       'start up',
@@ -106,7 +103,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'scrolling',
     confidence: 'high',
-    rationale: 'Scrolling and jank investigations need FrameTimeline, input, scheduler, CPU/GPU frequency, and binder context.',
     keywords: [
       'scroll',
       'scrolling',
@@ -125,7 +121,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'anr',
     confidence: 'high',
-    rationale: 'ANR investigations need input, main-thread scheduling, binder, IO, and logcat context.',
     keywords: [
       'anr',
       'not responding',
@@ -140,7 +135,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'memory',
     confidence: 'high',
-    rationale: 'Memory investigations need process stats, reclaim, LMK-adj, GC, IO, and logcat context.',
     keywords: [
       'memory',
       'mem',
@@ -157,7 +151,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'power',
     confidence: 'high',
-    rationale: 'Power investigations need battery, power rail, suspend/wakeup, wakelock, thermal, and network drain signals.',
     keywords: [
       'power',
       'battery',
@@ -171,12 +164,16 @@ const INTENT_RULES: IntentRule[] = [
       '功耗',
       '温度',
       '发热',
+      '限频',
+      '降频',
+      '温控',
+      'throttling',
+      'frequency limit',
     ],
   },
   {
     preset: 'game',
     confidence: 'medium',
-    rationale: 'Rendering and game investigations need app/SF frame signals, GPU counters, render stages, and scheduling context.',
     keywords: [
       'gpu',
       'render',
@@ -192,7 +189,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'cpu',
     confidence: 'medium',
-    rationale: 'CPU investigations need scheduler, CPU frequency/idle, process stats, and lightweight app context.',
     keywords: [
       'cpu',
       'scheduler',
@@ -206,7 +202,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'full',
     confidence: 'medium',
-    rationale: 'Full diagnostic capture is broad and higher overhead; use only when the request explicitly asks for maximum coverage.',
     keywords: [
       'full diagnostic',
       'everything',
@@ -221,7 +216,6 @@ const INTENT_RULES: IntentRule[] = [
   {
     preset: 'overview',
     confidence: 'medium',
-    rationale: 'Overview capture is the balanced default for first-pass SmartPerfetto analysis.',
     keywords: [
       'overview',
       'generic',
@@ -240,19 +234,6 @@ const DOMAIN_MATCH_BONUS = Math.max(
     .filter(rule => !rule.requiredKeywords)
     .map(rule => rule.keywords.length),
 ) + 1;
-
-const PRESET_RATIONALE_ZH: Partial<Record<CapturePresetId, string>> = {
-  camera: 'Camera 分析需要覆盖 request activity、binder、调度、预览呈现和 DMA-BUF/ION 分配信号。',
-  startup: '启动分析需要覆盖 launch、首帧、调度、binder、IO 和 FrameTimeline 信号。',
-  scrolling: '滑动和卡顿分析需要 FrameTimeline、input、调度、CPU/GPU 频率和 binder 上下文。',
-  anr: 'ANR 分析需要 input、主线程调度、binder、IO 和 logcat 上下文。',
-  memory: '内存分析需要 process stats、reclaim、LMK-adj、GC、IO 和 logcat 上下文。',
-  power: '功耗分析需要电池、power rail、suspend/wakeup、wakelock、thermal 和网络耗电信号。',
-  game: '渲染和游戏分析需要 app/SF frame 信号、GPU counters、渲染阶段和调度上下文。',
-  cpu: 'CPU 分析需要 scheduler、CPU frequency/idle、process stats 和轻量 app 上下文。',
-  full: 'Full diagnostic capture 覆盖面广且开销更高，只应在明确要求最大覆盖时使用。',
-  overview: 'Overview capture 是 SmartPerfetto 首轮分析的均衡默认配置。',
-};
 
 const DANGEROUS_OPTION_PATTERNS: Array<{
   option: string;
@@ -373,12 +354,11 @@ export function buildTraceConfigProposal(input: TraceConfigProposalInput): Trace
   };
 }
 
+// The preset definition is the single source for what a capture covers; the
+// proposal rationale is that description, not a second hand-written copy.
 function rationaleForRule(rule: IntentRule, outputLanguage: OutputLanguage): string {
-  return localize(
-    outputLanguage,
-    PRESET_RATIONALE_ZH[rule.preset] ?? rule.rationale,
-    rule.rationale,
-  );
+  const preset = getCapturePreset(rule.preset);
+  return localize(outputLanguage, preset.descriptionZh, preset.description);
 }
 
 function normalizeRequest(value: string): string {

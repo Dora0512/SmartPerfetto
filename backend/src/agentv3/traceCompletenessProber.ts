@@ -23,6 +23,7 @@
 import type { RenderingArchitectureType } from '../agent/detectors/types';
 import {
   buildCapabilityManifest,
+  isSingleSelectProbeSql,
   projectCapabilityManifestAttribution,
 } from '../services/capabilityManifest';
 import {
@@ -50,6 +51,8 @@ import type { CapabilityProbeResult, CapabilityStatus, TraceCompleteness } from 
 
 /** Minimum row count below which data is considered "insufficient". */
 const INSUFFICIENT_THRESHOLD = 3;
+/** Table names, capability ids and SQL literals the probe builder may interpolate. */
+const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CAPABILITY_METADATA_QUERY_OPTIONS = {
   priority: 'p1',
   timeoutMs: 2000,
@@ -122,6 +125,14 @@ interface CapabilityDef {
   displayName: string;
   /** Primary table to probe for data existence */
   primaryTable: string;
+  /**
+   * Bounded count query replacing the plain `primaryTable` row count. Use it
+   * when the capability lives inside a shared table and only some of its rows
+   * count — typed counter tracks, for example. `primaryTable` stays the
+   * reported label and the schema-existence gate. Build it with
+   * {@link boundedProbeCountSql} so the threshold stays defined once.
+   */
+  probeSql?: string;
   /** Stdlib modules that must be included before probing this table. */
   requiredModules?: string[];
   /** Capture guidance appended when the table is missing or empty. */
@@ -132,6 +143,43 @@ interface CapabilityDef {
   excludedArchs?: RenderingArchitectureType[];
   /** Priority for reporting: CRITICAL capabilities are flagged prominently when missing */
   priority: 'critical' | 'recommended' | 'optional';
+}
+
+/**
+ * Bound a row-producing SELECT to the insufficiency threshold and turn it into
+ * the single-integer-count contract `probeSql` carries. Keeping the bound here
+ * leaves `INSUFFICIENT_THRESHOLD` as the one definition of "sparse", and the
+ * resulting string embeds the threshold, so changing it changes the manifest
+ * identity rather than silently reclassifying old traces.
+ */
+function boundedProbeCountSql(rowSource: string): string {
+  return `SELECT COUNT(*) AS cnt FROM (${rowSource} LIMIT ${INSUFFICIENT_THRESHOLD})`;
+}
+
+/**
+ * Count `counter` samples carried by Perfetto's typed counter tracks. The types
+ * are assigned by the trace_processor ftrace parsers, so they appear on every
+ * platform that enables the events — unlike the Pixel-only `android_dvfs_counters`
+ * stdlib view this replaced.
+ */
+function typedCounterTrackProbeSql(trackTypes: readonly string[]): string {
+  // These reach SQL as string literals with no escaping. They are authored
+  // constants, so a violation is a programming error: fail at module load,
+  // where any test run catches it, rather than emitting a broken probe.
+  for (const type of trackTypes) {
+    if (!SQL_IDENTIFIER.test(type)) {
+      throw new Error(`invalid_counter_track_type:${type}`);
+    }
+  }
+  const typeList = trackTypes.map(type => `'${type}'`).join(', ');
+  // Drive the scan from the (tiny) track table rather than joining every
+  // counter row: when the types are absent a join never reaches its LIMIT and
+  // walks the whole counter table at session start.
+  return boundedProbeCountSql(
+    'SELECT 1 FROM counter ' +
+    'WHERE track_id IN (SELECT counter_track.id FROM counter_track ' +
+    `WHERE counter_track.type IN (${typeList}))`,
+  );
 }
 
 /**
@@ -204,8 +252,29 @@ const CAPABILITY_REGISTRY: CapabilityDef[] = [
   },
   {
     id: 'thermal_throttling',
-    displayName: '热降频分析',
-    primaryTable: 'android_dvfs_counters',
+    displayName: '热区温度 / 散热设备',
+    // ftrace thermal/thermal_temperature and thermal/cdev_update land on typed
+    // counter tracks on every platform. The previous probe used the Pixel-only
+    // android_dvfs_counters stdlib view, which reported "missing" on every
+    // Qualcomm/MTK/OEM trace — and on Pixel too, because the registry never
+    // included the android.dvfs module that defines it.
+    primaryTable: 'counter',
+    probeSql: typedCounterTrackProbeSql([
+      'thermal_temperature',
+      'cooling_device_counter',
+    ]),
+    captureHint: '需要 ftrace thermal/thermal_temperature 与 thermal/cdev_update 事件；部分设备/内核不暴露这两个 tracepoint',
+    priority: 'recommended',
+  },
+  {
+    id: 'cpu_freq_limits',
+    displayName: 'CPU 频率上下限（限频）',
+    primaryTable: 'counter',
+    probeSql: typedCounterTrackProbeSql([
+      'cpu_max_frequency_limit',
+      'cpu_min_frequency_limit',
+    ]),
+    captureHint: '需要 ftrace power/cpu_frequency_limits 事件；只有 power/cpu_frequency 时能看到实际频率，看不到限频上下限',
     priority: 'recommended',
   },
 
@@ -327,6 +396,64 @@ const CAPABILITY_REGISTRY: CapabilityDef[] = [
     priority: 'optional',
   },
 ];
+
+/**
+ * One row-count probe. `key` discriminates the batched UNION ALL rows: a plain
+ * table probe keys on its table, a `probeSql` probe on its capability, because
+ * several capabilities can read different slices of one shared table.
+ */
+interface CapabilityProbeUnit {
+  key: string;
+  selectSql: string;
+}
+
+export function capabilityProbeKey(
+  cap: {id: string; primaryTable: string; probeSql?: string},
+): string {
+  return cap.probeSql === undefined ? cap.primaryTable : `cap:${cap.id}`;
+}
+
+/**
+ * Every value this interpolates comes from the authored registry, so the checks
+ * below are a backstop against a bad registry edit, not a sanitizer for
+ * untrusted input. They are the only gate that runs *before* the probe executes:
+ * the manifest's own `probeSql` validation happens afterwards, when the query
+ * has already been sent.
+ */
+function isInterpolatableProbe(cap: CapabilityDef): boolean {
+  if (!SQL_IDENTIFIER.test(cap.id) || !SQL_IDENTIFIER.test(cap.primaryTable)) {
+    return false;
+  }
+  return cap.probeSql === undefined || isSingleSelectProbeSql(cap.probeSql);
+}
+
+/**
+ * Plan one probe per capability whose primary table exists, deduplicated by
+ * key so capabilities sharing a table are still counted once.
+ */
+function planCapabilityProbes(
+  existingTables: ReadonlySet<string>,
+): CapabilityProbeUnit[] {
+  const units = new Map<string, CapabilityProbeUnit>();
+  for (const cap of CAPABILITY_REGISTRY) {
+    if (!existingTables.has(cap.primaryTable)) continue;
+    const key = capabilityProbeKey(cap);
+    if (units.has(key)) continue;
+    if (!isInterpolatableProbe(cap)) {
+      console.warn(
+        `[TraceCompleteness] Skipping capability whose probe cannot be built safely: ${cap.id}`,
+      );
+      continue;
+    }
+    units.set(key, {
+      key,
+      selectSql: cap.probeSql === undefined
+        ? `SELECT '${key}' AS tbl, (${boundedProbeCountSql(`SELECT 1 FROM ${cap.primaryTable}`)}) AS cnt`
+        : `SELECT '${key}' AS tbl, (${cap.probeSql}) AS cnt`,
+    });
+  }
+  return [...units.values()];
+}
 
 async function loadProbeModules(
   tps: TraceProcessorService,
@@ -467,6 +594,9 @@ async function resolveCapabilityManifestShadow(
         ...(capability.requiredModules === undefined
           ? {}
           : {requiredModules: [...capability.requiredModules]}),
+        ...(capability.probeSql === undefined
+          ? {}
+          : {probeSql: capability.probeSql}),
       })),
       legacyProbe: legacyResult,
       traceProcessor,
@@ -636,18 +766,13 @@ async function probeTimelessTraceCompleteness(
 
   // ── Layer 2: Data existence check (only for tables that exist in schema) ──
   // Build a single UNION ALL query for efficiency.
-  const tablesToProbe = CAPABILITY_REGISTRY
-    .filter(cap => existingTables.has(cap.primaryTable))
-    .map(cap => cap.primaryTable);
+  const probeUnits = planCapabilityProbes(existingTables);
 
-  const dataPresence = new Map<string, number>(); // table → approximate row count
+  const dataPresence = new Map<string, number>(); // probe key → approximate row count
 
-  if (tablesToProbe.length > 0) {
+  if (probeUnits.length > 0) {
     // COUNT with LIMIT ${INSUFFICIENT_THRESHOLD} — only need to distinguish: 0 / 1..threshold / >threshold.
-    const unionParts = tablesToProbe.map(
-      t => `SELECT '${t}' AS tbl, COUNT(*) AS cnt FROM (SELECT 1 FROM ${t} LIMIT ${INSUFFICIENT_THRESHOLD})`,
-    );
-    const countSql = unionParts.join(' UNION ALL ');
+    const countSql = probeUnits.map(unit => unit.selectSql).join(' UNION ALL ');
 
     try {
       const countResult = await tps.query(traceId, countSql);
@@ -660,12 +785,12 @@ async function probeTimelessTraceCompleteness(
       // If the batch query fails (rare — e.g., one table has incompatible schema),
       // fall back to individual probes.
       console.warn('[TraceCompleteness] Batch count failed, falling back to individual probes:', (err as Error).message);
-      await Promise.all(tablesToProbe.map(async (t) => {
+      await Promise.all(probeUnits.map(async (unit) => {
         try {
-          const r = await tps.query(traceId, `SELECT COUNT(*) FROM (SELECT 1 FROM ${t} LIMIT ${INSUFFICIENT_THRESHOLD})`);
-          dataPresence.set(t, r?.rows?.[0]?.[0] as number ?? 0);
+          const r = await tps.query(traceId, unit.selectSql);
+          dataPresence.set(unit.key, r?.rows?.[0]?.[1] as number ?? 0);
         } catch {
-          dataPresence.set(t, 0);
+          dataPresence.set(unit.key, 0);
         }
       }));
     }
@@ -715,7 +840,7 @@ async function probeTimelessTraceCompleteness(
     }
 
     // Data existence
-    const rowCount = dataPresence.get(cap.primaryTable) ?? 0;
+    const rowCount = dataPresence.get(capabilityProbeKey(cap)) ?? 0;
     if (rowCount === 0) {
       missingConfig.push({
         id: cap.id,
@@ -723,7 +848,14 @@ async function probeTimelessTraceCompleteness(
         status: 'missing_config_suspected',
         primaryTable: cap.primaryTable,
         rowEstimate: 0,
-        reason: appendCaptureHint(`表 ${cap.primaryTable} 存在但无数据 — 可能未开启所需 atrace/ftrace 配置，或场景未发生`, cap),
+        // A probeSql capability reads a slice of a shared table, so "the table
+        // is empty" would be false; only its own rows are missing.
+        reason: appendCaptureHint(
+          cap.probeSql === undefined
+            ? `表 ${cap.primaryTable} 存在但无数据 — 可能未开启所需 atrace/ftrace 配置，或场景未发生`
+            : `表 ${cap.primaryTable} 中没有该能力所需的数据 — 可能未开启所需 atrace/ftrace 配置，或场景未发生`,
+          cap,
+        ),
       });
     } else if (rowCount < INSUFFICIENT_THRESHOLD) {
       insufficient.push({

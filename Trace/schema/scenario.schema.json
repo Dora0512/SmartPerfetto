@@ -62,6 +62,7 @@
               "atrace-slice", "atrace-counter", "atrace-async-slice", "atrace-async-track-slice",
               "sched-running", "sched-switch", "sched-waking", "process-stats", "battery-counters", "power-rail",
               "gpu-work-period", "gpu-frequency", "gpu-power-state", "cpu-frequency", "cpu-idle",
+              "cpu-frequency-limits", "thermal-temperature", "cdev-update",
               "irq-span", "frame-timeline", "lmk-kill", "managed-heap-graph",
               "gpu-compute-kernel", "anr-event", "perf-sample", "android-log"
             ]
@@ -103,6 +104,14 @@
           "value": {"type": "number"},
           "cpu": {"type": "integer", "minimum": 0},
           "cpu_id": {"type": "integer", "minimum": 0},
+          "min_freq_khz": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+          "max_freq_khz": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+          "thermal_zone": {"type": "string", "minLength": 1},
+          "temp_mc": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647, "description": "Thermal zone temperature in millidegrees Celsius, as the kernel reports it."},
+          "temp_prev_mc": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+          "id": {"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "Kernel thermal zone id for thermal-temperature."},
+          "cdev_type": {"type": "string", "minLength": 1, "description": "Cooling device type string; trace_processor names the counter track after it."},
+          "target": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
           "gpu_id": {"type": "integer", "minimum": 0},
           "uid": {"type": "integer", "minimum": 0},
           "irq": {"type": "integer", "minimum": 0},
@@ -223,6 +232,18 @@
           {
             "if": {"properties": {"type": {"const": "sched-waking"}}},
             "then": {"required": ["cpu", "thread", "waker_thread", "target_cpu", "sched_priority"]}
+          },
+          {
+            "if": {"properties": {"type": {"const": "cpu-frequency-limits"}}},
+            "then": {"required": ["cpu_id", "min_freq_khz", "max_freq_khz"]}
+          },
+          {
+            "if": {"properties": {"type": {"const": "thermal-temperature"}}},
+            "then": {"required": ["thermal_zone", "temp_mc"]}
+          },
+          {
+            "if": {"properties": {"type": {"const": "cdev-update"}}},
+            "then": {"required": ["cdev_type", "target"]}
           },
           {
             "if": {"properties": {"type": {"const": "managed-heap-graph"}}},

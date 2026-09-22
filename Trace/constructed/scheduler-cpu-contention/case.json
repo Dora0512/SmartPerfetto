@@ -651,10 +651,12 @@
           "end_ts": "${fixture_end}"
         },
         "required_steps": [
+          "limit_evidence",
           "init_cpu_topology",
           "throttle_detection"
         ],
         "required_sql_steps": [
+          "limit_evidence",
           "throttle_detection"
         ],
         "forced_sql_steps": [],

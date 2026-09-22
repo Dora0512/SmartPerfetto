@@ -28,6 +28,21 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const GIT_REVISION_PATTERN = /^[0-9a-f]{40}$/;
 const CLOCK_VALUE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 const SAFE_DETAIL_CODE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+/**
+ * A recorded `probeSql` must be one read-only statement: a manifest that says a
+ * capability was measured by a statement pair or by commented-out SQL is not a
+ * usable provenance record. The prober runs the query before a manifest is
+ * ever built and applies the same check through `isSingleSelectProbeSql`
+ * before interpolating; every probe unit is joined onto one line inside
+ * `(...)`, so a `--` would comment out the closing paren and every later
+ * UNION ALL branch. The registry is the trust boundary for both.
+ */
+const SINGLE_SELECT_PROBE_SQL = /^SELECT\s(?:(?!--|\/\*)[^;])*$/i;
+
+/** True when `sql` has the one-statement shape a capability probe must have. */
+export function isSingleSelectProbeSql(sql: string): boolean {
+  return SINGLE_SELECT_PROBE_SQL.test(sql.trim());
+}
 const TRACE_PROCESSOR_UNAVAILABLE_REASONS = new Set([
   'external_rpc_binary_unavailable',
   'trace_processor_binary_unavailable',
@@ -145,6 +160,22 @@ function validateDefinitions(
       throw new Error(
         `capability_manifest_empty_primary_table:${definition.id}`,
       );
+    }
+    if (definition.probeSql !== undefined) {
+      if (typeof definition.probeSql !== 'string') {
+        throw new Error(
+          `capability_manifest_invalid_probe_sql:${definition.id}`,
+        );
+      }
+      const probeSql = definition.probeSql.trim();
+      if (probeSql.length === 0) {
+        throw new Error(`capability_manifest_empty_probe_sql:${definition.id}`);
+      }
+      if (!isSingleSelectProbeSql(probeSql)) {
+        throw new Error(
+          `capability_manifest_invalid_probe_sql:${definition.id}`,
+        );
+      }
     }
 
     if (
@@ -505,6 +536,9 @@ function mapEntry(
     ...(definition.requiredModules === undefined
       ? {}
       : {requiredModules: [...definition.requiredModules]}),
+    ...(definition.probeSql === undefined
+      ? {}
+      : {probeSql: definition.probeSql}),
   };
   if (indexed.bucket === 'available') {
     return {

@@ -559,10 +559,12 @@
         "end_ts": "${fixture_end}"
       },
       "required_steps": [
+        "limit_evidence",
         "init_cpu_topology",
         "throttle_detection"
       ],
       "required_sql_steps": [
+        "limit_evidence",
         "throttle_detection"
       ],
       "forced_sql_steps": [],
@@ -576,6 +578,9 @@
         "min_freq_mhz",
         "max_freq_mhz",
         "freq_drop_pct",
+        "frequency_variation_detected",
+        "evidence_status",
+        "interpretation",
         "throttle_detected"
       ],
       "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"

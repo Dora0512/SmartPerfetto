@@ -116,6 +116,10 @@ const SYSTEM_CONTEXT_SKILL_HINTS: Record<string, { owner: string; verification: 
     owner: '热管理/性能团队',
     verification: '复跑同时间窗 trace，确认峰值温度与降频占比下降，并验证 jank_rate 改善',
   },
+  cpu_frequency_limit_attribution: {
+    owner: '热管理/系统性能团队（限频策略侧），App 侧仅负责限频前自身负载',
+    verification: '复跑同时间窗 trace，确认受限 episode 数与受限时长占比下降，或限频不再由同一触发源引起；限频前 App 侧 freq-weighted work 下降，且关键交互帧无回归',
+  },
 };
 
 function isJankSceneId(sceneId?: string): boolean {

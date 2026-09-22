@@ -639,6 +639,169 @@ test('materializes memory, battery, power, GPU, CPU frequency, IRQ, and async ev
   assert.match(output, /\n(?:[1-9][0-9]*,){14}[1-9][0-9]*\s*$/);
 });
 
+function thermalLimitSignals() {
+  return [
+    {
+      type: 'cpu-frequency-limits', at_ns: '200000000', cpu_id: 5,
+      min_freq_khz: 500000, max_freq_khz: 3000000, cpu: 5,
+    },
+    {
+      type: 'cpu-frequency-limits', at_ns: '260000000', cpu_id: 5,
+      min_freq_khz: 500000, max_freq_khz: 1700000, cpu: 5,
+    },
+    {
+      type: 'thermal-temperature', at_ns: '210000000', id: 3,
+      thermal_zone: 'cpu-big', temp_mc: 62000, temp_prev_mc: 61000, cpu: 0,
+    },
+    {
+      type: 'thermal-temperature', at_ns: '250000000', id: 3,
+      thermal_zone: 'cpu-big', temp_mc: 96000, temp_prev_mc: 62000, cpu: 0,
+    },
+    {type: 'cdev-update', at_ns: '220000000', cdev_type: 'thermal-cpufreq-2', target: 0, cpu: 0},
+    {type: 'cdev-update', at_ns: '260000000', cdev_type: 'thermal-cpufreq-2', target: 3, cpu: 0},
+  ];
+}
+
+test('encodes thermal, cooling device, and frequency limit events at their ftrace field numbers', () => {
+  const scenario = fixtureScenario();
+  scenario.signals.push(...thermalLimitSignals());
+  const overlay = encodeScenarioOverlay(repoRoot, scenario, {
+    anchorNs: '1000000000',
+    usedPids: new Set(),
+    sequenceId: 464646,
+  });
+
+  // The field number is the wire contract trace_processor dispatches on; a
+  // renamed schema field would still decode, a renumbered one would not.
+  const traceType = loadTraceType(repoRoot);
+  const ftraceEvent = traceType.root.lookupType('perfetto.protos.FtraceEvent');
+  assert.equal(ftraceEvent.fields.cpuFrequencyLimits.id, 12);
+  assert.equal(ftraceEvent.fields.thermalTemperature.id, 341);
+  assert.equal(ftraceEvent.fields.cdevUpdate.id, 342);
+
+  const events = traceType.decode(overlay.buffer).packet
+    .flatMap((packet) => packet.ftraceEvents?.event ?? []);
+  assert.deepEqual(
+    events
+      .filter((event) => event.event === 'cpuFrequencyLimits')
+      .map((event) => ({
+        at: String(event.timestamp),
+        cpuId: event.cpuFrequencyLimits.cpuId,
+        minFreq: event.cpuFrequencyLimits.minFreq,
+        maxFreq: event.cpuFrequencyLimits.maxFreq,
+      })),
+    [
+      {at: '1200000000', cpuId: 5, minFreq: 500000, maxFreq: 3000000},
+      {at: '1260000000', cpuId: 5, minFreq: 500000, maxFreq: 1700000},
+    ],
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event.event === 'thermalTemperature')
+      .map((event) => ({
+        at: String(event.timestamp),
+        id: event.thermalTemperature.id,
+        zone: event.thermalTemperature.thermalZone,
+        temp: event.thermalTemperature.temp,
+        tempPrev: event.thermalTemperature.tempPrev,
+      })),
+    [
+      {at: '1210000000', id: 3, zone: 'cpu-big', temp: 62000, tempPrev: 61000},
+      {at: '1250000000', id: 3, zone: 'cpu-big', temp: 96000, tempPrev: 62000},
+    ],
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event.event === 'cdevUpdate')
+      .map((event) => ({
+        at: String(event.timestamp),
+        type: event.cdevUpdate.type,
+        target: String(event.cdevUpdate.target),
+      })),
+    [
+      {at: '1220000000', type: 'thermal-cpufreq-2', target: '0'},
+      {at: '1260000000', type: 'thermal-cpufreq-2', target: '3'},
+    ],
+  );
+
+  // temp_prev and id are optional; omitting them must not change the zone,
+  // the sample value, or the signal's own field number.
+  const defaulted = fixtureScenario();
+  defaulted.signals.push({
+    type: 'thermal-temperature', at_ns: '210000000',
+    thermal_zone: 'skin', temp_mc: 38000, cpu: 0,
+  });
+  const defaultedEvent = traceType
+    .decode(encodeScenarioOverlay(repoRoot, defaulted, {
+      anchorNs: '1000000000', usedPids: new Set(), sequenceId: 464647,
+    }).buffer)
+    .packet.flatMap((packet) => packet.ftraceEvents?.event ?? [])
+    .find((event) => event.event === 'thermalTemperature');
+  assert.equal(defaultedEvent.thermalTemperature.id, 0);
+  assert.equal(defaultedEvent.thermalTemperature.temp, 38000);
+  assert.equal(defaultedEvent.thermalTemperature.tempPrev, 38000);
+});
+
+test('materializes thermal zone, cooling device, and policy frequency limit counters', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-thermal-limit-'));
+  const outputPath = path.join(tempDir, 'combined.pftrace');
+  const scenario = fixtureScenario();
+  scenario.signals.push(...thermalLimitSignals());
+  const overlay = encodeScenarioOverlay(repoRoot, scenario, {
+    anchorNs: '1000000000',
+    usedPids: new Set(),
+    sequenceId: 464648,
+  });
+  materializeTrace(Buffer.alloc(0), overlay.buffer, outputPath);
+
+  // trace_processor derives the track name from cpu_id, thermal_zone, and the
+  // cooling device type, so these names are the analysis-visible contract.
+  const output = queryTrace(outputPath, `
+    SELECT t.type, t.name, COUNT(*) AS samples, CAST(MIN(c.value) AS INT) AS min_value,
+           CAST(MAX(c.value) AS INT) AS max_value
+    FROM counter c JOIN counter_track t ON c.track_id = t.id
+    WHERE t.type IN ('cpu_max_frequency_limit', 'cpu_min_frequency_limit',
+                     'thermal_temperature', 'cooling_device_counter')
+    GROUP BY t.id
+    ORDER BY t.type, t.name`);
+  assert.equal(output.trim().split(/\r?\n/).slice(1).join('\n'), [
+    '"cooling_device_counter","thermal-cpufreq-2 Cooling Device",2,0,3',
+    '"cpu_max_frequency_limit","Cpu 5 Max Freq Limit",2,1700000,3000000',
+    '"cpu_min_frequency_limit","Cpu 5 Min Freq Limit",2,500000,500000',
+    '"thermal_temperature","cpu-big Temperature",2,62000,96000',
+  ].join('\n'));
+});
+
+test('rejects frequency limits that invert the policy bounds or lose CPU isolation', () => {
+  const inverted = fixtureScenario();
+  inverted.signals.push({
+    type: 'cpu-frequency-limits', at_ns: '200000000', cpu_id: 5,
+    min_freq_khz: 3000000, max_freq_khz: 1700000, cpu: 5,
+  });
+  assert.throws(
+    () => encodeScenarioOverlay(repoRoot, inverted, {anchorNs: '1', usedPids: new Set(), sequenceId: 1}),
+    /min_freq_khz must not exceed max_freq_khz/,
+  );
+
+  const fractionalTarget = fixtureScenario();
+  fractionalTarget.signals.push({
+    type: 'cdev-update', at_ns: '200000000', cdev_type: 'thermal-cpufreq-2', target: 1.5, cpu: 0,
+  });
+  assert.throws(
+    () => encodeScenarioOverlay(repoRoot, fractionalTarget, {anchorNs: '1', usedPids: new Set(), sequenceId: 1}),
+    /cdev-update target must be a non-negative safe integer/,
+  );
+
+  const emptyZone = fixtureScenario();
+  emptyZone.signals.push({
+    type: 'thermal-temperature', at_ns: '200000000', thermal_zone: ' ', temp_mc: 62000, cpu: 0,
+  });
+  assert.throws(
+    () => encodeScenarioOverlay(repoRoot, emptyZone, {anchorNs: '1', usedPids: new Set(), sequenceId: 1}),
+    /thermal_zone must be a non-empty string/,
+  );
+});
+
 test('materializes a typed GPU compute kernel launch', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-generator-gpu-compute-'));
   const outputPath = path.join(tempDir, 'combined.pftrace');
@@ -932,4 +1095,22 @@ test('rebuilds a repository constructed case with matching source hash and prove
   assert.equal(provenance.base_case_id, 'android-startup-heavy');
   assert.equal(provenance.trace_processor.sha256.length, 64);
   assert.match(provenance.trace_processor.version, /^Perfetto /);
+});
+
+test('isolates every policy CPU of the thermal frequency limit case above the base topology', () => {
+  const result = buildCatalogCases(repoRoot, {caseIds: ['thermal-frequency-limit'], check: true});
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].overlay_hash_matches, true);
+  const provenance = JSON.parse(fs.readFileSync(path.join(repoRoot, result[0].provenance_file), 'utf8'));
+  const basePath = resolveCaseTrace(repoRoot, 'android-scroll-customer');
+  const baseCpus = probeTrace(repoRoot, basePath).used_cpus;
+  // cpu_id is a second CPU identity inside the payload. If it were left out of
+  // the isolation map, a policy limit would land on a real base CPU's track.
+  const mapped = Object.entries(provenance.cpu_map);
+  assert.equal(mapped.length, 5);
+  for (const [requested, isolated] of mapped) {
+    assert.ok(baseCpus.has(Number(requested)), `base lacks requested CPU ${requested}`);
+    assert.ok(!baseCpus.has(isolated), `isolated CPU ${isolated} collides with the base topology`);
+  }
 });

@@ -331,6 +331,11 @@ describe('CapabilityManifest contract', () => {
     ['bundled TP revision', (input: BuildCapabilityManifestInput) => {
       (input.traceProcessor as Extract<CapabilityManifestTraceProcessorIdentityV1, {source: 'bundled'}>).gitRevision = GIT_B;
     }],
+    // Two capabilities can share a primaryTable and count different rows, so
+    // what was counted has to be part of the identity.
+    ['probe SQL added', (input: BuildCapabilityManifestInput) => {
+      input.definitions[0].probeSql = 'SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM slice LIMIT 3)';
+    }],
   ])('changes content identity when %s changes', (_name, mutate) => {
     const baseline = buildCapabilityManifest(baseInput());
     const changedInput = baseInput();
@@ -339,6 +344,23 @@ describe('CapabilityManifest contract', () => {
 
     expect(changed.contentHash).not.toBe(baseline.contentHash);
     expect(changed.manifestId).not.toBe(baseline.manifestId);
+  });
+
+  it('separates two probe SQL definitions that share a primary table', () => {
+    const withThermal = baseInput();
+    withThermal.definitions[0].probeSql =
+      "SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM counter WHERE track_id IN (SELECT counter_track.id FROM counter_track WHERE counter_track.type IN ('thermal_temperature')) LIMIT 3)";
+    const withLimits = baseInput();
+    withLimits.definitions[0].probeSql =
+      "SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM counter WHERE track_id IN (SELECT counter_track.id FROM counter_track WHERE counter_track.type IN ('cpu_max_frequency_limit')) LIMIT 3)";
+
+    const thermal = buildCapabilityManifest(withThermal);
+    const limits = buildCapabilityManifest(withLimits);
+
+    expect(thermal.content.capabilities[0].probeSql)
+      .toBe(withThermal.definitions[0].probeSql);
+    expect(thermal.contentHash).not.toBe(limits.contentHash);
+    expect(thermal.manifestId).not.toBe(limits.manifestId);
   });
 
   it('uses the shared canonical content hash exactly', () => {
@@ -443,6 +465,22 @@ describe('CapabilityManifest contract', () => {
     ['empty table', (input: BuildCapabilityManifestInput) => { input.definitions[0].primaryTable = ''; }, 'capability_manifest_empty_primary_table:frame_rendering'],
     ['empty module', (input: BuildCapabilityManifestInput) => { input.definitions[0].requiredModules = ['']; }, 'capability_manifest_empty_required_module:frame_rendering'],
     ['duplicate module', (input: BuildCapabilityManifestInput) => { input.definitions[0].requiredModules = ['android.frames', 'android.frames']; }, 'capability_manifest_duplicate_required_module:frame_rendering:android.frames'],
+    ['empty probe SQL', (input: BuildCapabilityManifestInput) => { input.definitions[0].probeSql = '   '; }, 'capability_manifest_empty_probe_sql:frame_rendering'],
+    ['non-string probe SQL', (input: BuildCapabilityManifestInput) => {
+      (input.definitions[0] as unknown as Record<string, unknown>).probeSql = 7;
+    }, 'capability_manifest_invalid_probe_sql:frame_rendering'],
+    ['non-SELECT probe SQL', (input: BuildCapabilityManifestInput) => { input.definitions[0].probeSql = 'DELETE FROM slice'; }, 'capability_manifest_invalid_probe_sql:frame_rendering'],
+    ['multi-statement probe SQL', (input: BuildCapabilityManifestInput) => {
+      input.definitions[0].probeSql = 'SELECT COUNT(*) FROM slice; DROP TABLE slice';
+    }, 'capability_manifest_invalid_probe_sql:frame_rendering'],
+    // Probe units are joined onto one line inside `(...)`, so a line comment
+    // would swallow the closing paren and every later UNION ALL branch.
+    ['line-commented probe SQL', (input: BuildCapabilityManifestInput) => {
+      input.definitions[0].probeSql = 'SELECT COUNT(*) FROM slice -- trailing';
+    }, 'capability_manifest_invalid_probe_sql:frame_rendering'],
+    ['block-commented probe SQL', (input: BuildCapabilityManifestInput) => {
+      input.definitions[0].probeSql = 'SELECT COUNT(*) /* note */ FROM slice';
+    }, 'capability_manifest_invalid_probe_sql:frame_rendering'],
   ])('rejects invalid registry content: %s', (_name, mutate, code) => {
     const input = baseInput();
     mutate(input);

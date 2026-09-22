@@ -214,7 +214,7 @@ LIMIT 5
 |------|---------|
 | **VSync→FrameEnd 过长** | `invoke_skill("jank_frame_detail", ...)` 查看帧内瓶颈 |
 | **管线深度 ≥3** | 检查 BufferQueue 深度和 BLAST/Legacy 模式 |
-| **持续高延迟 + 低频率** | `invoke_skill("thermal_throttling")` 检查是否热降频 |
+| **持续高延迟 + 低频率** | `invoke_skill("thermal_throttling")` 检查温度/频率；确认是否真被限频以及谁触发，用 `invoke_skill("cpu_frequency_limit_attribution")` |
 | **VSync 周期异常** | `invoke_skill("vrr_detection")` 检查 VRR 状态 |
 
 ### 输出结构必须遵循：

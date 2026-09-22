@@ -53,10 +53,14 @@
       "compose_recomposition_hotspot",
       "consumer_jank_detection",
       "cpu_analysis",
+      "cpu_anomalous_threads_in_range",
       "cpu_cluster_load_in_range",
       "cpu_cluster_mapping_view",
+      "cpu_freq_limit_timeline",
       "cpu_freq_residency_summary",
       "cpu_freq_timeline",
+      "cpu_frequency_limit_attribution",
+      "cpu_frequency_limit_episode",
       "cpu_idle_analysis",
       "cpu_idle_state_residency",
       "cpu_load_in_range",
@@ -71,6 +75,7 @@
       "cpu_topology_detection",
       "cpu_topology_view",
       "cpu_utilization_per_period",
+      "cpu_workload_attribution_in_range",
       "device_state_snapshot",
       "device_state_timeline",
       "dmabuf_analysis",
@@ -227,6 +232,7 @@
       "systemui_module",
       "task_migration_in_range",
       "textureview_producer_frame_timing",
+      "thermal_cooling_device_timeline",
       "thermal_module",
       "thermal_predictor",
       "thermal_throttling",
@@ -319,10 +325,14 @@
       "compose_recomposition_hotspot",
       "consumer_jank_detection",
       "cpu_analysis",
+      "cpu_anomalous_threads_in_range",
       "cpu_cluster_load_in_range",
       "cpu_cluster_mapping_view",
+      "cpu_freq_limit_timeline",
       "cpu_freq_residency_summary",
       "cpu_freq_timeline",
+      "cpu_frequency_limit_attribution",
+      "cpu_frequency_limit_episode",
       "cpu_idle_analysis",
       "cpu_idle_state_residency",
       "cpu_load_in_range",
@@ -337,6 +347,7 @@
       "cpu_topology_detection",
       "cpu_topology_view",
       "cpu_utilization_per_period",
+      "cpu_workload_attribution_in_range",
       "device_state_snapshot",
       "device_state_timeline",
       "fence_wait_decomposition",
@@ -452,6 +463,7 @@
       "systemui_module",
       "task_migration_in_range",
       "textureview_producer_frame_timing",
+      "thermal_cooling_device_timeline",
       "thermal_module",
       "thermal_predictor",
       "thermal_throttling",
@@ -574,10 +586,14 @@
       "compose_recomposition_hotspot",
       "consumer_jank_detection",
       "cpu_analysis",
+      "cpu_anomalous_threads_in_range",
       "cpu_cluster_load_in_range",
       "cpu_cluster_mapping_view",
+      "cpu_freq_limit_timeline",
       "cpu_freq_residency_summary",
       "cpu_freq_timeline",
+      "cpu_frequency_limit_attribution",
+      "cpu_frequency_limit_episode",
       "cpu_idle_analysis",
       "cpu_idle_state_residency",
       "cpu_load_in_range",
@@ -592,6 +608,7 @@
       "cpu_topology_detection",
       "cpu_topology_view",
       "cpu_utilization_per_period",
+      "cpu_workload_attribution_in_range",
       "device_state_snapshot",
       "device_state_timeline",
       "fence_wait_decomposition",
@@ -707,6 +724,7 @@
       "systemui_module",
       "task_migration_in_range",
       "textureview_producer_frame_timing",
+      "thermal_cooling_device_timeline",
       "thermal_module",
       "thermal_predictor",
       "thermal_throttling",
@@ -779,7 +797,8 @@
       "scheduler-cpu-contention",
       "source-analysis-semantic",
       "startup-lifecycle",
-      "system-scheduling-evidence"
+      "system-scheduling-evidence",
+      "thermal-frequency-limit"
     ]
   },
   "sql_sources": {
@@ -1825,6 +1844,48 @@
         ]
       },
       {
+        "target": "cpu_anomalous_threads_in_range",
+        "source_file": "backend/skills/atomic/cpu_anomalous_threads_in_range.skill.yaml",
+        "modules": [
+          {
+            "name": "android.process_metadata",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/process_metadata.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "anomalous_threads",
+            "sha256": "4d7d17186b7450e78b3f8929c860a3b13f28414c0ac9a6b529fe25e97d6cb680",
+            "required_columns": [
+              "window_start_ts",
+              "window_end_ts",
+              "window_dur_ns",
+              "upid",
+              "utid",
+              "process_name",
+              "thread_name",
+              "actor_class",
+              "running_ns",
+              "running_pct_of_window",
+              "sched_slice_count",
+              "avg_slice_us",
+              "switches_per_s",
+              "wakeups_sent_per_s",
+              "waker_evidence",
+              "sustained_runner",
+              "spin_like",
+              "kernel_daemon_heavy",
+              "waker_storm",
+              "signal_count",
+              "share_of_running_pct",
+              "thresholds",
+              "status",
+              "evidence_scope"
+            ]
+          }
+        ]
+      },
+      {
         "target": "cpu_cluster_load_in_range",
         "source_file": "backend/skills/atomic/cpu_cluster_load_in_range.skill.yaml",
         "modules": [],
@@ -1860,6 +1921,107 @@
             "required_columns": [
               "cpu",
               "cluster_type"
+            ]
+          }
+        ]
+      },
+      {
+        "target": "cpu_freq_limit_timeline",
+        "source_file": "backend/skills/atomic/cpu_freq_limit_timeline.skill.yaml",
+        "modules": [
+          {
+            "name": "linux.cpu.frequency",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/linux/cpu/frequency.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "limit_data_check",
+            "sha256": "d46f4493b9512218c56660e62068be97266a046ce4ceabd1fbfe5ed7e5eccb50",
+            "required_columns": [
+              "has_max_limit_track",
+              "has_min_limit_track",
+              "limit_track_count"
+            ]
+          },
+          {
+            "id": "limit_summary",
+            "sha256": "1a6c582dbf739e2e811494577cc848356dc8095c937c49a32d3a32bd4b675f0b",
+            "required_columns": [
+              "window_id",
+              "window_start_ts",
+              "window_end_ts",
+              "window_dur_ns",
+              "policy_cpu",
+              "ucpu",
+              "machine_id",
+              "core_type",
+              "topology_source",
+              "kind",
+              "avg_limit_khz",
+              "min_limit_khz",
+              "max_limit_khz",
+              "reference_max_limit_khz",
+              "reference_basis",
+              "sample_count",
+              "first_sample_ts",
+              "last_sample_ts",
+              "pre_first_sample_ns",
+              "first_sample_state_unknown",
+              "limit_covered_ns",
+              "limit_evidence",
+              "limit_source",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "limit_episodes",
+            "sha256": "b492126382277ac8ca74d6cf510e3596baa63e3241c8f5f49f008a262db26a38",
+            "required_columns": [
+              "episode_id",
+              "policy_cpu",
+              "core_type",
+              "topology_source",
+              "episode_start_ts",
+              "episode_end_ts",
+              "episode_dur_ns",
+              "min_limit_khz",
+              "reference_max_limit_khz",
+              "depth_pct",
+              "change_count",
+              "starts_at_data_start",
+              "ends_at_data_end",
+              "evidence_status",
+              "reference_basis",
+              "thresholds",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "limit_events",
+            "sha256": "692c98dc2ab23687d7b9c8786a96c405815bb1684151787396dbd18ed80ed594",
+            "required_columns": [
+              "ts",
+              "policy_cpu",
+              "core_type",
+              "kind",
+              "prev_limit_khz",
+              "limit_khz",
+              "delta_khz",
+              "direction",
+              "dur_ns",
+              "reference_max_limit_khz",
+              "limit_source",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "limit_unavailable",
+            "sha256": "3e252dd6ee4a9b36257969b13ede6e4cadde4de4a257a6de24c977de5e78c797",
+            "required_columns": [
+              "limit_evidence",
+              "required_ftrace_event",
+              "message"
             ]
           }
         ]
@@ -2147,8 +2309,24 @@
         "modules": [],
         "steps": [
           {
+            "id": "limit_evidence",
+            "sha256": "538a667040e4ff46069a1d8da7243fa1fe60f902a83efc826a46e3ea13f3a200",
+            "required_columns": [
+              "has_limit_track",
+              "episode_count",
+              "policy_count",
+              "deepest_depth_pct",
+              "min_limit_khz",
+              "reference_max_limit_khz",
+              "reference_basis",
+              "evidence_status",
+              "next_step",
+              "evidence_scope"
+            ]
+          },
+          {
             "id": "throttle_detection",
-            "sha256": "086d155cd3d41026ab462368a2de5745dac44caef814c9e7d7a4abb946663f65",
+            "sha256": "b05718b0a1b67eea7b25d86f3c3319f8b697d3b7c1d5f053fa86359c57f197ce",
             "required_columns": [
               "core_type",
               "start_freq_mhz",
@@ -2300,6 +2478,77 @@
               "ts",
               "dur_ms",
               "utilization"
+            ]
+          }
+        ]
+      },
+      {
+        "target": "cpu_workload_attribution_in_range",
+        "source_file": "backend/skills/atomic/cpu_workload_attribution_in_range.skill.yaml",
+        "modules": [
+          {
+            "name": "android.process_metadata",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/process_metadata.sql"
+          },
+          {
+            "name": "intervals.intersect",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/intervals/intersect.sql"
+          },
+          {
+            "name": "linux.cpu.frequency",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/linux/cpu/frequency.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "workload_by_thread",
+            "sha256": "700c05c795445dea86e8060b077848917f93acbecf619ebd744f054a77b6d99a",
+            "required_columns": [
+              "window_id",
+              "window_start_ts",
+              "window_end_ts",
+              "window_dur_ns",
+              "upid",
+              "utid",
+              "pid",
+              "tid",
+              "process_name",
+              "thread_name",
+              "actor_class",
+              "actor_class_basis",
+              "running_ns",
+              "running_pct_of_window",
+              "big_running_ns",
+              "medium_running_ns",
+              "little_running_ns",
+              "unknown_core_running_ns",
+              "freq_weighted_work_mhz_ms",
+              "share_of_total_work_pct",
+              "sched_slice_count",
+              "freq_covered_ns",
+              "frequency_evidence",
+              "sched_evidence",
+              "cpu_count",
+              "window_capacity_ns",
+              "normalization_basis",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "workload_summary",
+            "sha256": "74047808f0c408cf542c55bc37c9719e9a8d606b88285c423aa8d4f58c961770",
+            "required_columns": [
+              "window_start_ts",
+              "window_end_ts",
+              "window_dur_ns",
+              "breakdown_kind",
+              "breakdown_key",
+              "running_ns",
+              "busy_pct",
+              "thread_count",
+              "denominator_basis",
+              "sched_evidence",
+              "evidence_scope"
             ]
           }
         ]
@@ -5007,6 +5256,75 @@
         ]
       },
       {
+        "target": "thermal_cooling_device_timeline",
+        "source_file": "backend/skills/atomic/thermal_cooling_device_timeline.skill.yaml",
+        "modules": [
+          {
+            "name": "linux.cpu.frequency",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/linux/cpu/frequency.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "cooling_data_check",
+            "sha256": "6e25289530bd79feb2c6289761f4581d3002988149c399f1bc2d97e9fc0bb670",
+            "required_columns": [
+              "has_cdev_data",
+              "cdev_track_count"
+            ]
+          },
+          {
+            "id": "cooling_summary",
+            "sha256": "4ad94e634d3aa12fa7dfa6092ae09cab02955918460c65e3ae071895b4a68c47",
+            "required_columns": [
+              "window_id",
+              "window_start_ts",
+              "window_end_ts",
+              "window_dur_ns",
+              "cdev_name",
+              "cdev_kind_hint",
+              "cdev_kind_basis",
+              "max_state",
+              "min_state",
+              "mean_state",
+              "transition_count",
+              "active_ns",
+              "active_pct",
+              "first_ts",
+              "last_ts",
+              "covered_ns",
+              "cooling_evidence",
+              "cooling_source",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "cooling_transitions",
+            "sha256": "109caadfd5ad19c4b8609b7d916c8d18193773f0c20389d63b8ec55212922c5e",
+            "required_columns": [
+              "ts",
+              "cdev_name",
+              "cdev_kind_hint",
+              "prev_state",
+              "state",
+              "direction",
+              "dur_ns",
+              "cooling_source",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "cooling_unavailable",
+            "sha256": "54fe7c5742f73794c9f1c3ec3eddecf9156cc8d01636dbff82c4321624cfedeb",
+            "required_columns": [
+              "cooling_evidence",
+              "required_ftrace_event",
+              "message"
+            ]
+          }
+        ]
+      },
+      {
         "target": "thermal_predictor",
         "source_file": "backend/skills/atomic/thermal_predictor.skill.yaml",
         "modules": [],
@@ -7062,6 +7380,274 @@
             "sha256": "f4b43200884ba12e6f6d06ce86644fa945a7936d47400a351e92729a58fd17a3",
             "required_columns": [
               "has_cache_counter"
+            ]
+          }
+        ]
+      },
+      {
+        "target": "cpu_frequency_limit_attribution",
+        "source_file": "backend/skills/composite/cpu_frequency_limit_attribution.skill.yaml",
+        "modules": [
+          {
+            "name": "android.process_metadata",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/process_metadata.sql"
+          },
+          {
+            "name": "linux.cpu.frequency",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/linux/cpu/frequency.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "data_check",
+            "sha256": "1a9d65c2df930f04e2c1311003aa721bb19648735c5b8d4a8adbe4a7e6f67137",
+            "required_columns": [
+              "has_limit_data",
+              "has_cdev_data",
+              "has_temperature_data",
+              "has_cpufreq_data",
+              "has_sched_data"
+            ]
+          },
+          {
+            "id": "analysis_window",
+            "sha256": "96decbe778747f88e4ae94128d135ef7a81572c49dcef34f574e1d60049f0190",
+            "required_columns": [
+              "window_start_ts",
+              "window_end_ts",
+              "window_dur_ns",
+              "window_source",
+              "data_start_ts",
+              "data_end_ts",
+              "window_basis"
+            ]
+          },
+          {
+            "id": "episodes",
+            "sha256": "48a57b47d2cb855decf96fe376b95816293507b870a36c8ac60647141f690dac",
+            "required_columns": [
+              "episode_id",
+              "policy_cpu",
+              "core_type",
+              "topology_source",
+              "episode_start_ts",
+              "episode_end_ts",
+              "episode_dur_ns",
+              "min_limit_khz",
+              "reference_max_limit_khz",
+              "reference_basis",
+              "depth_pct",
+              "change_count",
+              "starts_at_data_start",
+              "ends_at_data_end",
+              "evidence_status",
+              "impact_rank_score",
+              "before_start_ts",
+              "before_end_ts",
+              "window_clipped_to_data_start",
+              "who_start_ts",
+              "who_end_ts",
+              "package",
+              "process_name",
+              "lookback_ms",
+              "who_window_ms",
+              "cooling_coincidence_ms",
+              "top_n",
+              "sustained_pct",
+              "spin_avg_slice_us",
+              "spin_switches_per_s",
+              "waker_per_s",
+              "kernel_daemon_share_pct",
+              "thresholds",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "attribution_summary",
+            "sha256": "3734b5a8ec4a68c6973f432326e014afd718ad7d17607fdcab7f32bd7cf7dc49",
+            "required_columns": [
+              "classification",
+              "episode_count",
+              "deepest_depth_pct",
+              "longest_episode_ns",
+              "cooling_confirmed_episodes",
+              "coincident_transition_episodes",
+              "cooling_active_episodes",
+              "daemon_suspected_episodes",
+              "onset_unknown_episodes",
+              "top_episode_id",
+              "top_before_start_ts",
+              "top_before_end_ts",
+              "target_running_ns",
+              "total_running_ns",
+              "target_share_pct",
+              "target_dominated_before_limit",
+              "target_scope",
+              "description",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "vendor_signal_discovery",
+            "sha256": "f674e1693f41958834438c9d4fc1c9c36a6e83c6db0532f1430e15e014e06dc3",
+            "required_columns": [
+              "candidate_kind",
+              "candidate_name",
+              "track_type",
+              "source_process",
+              "signature_kind",
+              "platform_hint",
+              "matched_pattern",
+              "sample_count",
+              "first_ts",
+              "last_ts",
+              "exploration_hint",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "no_limit_capture_advice",
+            "sha256": "f28559e70563a8e830d24f74ed56f52dd2cf32fca67ee14eb3886f5b97560cb4",
+            "required_columns": [
+              "limit_evidence",
+              "required_ftrace_event",
+              "also_useful",
+              "message",
+              "evidence_scope"
+            ]
+          }
+        ]
+      },
+      {
+        "target": "cpu_frequency_limit_episode",
+        "source_file": "backend/skills/composite/cpu_frequency_limit_episode.skill.yaml",
+        "modules": [
+          {
+            "name": "android.process_metadata",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/process_metadata.sql"
+          },
+          {
+            "name": "linux.cpu.frequency",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/linux/cpu/frequency.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "episode_windows",
+            "sha256": "d92dd35d7f592040c5f483e5796dfad659ff2dc645b1482cb65ad61c9e267ab2",
+            "required_columns": [
+              "episode_id",
+              "policy_cpu",
+              "core_type",
+              "episode_start_ts",
+              "episode_end_ts",
+              "before_start_ts",
+              "before_end_ts",
+              "before_window_ns",
+              "window_clipped_to_data_start",
+              "who_start_ts",
+              "who_end_ts",
+              "who_window_clipped",
+              "starts_at_data_start",
+              "data_start_ts",
+              "data_end_ts",
+              "window_basis"
+            ]
+          },
+          {
+            "id": "who_cooling",
+            "sha256": "64a498f32762aaa78656171675bccb53b450b2785f6c70cd707c7a4f251ca2ca",
+            "required_columns": [
+              "ts",
+              "rel_to_limit_ns",
+              "cdev_name",
+              "cdev_kind_hint",
+              "cdev_kind_basis",
+              "prev_state",
+              "state",
+              "direction",
+              "dur_ns",
+              "cooling_source",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "who_daemon",
+            "sha256": "5b436fd8462cd569c1bd0947c0d014235029c95c0237bbb5a3a43b7eae2d5b88",
+            "required_columns": [
+              "process_name",
+              "thread_name",
+              "signature_kind",
+              "platform_hint",
+              "matched_pattern",
+              "who_running_ns",
+              "who_slice_count",
+              "who_rate_ns_per_s",
+              "baseline_rate_ns_per_s",
+              "rate_ratio",
+              "ran_before_limit_ns",
+              "last_run_end_before_ts",
+              "lead_ns",
+              "match_basis",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "temperature_context",
+            "sha256": "c554a56aa5d0e4c23a92875c4a30ec216afe1d537bbc554af812fcadb2276fb3",
+            "required_columns": [
+              "sensor_name",
+              "sample_count_in_window",
+              "track_basis",
+              "unit_basis",
+              "sample_quality",
+              "first_temp_c",
+              "last_temp_c",
+              "max_temp_c",
+              "rise_c",
+              "first_ts",
+              "last_ts",
+              "temperature_evidence",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "non_cpu_heat_context",
+            "sha256": "df2916a57ea0274f8cb8e101b477a5947e6b157de3d3cfd83ef245fd1a8e016d",
+            "required_columns": [
+              "source_kind",
+              "source_key",
+              "detail",
+              "observed_count",
+              "running_ns",
+              "first_ts",
+              "last_ts",
+              "interpretation",
+              "evidence_scope"
+            ]
+          },
+          {
+            "id": "who_verdict",
+            "sha256": "11b152fc0ef248d45697bc26c52dbb5439558aa96e7edb2ecf5e9fea709f75df",
+            "required_columns": [
+              "episode_id",
+              "policy_cpu",
+              "core_type",
+              "who_verdict",
+              "cooling_transition_coincident",
+              "cooling_nearest_transition_ns",
+              "cooling_nearest_transition_ts",
+              "cooling_active_ns",
+              "cooling_devices_active",
+              "cooling_transitions_in_who_window",
+              "daemon_ran_before_limit_ns",
+              "daemon_threads_before_limit",
+              "onset_observed",
+              "onset_note",
+              "thresholds",
+              "verdict_basis",
+              "interpretation",
+              "evidence_scope"
             ]
           }
         ]
@@ -10767,11 +11353,13 @@
         "steps": [
           {
             "id": "data_check",
-            "sha256": "508fa1537744ae55c9fee916097c71110ef3553ea488fba2aed7d3db2358d167",
+            "sha256": "d3e1e6ce448e432e3466653e873a500f3c935b74b424adc34224956e362a89c7",
             "required_columns": [
               "has_thermal_data",
               "has_freq_data",
-              "has_gpu_freq_data"
+              "has_gpu_freq_data",
+              "has_limit_data",
+              "has_cdev_data"
             ]
           },
           {
@@ -10782,6 +11370,22 @@
               "window_end_ts",
               "window_ms",
               "window_source"
+            ]
+          },
+          {
+            "id": "direct_limit_evidence",
+            "sha256": "a5a2f114dbc0fcf1b0047966ed1f059c78a9c606d51a358e7b71ef9cf7fac929",
+            "required_columns": [
+              "episode_count",
+              "policy_count",
+              "deepest_depth_pct",
+              "longest_episode_ns",
+              "cooling_confirmed_episodes",
+              "onset_unknown_episodes",
+              "has_cdev_data",
+              "thermal_throttling_evidence",
+              "next_step",
+              "evidence_scope"
             ]
           },
           {
@@ -10860,12 +11464,15 @@
           },
           {
             "id": "root_cause_classification",
-            "sha256": "a2c2f17ad5ae52d3470891492e40453ce7de5b1e27a8345dc86d236c7fff00f3",
+            "sha256": "24753979002555d511615511531a7846553e74d773c51f63efc8107d6c44ab45",
             "required_columns": [
               "classification",
               "peak_temp_c",
               "throttled_cpu_count",
               "severe_drop_count",
+              "thermal_throttling_evidence",
+              "limit_episode_count",
+              "next_step",
               "description"
             ]
           },
@@ -12053,9 +12660,11 @@
           },
           {
             "id": "cooling_activity",
-            "sha256": "4b39914d612618abc713b5ddbf067ed085d719216aa8c2ea16ec5a30d3920645",
+            "sha256": "296b4df7f2053f8ea7179bbe7ee85d94d444a9f96639f56c51fd85dd872ab540",
             "required_columns": [
               "cooling_device",
+              "track_type",
+              "match_basis",
               "min_level",
               "max_level",
               "avg_level",

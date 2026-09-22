@@ -16,6 +16,7 @@ import {
 import {canonicalContentHash} from '../../services/selfEvolution/canonicalJson';
 import type { TraceCompleteness } from '../types';
 import {
+  capabilityProbeKey,
   CAPABILITY_REGISTRY,
   clearTraceCompletenessProbeCache,
   probeTraceCompleteness,
@@ -77,9 +78,24 @@ function legacySnapshot(result: TraceCompleteness): TraceCompleteness {
   };
 }
 
+// Probe counts are keyed the way the prober keys them (by table for a plain
+// capability, by `cap:<id>` for a `probeSql` one); keying by table would
+// collapse the capabilities that share `counter`.
+const PROBE_KEY_TO_TABLE = new Map(
+  CAPABILITY_REGISTRY.map(capability =>
+    [capabilityProbeKey(capability), capability.primaryTable]),
+);
+
+/** Schema names the mock reports for a given set of probe keys. */
+function schemaTablesForProbeKeys(probeCounts: Record<string, number>): string[] {
+  return [...new Set(
+    Object.keys(probeCounts).map(key => PROBE_KEY_TO_TABLE.get(key) ?? key),
+  )];
+}
+
 function allCapabilityTables(rowCount: number): Record<string, number> {
   return Object.fromEntries(
-    CAPABILITY_REGISTRY.map(capability => [capability.primaryTable, rowCount]),
+    CAPABILITY_REGISTRY.map(capability => [capabilityProbeKey(capability), rowCount]),
   );
 }
 
@@ -108,7 +124,7 @@ function makeTraceProcessorMock(tables: Record<string, number>) {
     if (sql.includes('sqlite_master')) {
       return {
         columns: ['name'],
-        rows: Object.keys(tables).map(name => [name]),
+        rows: schemaTablesForProbeKeys(tables).map(name => [name]),
         durationMs: 1,
       };
     }
@@ -121,12 +137,14 @@ function makeTraceProcessorMock(tables: Record<string, number>) {
       };
     }
 
-    const tableCountMatch = sql.match(/SELECT '([^']+)' AS tbl, COUNT\(\*\) AS cnt FROM/);
-    if (tableCountMatch) {
-      const tableName = tableCountMatch[1];
+    // Single-unit fallback: the prober runs the same discriminated SELECT it
+    // would have put into the batch.
+    const probeKeyMatch = sql.match(/^SELECT '([^']+)' AS tbl, /);
+    if (probeKeyMatch) {
+      const probeKey = probeKeyMatch[1];
       return {
         columns: ['tbl', 'cnt'],
-        rows: [[tableName, tables[tableName] ?? 0]],
+        rows: [[probeKey, tables[probeKey] ?? 0]],
         durationMs: 1,
       };
     }
@@ -571,7 +589,147 @@ describe('probeTraceCompleteness', () => {
       'cpu_freq_idle',
       'gpu_work_period',
       'network_packets',
+      'thermal_throttling',
+      'cpu_freq_limits',
     ]));
+    expect(ids.indexOf('cpu_freq_limits')).toBe(ids.indexOf('thermal_throttling') + 1);
+  });
+
+  it('probes thermal and frequency-limit capabilities through typed counter tracks', () => {
+    const byId = new Map(CAPABILITY_REGISTRY.map(cap => [cap.id, cap]));
+    const thermal = byId.get('thermal_throttling');
+    const limits = byId.get('cpu_freq_limits');
+
+    // The Pixel-only stdlib view is gone: both read counter rows carried by the
+    // typed tracks trace_processor assigns on every platform.
+    expect(JSON.stringify(CAPABILITY_REGISTRY)).not.toContain('android_dvfs_counters');
+    expect(thermal).toMatchObject({
+      displayName: '热区温度 / 散热设备',
+      primaryTable: 'counter',
+      priority: 'recommended',
+    });
+    expect(thermal?.probeSql).toContain("counter_track.type IN ('thermal_temperature', 'cooling_device_counter')");
+    expect(thermal?.captureHint).toContain('thermal/thermal_temperature');
+    expect(thermal?.captureHint).toContain('thermal/cdev_update');
+    expect(limits).toMatchObject({
+      displayName: 'CPU 频率上下限（限频）',
+      primaryTable: 'counter',
+      priority: 'recommended',
+    });
+    expect(limits?.probeSql).toContain("counter_track.type IN ('cpu_max_frequency_limit', 'cpu_min_frequency_limit')");
+    expect(limits?.captureHint).toContain('power/cpu_frequency_limits');
+    // Both bound their count at the shared insufficiency threshold, so the
+    // row-threshold classification keeps its meaning.
+    for (const probeSql of [thermal?.probeSql, limits?.probeSql]) {
+      expect(probeSql).toMatch(/^SELECT COUNT\(\*\) AS cnt FROM \(SELECT 1 FROM counter .* LIMIT 3\)$/);
+    }
+  });
+
+  it('keeps every registry probeSql within the shape the prober will execute', () => {
+    // The prober refuses to interpolate anything outside this shape, and a
+    // refusal reports the capability as missing. Since the registry is a module
+    // constant, this assertion is the only thing standing between a bad edit and
+    // a capability that silently stops being probed.
+    const executable = /^SELECT\s(?:(?!--|\/\*)[^;])*$/i;
+    const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
+    for (const cap of CAPABILITY_REGISTRY) {
+      expect(cap.id).toMatch(identifier);
+      expect(cap.primaryTable).toMatch(identifier);
+      if (cap.probeSql !== undefined) {
+        expect(cap.probeSql.trim()).toMatch(executable);
+      }
+    }
+  });
+
+  it.each([
+    ['available', 3, 'available'],
+    ['insufficient', 1, 'insufficient'],
+    ['missing at zero', 0, 'missingConfig'],
+  ] as const)('classifies a probeSql capability as %s', async (_name, rowCount, bucket) => {
+    const tps = makeTraceProcessorMock({
+      'cap:thermal_throttling': rowCount,
+      'cap:cpu_freq_limits': rowCount,
+    });
+
+    const result = await probeTraceCompleteness(tps, 'trace-1');
+
+    const probed = result[bucket];
+    expect(probed.map(cap => cap.id)).toEqual(expect.arrayContaining([
+      'thermal_throttling',
+      'cpu_freq_limits',
+    ]));
+    // The reported label stays the table; the row estimate is the typed count.
+    expect(probed.find(cap => cap.id === 'thermal_throttling'))
+      .toMatchObject({primaryTable: 'counter', rowEstimate: rowCount});
+  });
+
+  it('says the shared table lacks this capability rather than that it is empty', async () => {
+    const tps = makeTraceProcessorMock({
+      'cap:thermal_throttling': 0,
+      'cap:cpu_freq_limits': 0,
+    });
+
+    const result = await probeTraceCompleteness(tps, 'trace-1');
+
+    const reason = result.missingConfig.find(cap => cap.id === 'cpu_freq_limits')?.reason ?? '';
+    expect(reason).toContain('表 counter 中没有该能力所需的数据');
+    expect(reason).not.toContain('表 counter 存在但无数据');
+    expect(reason).toContain('power/cpu_frequency_limits');
+  });
+
+  it('batches one discriminated probe per capability and reuses the shared table once', async () => {
+    const tps = makeTraceProcessorMock(allCapabilityTables(3));
+
+    await probeTraceCompleteness(tps, 'trace-1');
+
+    const batchSql = tps.query.mock.calls
+      .map((call: unknown[]) => String(call[1]))
+      .find((sql: string) => sql.includes('UNION ALL')) ?? '';
+    expect(batchSql).toContain("SELECT 'cap:thermal_throttling' AS tbl, (SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM counter ");
+    expect(batchSql).toContain("SELECT 'cap:cpu_freq_limits' AS tbl, (SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM counter ");
+    // 'counter' is the primary table of two capabilities; it must not also be
+    // probed as a plain table unit.
+    expect(batchSql).not.toContain("SELECT 'counter' AS tbl");
+  });
+
+  it('falls back to individual probes for probeSql capabilities when the batch fails', async () => {
+    const tps = makeTraceProcessorMock(allCapabilityTables(3));
+    const batched = tps.query.getMockImplementation();
+    tps.query.mockImplementation(async (traceId: string, sql: string) => {
+      if (sql.includes('UNION ALL')) throw new Error('batch probe rejected');
+      return batched!(traceId, sql);
+    });
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await probeTraceCompleteness(tps, 'trace-1');
+
+    // The row estimate has to survive: a fallback that read the discriminator
+    // column instead of the count would still land every capability in
+    // `available`, just with a nonsense estimate.
+    expect(legacySnapshot(result)).toEqual(
+      expectedAllAvailableLegacy(result.diagnosedAt),
+    );
+    const fallbackSql = tps.query.mock.calls
+      .map((call: unknown[]) => String(call[1]))
+      .filter((sql: string) => sql.startsWith("SELECT 'cap:"));
+    expect(fallbackSql).toHaveLength(2);
+  });
+
+  it('binds probeSql into the capability manifest identity', async () => {
+    const result = await probeWithManifestDependencies(
+      makeTraceProcessorMock(allCapabilityTables(3)),
+      'trace-1',
+      readyDependencies(),
+    );
+
+    const resolution = result.capabilityManifestResolution as any;
+    expect(resolution.status).toBe('ready');
+    const entry = resolution.manifest.content.capabilities
+      .find((cap: any) => cap.id === 'thermal_throttling');
+    expect(entry.probeSql).toBe(
+      CAPABILITY_REGISTRY.find(cap => cap.id === 'thermal_throttling')?.probeSql,
+    );
+    expect(entry.primaryTable).toBe('counter');
   });
 
   it('freezes the legacy five-field result before attaching shadow resolution', async () => {

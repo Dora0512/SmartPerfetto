@@ -416,7 +416,8 @@
           "high_temp_periods",
           "throttling_events",
           "cooling_activity",
-          "thermal_cpu_correlation"
+          "thermal_cpu_correlation",
+          "thermal_diagnosis"
         ],
         "required_sql_steps": [
           "temperature_overview",
@@ -500,6 +501,7 @@
           "data_check",
           "expert_analysis_window",
           "thermal_predictor_probe",
+          "direct_limit_evidence",
           "thermal_overview",
           "cpu_freq_overview",
           "gpu_power_probe",
@@ -514,6 +516,7 @@
         "required_sql_steps": [
           "data_check",
           "expert_analysis_window",
+          "direct_limit_evidence",
           "thermal_overview",
           "cpu_freq_overview",
           "thermal_timeline",
@@ -525,6 +528,7 @@
         ],
         "forced_sql_steps": [
           "expert_analysis_window",
+          "direct_limit_evidence",
           "thermal_overview",
           "cpu_freq_overview",
           "thermal_timeline",
@@ -558,6 +562,7 @@
         "source_file": "backend/skills/composite/thermal_throttling_chain.skill.yaml",
         "parameters": {},
         "required_steps": [
+          "limit_attribution",
           "thermal",
           "dvfs",
           "cpu_idle",

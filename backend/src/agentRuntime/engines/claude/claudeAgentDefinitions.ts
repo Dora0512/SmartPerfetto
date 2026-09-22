@@ -176,7 +176,7 @@ ${archGuidance}
 ## 工具使用
 - 优先使用 invoke_skill：cpu_analysis, memory_analysis, binder_analysis, scheduling_analysis
 - Range-based skills：cpu_load_in_range, sched_latency_in_range, lock_contention_in_range
-- 热降频：thermal_throttling, cpu_throttling_in_range
+- 热降频/限频：thermal_throttling, cpu_throttling_in_range, cpu_frequency_limit_attribution
 - 需要自定义查询时，先调 lookup_sql_schema 确认表/列名再写 SQL
 - 调用 invoke_skill 时使用 process_name 参数
 

@@ -26,10 +26,15 @@ const SUPPORTED_SIGNAL_TYPES = new Set([
   'atrace-slice', 'atrace-counter', 'atrace-async-slice', 'atrace-async-track-slice',
   'sched-running', 'sched-switch', 'sched-waking', 'process-stats', 'battery-counters', 'power-rail',
   'gpu-work-period', 'gpu-compute-kernel', 'gpu-frequency', 'gpu-power-state',
-  'cpu-frequency', 'cpu-idle', 'irq-span', 'frame-timeline', 'lmk-kill',
+  'cpu-frequency', 'cpu-frequency-limits', 'cpu-idle', 'thermal-temperature', 'cdev-update',
+  'irq-span', 'frame-timeline', 'lmk-kill',
   'managed-heap-graph', 'anr-event', 'perf-sample', 'android-log',
   'atrace-track-instant', 'android-input-motion', 'android-input-dispatch',
 ]);
+// Signals that name a CPU twice: once as the ftrace stream (`cpu`) and once as
+// the payload identity (`cpu_id`). Both must be isolated together so an overlay
+// never rewrites a real CPU's counters in the base trace.
+const CPU_ID_SIGNAL_TYPES = new Set(['cpu-frequency', 'cpu-frequency-limits', 'cpu-idle']);
 const ANDROID_LOG_IDS = new Map([
   ['MAIN', 'LID_MAIN'],
   ['RADIO', 'LID_RADIO'],
@@ -835,6 +840,44 @@ function encodeScenarioOverlay(repoRoot, scenario, options) {
           state: nonNegativeInteger(signal.value, 'cpu-frequency value'),
         },
       });
+    } else if (signal.type === 'cpu-frequency-limits') {
+      // Policy-level DVFS clamp. trace_processor keys the resulting
+      // cpu_max_frequency_limit / cpu_min_frequency_limit tracks by cpu_id,
+      // which is the policy leader CPU rather than every CPU in the policy.
+      const minFreq = uint32(signal.min_freq_khz, 'cpu-frequency-limits min_freq_khz');
+      const maxFreq = uint32(signal.max_freq_khz, 'cpu-frequency-limits max_freq_khz');
+      if (minFreq > maxFreq) {
+        throw new Error('cpu-frequency-limits min_freq_khz must not exceed max_freq_khz');
+      }
+      eventsForCpu(signal.cpu ?? signal.cpu_id).push({
+        timestamp,
+        pid: 0,
+        cpuFrequencyLimits: {
+          cpuId: nonNegativeInteger(signal.cpu_id, 'cpu-frequency-limits cpu_id'),
+          minFreq,
+          maxFreq,
+        },
+      });
+    } else if (signal.type === 'thermal-temperature') {
+      eventsForCpu(signal.cpu ?? 0).push({
+        timestamp,
+        pid: 0,
+        thermalTemperature: {
+          id: int32(signal.id ?? 0, 'thermal-temperature id'),
+          temp: int32(signal.temp_mc, 'thermal-temperature temp_mc'),
+          tempPrev: int32(signal.temp_prev_mc ?? signal.temp_mc, 'thermal-temperature temp_prev_mc'),
+          thermalZone: nonEmptyString(signal.thermal_zone, 'thermal-temperature thermal_zone'),
+        },
+      });
+    } else if (signal.type === 'cdev-update') {
+      eventsForCpu(signal.cpu ?? 0).push({
+        timestamp,
+        pid: 0,
+        cdevUpdate: {
+          target: nonNegativeSafeInteger(signal.target, 'cdev-update target'),
+          type: nonEmptyString(signal.cdev_type, 'cdev-update cdev_type'),
+        },
+      });
     } else if (signal.type === 'irq-span') {
       const end = absoluteTimestamp(timestamp, signal.duration_ns, `scenario.signals[${index}].duration_ns`);
       const irq = nonNegativeInteger(signal.irq, 'irq-span irq');
@@ -1082,7 +1125,7 @@ function isolateScenarioCpus(scenario, usedCpus) {
     scenario.signals
       .flatMap((signal) => [
         signal.cpu,
-        ...(['cpu-frequency', 'cpu-idle'].includes(signal.type) ? [signal.cpu_id] : []),
+        ...(CPU_ID_SIGNAL_TYPES.has(signal.type) ? [signal.cpu_id] : []),
         ...(signal.type === 'sched-waking' ? [signal.target_cpu] : []),
       ])
       .filter((cpu) => Number.isInteger(cpu))
@@ -1103,7 +1146,7 @@ function isolateScenarioCpus(scenario, usedCpus) {
       signals: scenario.signals.map((signal) => ({
         ...signal,
         ...(Number.isInteger(signal.cpu) ? {cpu: cpuMap[signal.cpu]} : {}),
-        ...(['cpu-frequency', 'cpu-idle'].includes(signal.type) ? {cpu_id: cpuMap[signal.cpu_id]} : {}),
+        ...(CPU_ID_SIGNAL_TYPES.has(signal.type) ? {cpu_id: cpuMap[signal.cpu_id]} : {}),
         ...(signal.type === 'sched-waking' ? {target_cpu: cpuMap[signal.target_cpu]} : {}),
       })),
     },

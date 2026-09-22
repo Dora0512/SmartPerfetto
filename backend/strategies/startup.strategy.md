@@ -391,7 +391,7 @@ fetch_artifact("art-N", detail="rows", offset=0, limit=50)  // 对每个关键 a
 | D-state / io_wait / blocked_function | `lookup_knowledge("thread-state-blocked-reason")` | 出现不可中断等待、io_wait 或关键 blocked_function，需要解释 kernel wchan 证据边界 |
 | GC 压力 | `lookup_knowledge("gc-dynamics")` | GC 占主线程时间 >5% |
 | CPU 调度 / 大小核 / 升频 | `lookup_knowledge("cpu-scheduler")` | Q2>15% 或 CPU 争抢 >1.5x 或升频异常 |
-| Thermal 限频 | `lookup_knowledge("thermal-throttling")` | 均频远低于峰值或检测到限频 |
+| Thermal 限频 | `lookup_knowledge("thermal-throttling")`；要归因到触发源时 `invoke_skill("cpu_frequency_limit_attribution")` | 均频远低于峰值或检测到限频 |
 | DEX/OAT 加载、ART 运行时 | Agent 自行编写背景知识（当前无专用模板） | bindApplication 阶段 IO 为主因 |
 
 📚 知识块展示格式：
@@ -463,7 +463,7 @@ invoke_skill("battery_charge_timeline", {
 
 交叉验证：
 - 若启动窗口能耗高，再调用 `app_process_starts_summary` 判断是否有进程反复拉起
-- 若 DVFS/温控相关，再调用 `android_dvfs_counter_stats` 或 `thermal_throttling`
+- 若 DVFS/温控相关，再调用 `thermal_throttling`；要判定“谁限的频、限频前跑了什么”用 `invoke_skill("cpu_frequency_limit_attribution")`（`android_dvfs_counter_stats` 只覆盖 Pixel/Tensor 的 counter 命名，其他平台通常为空）
 - 若 GPU 首帧渲染占比高且 `gpu_work_period` 可用，再调用 `android_gpu_work_period_track`
 
 输出必须标明可信度：Wattson 量化归因 / 电池采样趋势 / 数据不足。

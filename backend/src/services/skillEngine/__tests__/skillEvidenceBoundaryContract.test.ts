@@ -47,20 +47,21 @@ function thermalQuery(db: Database.Database, stepId: string, start = 'NULL', end
   const fragments = (step.sql_fragments ?? []).map((file: string) => readBackendFile(`skills/${file}`)).join('\n,\n');
   let sql: string = step.sql;
   if (fragments) sql = /^WITH\s/i.test(sql) ? sql.replace(/^WITH\s/i, `WITH ${fragments}\n,\n`) : `WITH ${fragments}\n${sql}`;
-  sql = sql.replace(/\$\{start_ts\}/g, start).replace(/\$\{end_ts\}/g, end);
+  sql = sql.replace(/\$\{start_ts\}/g, start).replace(/\$\{end_ts\}/g, end)
+    .replace(/\$\{[^}|]+\|([^}]*)\}/g, (_: string, fallback: string) => fallback);
   return db.prepare(sql).all();
 }
 
 function temperatureFixture(): Database.Database {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE counter(id INTEGER PRIMARY KEY, track_id INTEGER, ts INTEGER, value REAL);
-    CREATE TABLE counter_track(id INTEGER, name TEXT, unit TEXT);
+    CREATE TABLE counter_track(id INTEGER, name TEXT, unit TEXT, type TEXT);
     CREATE TABLE cpu_counter_track(id INTEGER, cpu INTEGER, name TEXT);`);
   return db;
 }
 
-function addTemperature(db: Database.Database, id: number, name: string, unit: string | null, values: number[], interval = 1000000000) {
-  db.prepare('INSERT INTO counter_track VALUES(?,?,?)').run(id,name,unit);
+function addTemperature(db: Database.Database, id: number, name: string, unit: string | null, values: number[], interval = 1000000000, type: string | null = null) {
+  db.prepare('INSERT INTO counter_track(id,name,unit,type) VALUES(?,?,?,?)').run(id,name,unit,type);
   values.forEach((value, index) => db.prepare('INSERT INTO counter(track_id,ts,value) VALUES(?,?,?)').run(id,index*interval,value));
 }
 
@@ -78,6 +79,17 @@ describe('temperature evidence quality and DVFS causal boundary', () => {
       expect(thermalQuery(db,'root_cause_classification')[0]).toMatchObject({classification:'DATA_SUSPECT',peak_temp_c:35.9,throttled_cpu_count:null});
       expect(thermalQuery(db,'thermal_timeline').every(row=>row.sensor_track_id===1)).toBe(true);
       expect(thermalQuery(db,'high_temp_periods')).toEqual([]);
+    } finally {db.close();}
+  });
+
+  it('reads Perfetto-typed thermal_temperature tracks as millidegrees regardless of value range', () => {
+    const db = temperatureFixture();
+    try {
+      addTemperature(db,1,'cpu-big Temperature',null,[34000,35000,36000,37000,38000,39000],1000000000,'thermal_temperature');
+      addTemperature(db,2,'skin-ish Temperature',null,[34,35,36,37,38,39]);
+      const rows = thermalQuery(db,'thermal_overview');
+      expect(rows.find(row=>row.sensor_track_id===1)).toMatchObject({unit_basis:'perfetto_track_type',sample_quality:'accepted',max_temp_c:39});
+      expect(rows.find(row=>row.sensor_track_id===2)).toMatchObject({unit_basis:'inferred_from_track_range',sample_quality:'accepted',max_temp_c:39});
     } finally {db.close();}
   });
 
@@ -125,7 +137,8 @@ describe('temperature evidence quality and DVFS causal boundary', () => {
       const predictor = yaml.load(readBackendFile('skills/atomic/thermal_predictor.skill.yaml')) as any;
       const run = (sql: string) => db.prepare(sql.replace(/\$\{([^}]+)\}/g, (_: string,key: string)=> {
         if(key==='start_ts') return '0'; if(key==='end_ts') return '3000000000';
-        const fallback = key.split('|')[1]; if(!fallback) throw new Error(key); return fallback;
+        const fallback = key.split('|')[1]; if(fallback!==undefined) return fallback;
+        if(/^[a-z_]+\.data\[/.test(key)) return ''; throw new Error(key);
       })).all() as any[];
       expect(run(range.steps.find((step:any)=>step.id==='throttle_detection').sql)[0]).toMatchObject({frequency_variation_detected:1,throttle_detected:null,evidence_status:'thermal_evidence_missing'});
       expect(run(predictor.sql)[0]).toMatchObject({frequency_trend_risk:'high',thermal_risk:'unknown'});
