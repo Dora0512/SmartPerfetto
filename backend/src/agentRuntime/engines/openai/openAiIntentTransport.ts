@@ -16,6 +16,7 @@ import {
   type IntentTransportResult,
   type IntentTransportScope,
 } from '../../intentTransport';
+import {readChatCompletionStream, readResponsesStream} from './openAiIntentStream';
 
 export interface OpenAiIntentTransportInput extends IntentTransportInput {
   config: Pick<OpenAIAgentConfig, 'baseURL' | 'apiKey' | 'lightModel' | 'protocol'>;
@@ -131,7 +132,8 @@ type ValidatedIntentConfig = {
 /**
  * One request in the pinned native protocol; truncation never starts another
  * call. A transient provider failure (5xx, 408/425/429, a thrown connection
- * error) is retried once inside the same deadline, so the single semantic-review call
+ * error, a stream closed before its terminal event) is retried once inside the
+ * same deadline, so the single semantic-review call
  * per captured context survives endpoint hiccups without ever extending the
  * run budget.
  */
@@ -188,13 +190,13 @@ async function dispatchOneRequest(
     model: config.lightModel,
     instructions: input.systemPrompt,
     input: [{role: 'user', content: input.prompt}],
-    tools: [], store: false,
+    tools: [], store: false, stream: true,
     ...purposeOptions,
     ...(input.maxOutputTokens !== undefined ? {max_output_tokens: input.maxOutputTokens} : {}),
   } : {
     model: config.lightModel,
     messages: [{role: 'system', content: input.systemPrompt}, {role: 'user', content: input.prompt}],
-    temperature: 0,
+    temperature: 0, stream: true,
     ...purposeOptions,
     ...(input.maxOutputTokens !== undefined
       ? buildOpenAIChatCompletionsTokenLimit(config.lightModel, input.maxOutputTokens) : {}),
@@ -212,7 +214,18 @@ async function dispatchOneRequest(
     // Only 4xx/5xx carry triage value; anything else stays codeless so exact
     // result contracts are unchanged for ordinary gateways.
     ...(response.status >= 400 ? {httpStatus: response.status} : {})};
-  const output = object(await response.json());
+  let output: Record<string, unknown> | undefined;
+  // A gateway that ignores `stream` still answers with one JSON body.
+  if (response.headers.get('content-type')?.includes('text/event-stream')) {
+    if (!response.body) return {status: 'unavailable', reason: 'invalid_response'};
+    const streamed = config.protocol === 'responses'
+      ? await readResponsesStream(response.body, input.outputByteLimit)
+      : await readChatCompletionStream(response.body, input.outputByteLimit);
+    if (streamed.kind === 'unavailable') return {status: 'unavailable', reason: streamed.reason};
+    output = streamed.body;
+  } else {
+    output = object(await response.json());
+  }
   scope.throwIfInactive();
   if (!output || output.error != null) return {status: 'unavailable', reason: 'provider_error'};
   return config.protocol === 'responses' ? responsesResult(output, input) : chatResult(output, input);

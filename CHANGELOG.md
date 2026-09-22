@@ -27,8 +27,10 @@ Detailed commit-level history is available via `git log`.
 - A scene run that committed no timeline segment is reported as failed and no
   empty scene report is published; a run that retained a timeline states which
   revision survives. The story panel shows the reason.
-- The final semantic review may use the unspent delivery reserve, so slow
-  providers no longer fail the report quality gate because the review timed out.
+- The final semantic review may use the unspent delivery reserve, and the
+  OpenAI runtime streams its intent and semantic requests. A slow reasoning
+  provider previously lost every review to fetch's default five-minute headers
+  timeout; a review that outlasts the reserve is still reported as unverified.
 - Summarized SQL results list the original row index of each sample row, and
   the Agent SSE verification script exits after writing its artifacts.
 

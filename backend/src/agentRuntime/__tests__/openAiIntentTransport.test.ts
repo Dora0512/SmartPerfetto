@@ -29,7 +29,7 @@ function fixture(protocol: 'chat_completions' | 'responses') {
   };
   const output: Record<string, unknown> = protocol === 'chat_completions'
     ? {model: 'actual-model', choices: [chatChoice]} : responseBody;
-  const response = {ok: true, status: 200, json: jest.fn<() => Promise<unknown>>().mockResolvedValue(output)};
+  const response = {ok: true, status: 200, headers: new Headers(), json: jest.fn<() => Promise<unknown>>().mockResolvedValue(output)};
   const fetchImpl = jest.fn<typeof fetch>().mockResolvedValue(response as unknown as Response);
   const input: OpenAiIntentTransportInput = {
     prompt: 'current question', systemPrompt: 'assembled classifier contract',
@@ -133,13 +133,13 @@ describe('OpenAI native intent transport', () => {
     if (protocol === 'responses') {
       expect(body).toEqual({
         model: input.config.lightModel, instructions: input.systemPrompt,
-        input: [{role: 'user', content: input.prompt}], tools: [], store: false, max_output_tokens: 2048,
+        input: [{role: 'user', content: input.prompt}], tools: [], store: false, stream: true, max_output_tokens: 2048,
       });
     } else {
       expect(body).toEqual({
         model: input.config.lightModel,
         messages: [{role: 'system', content: input.systemPrompt}, {role: 'user', content: input.prompt}],
-        temperature: 0, max_completion_tokens: 2048,
+        temperature: 0, stream: true, max_completion_tokens: 2048,
       });
     }
     expect(body).not.toHaveProperty('previous_response_id');
@@ -330,5 +330,178 @@ describe('OpenAI native intent transport provider retry', () => {
     const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {status: 500}));
     await expect(run(fetchImpl, 1_000)).resolves.toEqual({status: 'unavailable', reason: 'provider_error', httpStatus: 500});
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OpenAI native intent transport streaming', () => {
+  beforeEach(() => {jest.useFakeTimers({now: 1000});});
+  afterEach(() => {jest.useRealTimers();});
+
+  const encoder = new TextEncoder();
+  /** An event stream from raw byte chunks; `open` leaves it unclosed, as a keep-alive server would. */
+  function sse(chunks: Array<string | Uint8Array>, options: {open?: boolean; onCancel?: () => void} = {}): Response {
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(typeof chunk === 'string' ? encoder.encode(chunk) : chunk);
+        if (!options.open) controller.close();
+      },
+      cancel() {options.onCancel?.();},
+    }), {status: 200, headers: {'content-type': 'text/event-stream; charset=utf-8'}});
+  }
+  const chat = (delta: Record<string, unknown>, finish: string | null = null, extra: Record<string, unknown> = {}) =>
+    `data: ${JSON.stringify({model: 'glm-actual', choices: [{index: 0, delta, finish_reason: finish}], ...extra})}\n\n`;
+  const input = (protocol: 'chat_completions' | 'responses', fetchImpl: typeof fetch, outputByteLimit = 1024): OpenAiIntentTransportInput => ({
+    prompt: 'p', systemPrompt: '', deadlineMs: Date.now() + 60_000, outputByteLimit, fetchImpl,
+    config: {protocol, baseURL: 'https://stream.example/v4', apiKey: 'k', lightModel: 'glm-5.3-flash'},
+  });
+  const once = (response: Response) => jest.fn<typeof fetch>().mockResolvedValue(response);
+  const event = (value: Record<string, unknown>) => `event: ${String(value.type)}\ndata: ${JSON.stringify(value)}\n\n`;
+  const final = (status: string, extra: Record<string, unknown> = {}, text = '{}') => event({type: `response.${status}`, response: {
+    model: 'm', status, error: null, incomplete_details: null, output: [{type: 'message', role: 'assistant', status: 'completed',
+      content: [{type: 'output_text', text}]}], ...extra}});
+
+  it('asks both protocols to stream', async () => {
+    for (const protocol of ['chat_completions', 'responses'] as const) {
+      const fetchImpl = once(new Response('{}', {status: 200}));
+      await runOpenAiIntentTransport(input(protocol, fetchImpl));
+      expect(JSON.parse(fetchImpl.mock.calls[0][1]!.body as string).stream).toBe(true);
+    }
+  });
+
+  it('folds a chat stream across split lines, CRLF, a split UTF-8 character and ignored reasoning into one answer', async () => {
+    const answer = chat({content: '{"a":"中'}).replace(/\n/g, '\r\n');
+    const bytes = encoder.encode(answer);
+    const cut = answer.indexOf('中');
+    const splitAt = encoder.encode(answer.slice(0, cut)).length + 1; // inside the 3-byte character
+    const fetchImpl = once(sse([
+      ': keep-alive comment\n\n',
+      chat({role: 'assistant', reasoning_content: 'long thinking'}),
+      bytes.slice(0, splitAt), bytes.slice(splitAt, bytes.length - 1), bytes.slice(bytes.length - 1),
+      'data: {"model":"glm-actual","choices":[{"index":0,\ndata: "delta":{"content":"文\\"}"},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ]));
+    await expect(runOpenAiIntentTransport(input('chat_completions', fetchImpl)))
+      .resolves.toEqual({status: 'ok', text: '{"a":"中文"}', actualModel: 'glm-actual', finishReason: 'stop'});
+  });
+
+  it('returns after the terminal event and releases a connection the server keeps open', async () => {
+    const onCancel = jest.fn();
+    const fetchImpl = once(sse([chat({content: 'fine'}, 'stop'), 'data: [DONE]\n\n'], {open: true, onCancel}));
+    await expect(runOpenAiIntentTransport(input('chat_completions', fetchImpl))).resolves.toMatchObject({status: 'ok', text: 'fine'});
+    await jest.advanceTimersByTimeAsync(0);
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it('ends CR-only lines at once, even when the server keeps the connection open', async () => {
+    const fetchImpl = once(sse([chat({content: 'fine'}, 'stop').replace(/\n/g, '\r'), 'data: [DONE]\r\r'], {open: true}));
+    await expect(runOpenAiIntentTransport(input('chat_completions', fetchImpl))).resolves.toMatchObject({status: 'ok', text: 'fine'});
+  });
+
+  it('closes a finished reply without [DONE] after the drain window on a kept-alive connection', async () => {
+    const onCancel = jest.fn();
+    const fetchImpl = once(sse([chat({content: 'fine'}, 'stop'), 'data: {"choices":[],"usage":{"completion_tokens":1}}\n\n'],
+      {open: true, onCancel}));
+    const pending = runOpenAiIntentTransport(input('chat_completions', fetchImpl));
+    await jest.advanceTimersByTimeAsync(1_000);
+    await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine', finishReason: 'stop'});
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it('does not let heartbeats after the finish renew the drain window', async () => {
+    const onCancel = jest.fn();
+    const fetchImpl = once(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {controller.enqueue(encoder.encode(chat({content: 'fine'}, 'stop')));},
+      pull(controller) {
+        return new Promise<void>(resolve => {setTimeout(() => {controller.enqueue(encoder.encode(': ping\n\n')); resolve();}, 400);});
+      },
+      cancel() {onCancel();},
+    }), {status: 200, headers: {'content-type': 'text/event-stream'}}));
+    const pending = runOpenAiIntentTransport(input('chat_completions', fetchImpl));
+    await jest.advanceTimersByTimeAsync(1_000);
+    await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine'});
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it('accepts a finish reason without [DONE], and rejects [DONE] without a finish reason', async () => {
+    await expect(runOpenAiIntentTransport(input('chat_completions', once(sse([chat({content: 'fine'}, 'stop')])))))
+      .resolves.toMatchObject({status: 'ok', text: 'fine'});
+    await expect(runOpenAiIntentTransport(input('chat_completions', once(sse([chat({content: 'fine'}), 'data: [DONE]\n\n'])))))
+      .resolves.toEqual({status: 'unavailable', reason: 'invalid_response'});
+  });
+
+  it.each<[string, string[], object]>([
+    ['a length finish', [chat({content: '{"a":'}, 'length')], {reason: 'incomplete_output'}],
+    ['a tool call', [chat({tool_calls: [{index: 0, function: {name: 'x'}}]}), chat({}, 'tool_calls')], {reason: 'tool_use'}],
+    ['a refusal', [chat({refusal: 'no'}), chat({}, 'stop')], {reason: 'invalid_response'}],
+    ['a non-assistant role', [chat({role: 'user', content: 'x'}, 'stop')], {reason: 'invalid_response'}],
+    ['a second choice', [`data: ${JSON.stringify({choices: [{index: 1, delta: {content: 'x'}, finish_reason: 'stop'}]})}\n\n`], {reason: 'invalid_response'}],
+    ['text after the finish', [chat({content: 'a'}, 'stop'), chat({content: 'b'})], {reason: 'invalid_response'}],
+    ['conflicting finish reasons', [chat({content: 'a'}, 'length'), chat({}, 'stop')], {reason: 'invalid_response'}],
+    ['a malformed chunk', ['data: {"choices":\n\n'], {reason: 'invalid_response'}],
+    ['an error chunk', ['data: {"error":{"message":"SECRET_STREAM_CANARY"}}\n\n'], {reason: 'provider_error'}],
+  ])('keeps %s as the non-streamed body would, without retrying', async (_label, chunks, expected) => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation(async () => sse(chunks));
+    const result = await runOpenAiIntentTransport(input('chat_completions', fetchImpl));
+    expect(result).toEqual({status: 'unavailable', ...expected});
+    expect(JSON.stringify(result)).not.toContain('SECRET_STREAM_CANARY');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops reading once answer text passes the output budget', async () => {
+    const onCancel = jest.fn();
+    const fetchImpl = once(sse([chat({content: 'x'.repeat(6)}), chat({content: 'y'.repeat(6)})], {open: true, onCancel}));
+    await expect(runOpenAiIntentTransport(input('chat_completions', fetchImpl, 10)))
+      .resolves.toEqual({status: 'unavailable', reason: 'output_limit'});
+    await jest.advanceTimersByTimeAsync(0);
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it('rejects one event that grows past the buffer bound', async () => {
+    const fetchImpl = once(sse([`data: ${'x'.repeat(2 * 1024 * 1024)}\n`, `data: ${'x'.repeat(2 * 1024 * 1024)}\n`], {open: true}));
+    await expect(runOpenAiIntentTransport(input('chat_completions', fetchImpl)))
+      .resolves.toEqual({status: 'unavailable', reason: 'invalid_response'});
+  });
+
+  it.each(['chat_completions', 'responses'] as const)('retries a %s stream that closes before its terminal event', async protocol => {
+    const good = protocol === 'chat_completions' ? [chat({content: 'fine'}, 'stop')] : [final('completed', {}, 'fine')];
+    const partial = protocol === 'chat_completions' ? [chat({content: 'fi'})]
+      : [event({type: 'response.output_text.delta', item_id: 'm', delta: 'fi'})];
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementationOnce(async () => sse(partial)).mockImplementation(async () => sse(good));
+    const pending = runOpenAiIntentTransport(input(protocol, fetchImpl));
+    await jest.advanceTimersByTimeAsync(2_500);
+    await expect(pending).resolves.toMatchObject({status: 'ok', text: 'fine', attempts: 2});
+  });
+
+  it('stops a stalled stream at the run deadline', async () => {
+    const fetchImpl = once(sse([': thinking\n\n'], {open: true}));
+    const pending = runOpenAiIntentTransport({...input('chat_completions', fetchImpl), deadlineMs: Date.now() + 50});
+    await jest.advanceTimersByTimeAsync(51);
+    await expect(pending).resolves.toEqual({status: 'unavailable', reason: 'timeout'});
+    expect(fetchImpl.mock.calls[0][1]!.signal?.aborted).toBe(true);
+  });
+
+  describe('Responses', () => {
+    it('takes the completed response and does not charge commentary against the answer budget', async () => {
+      const fetchImpl = once(sse([
+        event({type: 'response.output_item.added', item: {id: 'c', type: 'message', phase: 'commentary'}}),
+        event({type: 'response.output_text.delta', item_id: 'c', delta: 'x'.repeat(50)}),
+        event({type: 'response.output_text.delta', item_id: 'm', delta: '{}'}),
+        final('completed'),
+      ]));
+      await expect(runOpenAiIntentTransport(input('responses', fetchImpl, 10)))
+        .resolves.toEqual({status: 'ok', text: '{}', actualModel: 'm', finishReason: 'completed'});
+    });
+
+    it.each<[string, string[], object]>([
+      ['answer text over budget', [event({type: 'response.output_text.delta', item_id: 'm', delta: 'x'.repeat(11)})], {reason: 'output_limit'}],
+      ['an error event', [event({type: 'error', message: 'SECRET_STREAM_CANARY'})], {reason: 'provider_error'}],
+      ['a failed response', [final('failed', {error: {message: 'SECRET_STREAM_CANARY'}})], {reason: 'provider_error'}],
+      ['an incomplete response', [final('incomplete', {incomplete_details: {reason: 'max_output_tokens'}})], {reason: 'incomplete_output'}],
+      ['an event without a type', ['data: {"response":{}}\n\n'], {reason: 'invalid_response'}],
+    ])('keeps %s', async (_label, chunks, expected) => {
+      const result = await runOpenAiIntentTransport(input('responses', once(sse(chunks, {open: true})), 10));
+      expect(result).toEqual({status: 'unavailable', ...expected});
+      expect(JSON.stringify(result)).not.toContain('SECRET_STREAM_CANARY');
+    });
   });
 });

@@ -221,9 +221,14 @@ Keep these boundaries intact:
   by the delivery call. When no delivery call ran, the unspent reserve funds
   finalization (at most that reserve from now, never past hard): its one
   no-tool semantic review is the call the reserve exists for, and a fixed 60 s
-  window timed it out on slow providers. Like turn-limit results, a timeout
-  result authorizes no semantic model call. `*_MAX_RUN_TIMEOUT_MS` is part of
-  the provider snapshot fingerprint. Claude scene dispatch uses the same
+  window timed it out on slow providers. A one-shot provider call must not
+  wait for a whole non-streamed reply: its headers arrive only after
+  generation, so a long reasoning phase hits fetch's default 300 s headers
+  timeout (a GLM review first emitted answer text at 496 s) whatever the
+  budget. The OpenAI intent and semantic requests therefore stream, leaving
+  the run deadline in charge; a body idle timeout still applies. Like
+  turn-limit results, a timeout result authorizes no semantic model call.
+  `*_MAX_RUN_TIMEOUT_MS` is part of the provider snapshot fingerprint. Claude scene dispatch uses the same
   progress-aware budget (`CLAUDE_MAX_RUN_TIMEOUT_MS`), without a timeout
   delivery call; non-scene Claude runs, Pi, OpenCode and Qoder still use fixed
   budgets.
