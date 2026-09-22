@@ -1276,6 +1276,7 @@ export class QoderRuntime extends EventEmitter implements IOrchestrator {
         candidate: originalAnswer,
         remainingDeliveryTurns: sdkResultMeta.reason !== 'turn_limit' &&
           sessionState.rounds < turnBudget.totalTurns ? turnBudget.deliveryTurns : 0,
+        repairInvalid: true,
       });
       if (declarationRequest && nativeDeclarationBodyCanFitOutput(originalAnswer, declarationOutputLimit) &&
           sessionState.deadlineMs !== undefined && Date.now() < sessionState.deadlineMs) {

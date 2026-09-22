@@ -11,6 +11,7 @@ import {
   buildRelationProposalRecoveryPromptFragment,
   nativeDeclarationBodyCanFitOutput,
   requestNativeDeclarationCompletion,
+  INVALID_NATIVE_DECLARATION,
 } from '../runtimeConclusionProtocol';
 import {buildCandidateProtocolDiagnostic, inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
 
@@ -41,6 +42,90 @@ const declaration = (mode: 'focused_answer' | 'need_input' = 'focused_answer') =
   });
 
 describe('runtime native declaration completion', () => {
+  const semantics = {schemaVersion: 'claim_semantics@1', predicate: 'numeric.cell', polarity: 'affirmed',
+    discourse: 'asserted', quantifier: 'one', modality: 'certain', scope: {population: 'cited_rows'}};
+  const claim = (id: string, extra: Record<string, unknown> = {}) =>
+    ({id, kind: 'numeric', text: `${id} holds.`, references: [], semantics, ...extra});
+  const contract = (claims: unknown[]) => renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1',
+    mode: 'focused_answer', conclusions: [], clusters: [], evidenceChain: [], claims, uncertainties: [], nextSteps: []} as any);
+  const body = 'Line one.\n\nLine two.';
+  const rejected = contract([claim('a'), claim('b', {semantics: {...semantics, scope: {population: 'everywhere'}}})]);
+  const repair = (candidate: string, repairInvalid = true) => requestNativeDeclarationCompletion({
+    intent: intent('investigation'), completion: {status: 'completed'}, candidate, remainingDeliveryTurns: 1, repairInvalid});
+
+  it('offers one repair for a well-framed rejected declaration, with the body and the declaration kept apart', () => {
+    const request = repair(`${body}\n\n${rejected}`)!;
+    expect(request).toMatchObject({reason: INVALID_NATIVE_DECLARATION, originalBody: body});
+    expect(request.rejectedDeclaration).toContain('everywhere');
+    expect(request.diagnostic.claimDiagnostics).toEqual([{ordinal: 2, code: 'invalid_semantics', field: 'semantics.scope.population'}]);
+    expect(repair(`${body}\n\n${rejected}`, false)).toBeUndefined();
+    // A framing failure can truncate the body, so it keeps the existing path.
+    expect(repair(`${body}\n\n${rejected}\n\n${rejected}`)).toBeUndefined();
+    expect(repair(`${body}\n\n${rejected.slice(0, rejected.lastIndexOf('-->'))}`)).toBeUndefined();
+    const prompt = buildNativeDeclarationCompletionPrompt({request, intent: intent('investigation'), outputLanguage: 'en'});
+    expect(prompt).toContain('invalid_declaration');
+    expect(prompt).toContain('rejected_declaration');
+    expect(prompt).toContain('"ordinal":2');
+  });
+
+  it('accepts a repair only when it keeps the body and every declared claim', () => {
+    const request = repair(`${body}\n\n${rejected}`)!;
+    const accept = (candidate: string) => acceptNativeDeclarationCompletion({request, completion: {status: 'completed'}, candidate});
+    expect(accept(`${body}\n\n${contract([claim('a'), claim('b')])}`)).toBeDefined();
+    expect(accept(`${body}\n\n${contract([claim('a')])}`)).toBeUndefined();
+    expect(accept(`${body} Edited.\n\n${contract([claim('a'), claim('b')])}`)).toBeUndefined();
+    expect(accept(`${body}\n\n${rejected}`)).toBeUndefined();
+  });
+
+  it.each(['en', 'zh-CN'] as const)('asks a %s repair to pass the full protocol, not only the listed fields', outputLanguage => {
+    const prompt = buildNativeDeclarationCompletionPrompt({request: repair(`${body}\n\n${rejected}`)!,
+      intent: intent('investigation'), outputLanguage});
+    expect(prompt).toContain('24');
+    expect(prompt).toContain(outputLanguage === 'en' ? 'must pass the full protocol' : '必须通过完整协议校验');
+  });
+
+  it('rejects a repair that swaps a declared claim for another one', () => {
+    const request = repair(`${body}\n\n${rejected}`)!;
+    expect(request.declaredClaimIds).toEqual(['a', 'b']);
+    expect(acceptNativeDeclarationCompletion({request, completion: {status: 'completed'},
+      candidate: `${body}\n\n${contract([claim('a'), claim('c')])}`})).toBeUndefined();
+  });
+
+  it('does not bind a repair to a blank id the parser itself rejects', () => {
+    const request = repair(`${body}\n\n${contract([claim('a'), claim('', {semantics})])}`)!;
+    expect(request.declaredClaimIds).toEqual(['a']);
+    expect(request.diagnostic.claimDiagnostics).toEqual([{ordinal: 2, code: 'invalid_claim', field: 'id'}]);
+    expect(acceptNativeDeclarationCompletion({request, completion: {status: 'completed'},
+      candidate: `${body}\n\n${contract([claim('a'), claim('b')])}`})).toBeDefined();
+  });
+
+  it('repairs a well-framed declaration whose JSON does not parse, without a claim baseline', () => {
+    const broken = rejected.replace('"claims"', '"claims" oops');
+    const request = repair(`${body}\n\n${broken}`)!;
+    expect(request).toMatchObject({reason: INVALID_NATIVE_DECLARATION, originalBody: body, declaredClaimIds: []});
+    expect(request.diagnostic.issueCodes).toEqual(['invalid_json']);
+    expect(acceptNativeDeclarationCompletion({request, completion: {status: 'completed'},
+      candidate: `${body}\n\n${contract([claim('a')])}`})).toBeDefined();
+  });
+
+  it('lists at most 24 failing claims', () => {
+    const many = contract(Array.from({length: 30}, (_, index) => claim(`c${index}`, {semantics: {...semantics, polarity: 'maybe'}})));
+    const request = repair(`${body}\n\n${many}`)!;
+    expect(request.diagnostic.claimDiagnostics).toHaveLength(24);
+    expect(request.diagnostic.claimDiagnostics![23]).toEqual({ordinal: 24, code: 'invalid_semantics', field: 'semantics.polarity'});
+    expect(request.diagnostic.issueCount).toBe(30);
+  });
+
+  it('adds exact relation guidance to a rejected declaration repair', () => {
+    const invalidRelation = renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+      conclusions: [], clusters: [], evidenceChain: [], claims: [claim('a')], uncertainties: [], nextSteps: [],
+      relationProposals: [{kind: 'overlap'}]} as any);
+    const request = repair(`${body}\n\n${invalidRelation}`)!;
+    expect(request.reason).toBe(INVALID_NATIVE_DECLARATION);
+    expect(buildNativeDeclarationCompletionPrompt({request, intent: intent('investigation'), outputLanguage: 'zh-CN'}))
+      .toContain('proofBindings');
+  });
+
   it.each(['en', 'zh-CN'] as const)('loads exact relation schema only for a sanitized invalid relation in %s', outputLanguage => {
     const invalid = renderConclusionContractSidecar({...JSON.parse(JSON.stringify({
       schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', conclusions: [], clusters: [],

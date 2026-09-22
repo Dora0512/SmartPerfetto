@@ -68,6 +68,7 @@ import * as evaluationRuntimeHooks from '../../services/selfEvolution/evaluation
 import {renderConclusionContractSidecar, type ConclusionContract} from '../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
 import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
+import {candidateWithPopulation} from '../../../tests/helpers/conclusionDeclarationFixture';
 
 const mockOpenCodeIntentTransport = jest.fn<typeof runOpenCodeIntentTransport>();
 jest.mock('../engines/opencode/openCodeIntentTransport', () => ({
@@ -621,6 +622,19 @@ describe('OpenCode native turn intent and delivery', () => {
     const snapshot = harness.runtime.takeSnapshot(sessionId, 'trace-opencode', createSnapshotFields());
     expect(snapshot.analysisPlan?.phases).toEqual([expect.objectContaining({id: 'explore', status: 'pending'})]);
     expect(snapshot.claudeHypotheses).toEqual([expect.objectContaining({id: 'open-hypothesis', status: 'formed'})]);
+  }));
+
+  it('uses the reserved delivery turn to repair a rejected declaration around the unchanged body', async () => withBackendDataDir(async () => {
+    const body = 'Frame 12 missed its deadline.';
+    const harness = createNativeIntentHarness({answer: candidateWithPopulation(body, 'everywhere'), closeoutAnswer: candidateWithPopulation(body, 'cited_rows')});
+    const result = await harness.runtime.analyze('same scope', 'opencode-invalid-declaration', 'trace-opencode', {
+      analysisMode: 'full', runId: 'opencode-invalid-declaration',
+    });
+    expect(harness.prompts).toHaveLength(3);
+    expect(harness.prompts[2].body.parts[0].text).toContain('invalid_declaration');
+    expect(inspectCandidateProtocol(result.conclusion)).toMatchObject({status: 'valid'});
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
+    finalizationContext.takeFinalizationContext(result)?.dispose();
   }));
 
   it('uses the reserved no-tools delivery turn for an unchanged full declaration candidate', async () => withBackendDataDir(async () => {

@@ -63,6 +63,7 @@ import type {RunManifestAttributionSink} from '../../types/selfEvolution';
 import {renderConclusionContractSidecar} from '../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../services/canonicalAnalysisResult';
 import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
+import {candidateWithPopulation, declaredCandidateWithClaims, declaredClaim} from '../../../tests/helpers/conclusionDeclarationFixture';
 
 function declaredCandidate(body: string): string {
   return `${body}\n${renderConclusionContractSidecar({schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
@@ -319,12 +320,20 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     });
     const updates: any[] = [];
     runtime.on('update', update => updates.push(update));
+    const startedAt = Date.now();
     try {
       const result = await runtime.analyze('Reconstruct this trace', f.scope.sessionId, f.scope.traceId, f.options);
       expect(outcomes).toEqual([true, true, true, true, true, true, true]);
       expect(result.terminationReason).not.toBe('timeout');
       expect(updates.some(update => update.content?.fallback === 'partial_result_after_timeout')).toBe(false);
       expect(f.seal().revision).toBe(1);
+      // The completed report will make its semantic review, so finalization keeps the budget up to hard.
+      expect(result.turnIntent).toMatchObject({status: 'resolved', deliverable: 'report'});
+      const context = takeFinalizationContext(result);
+      try {
+        expect(context!.deadlineMs).toBeGreaterThanOrEqual(startedAt + 6_000);
+        expect(context!.deadlineMs).toBeLessThanOrEqual(Date.now() + 6_000);
+      } finally {context?.dispose();}
     } finally {runtime.cleanupSession(f.scope.sessionId); f.binding.release();}
   });
   it.each([
@@ -3162,6 +3171,57 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
       jest.useRealTimers();
       sessionContextManager.remove(sessionId);
     }
+  });
+
+  it('uses the same delivery turn to repair a rejected declaration, keeping the body and every claim', async () => {
+    const body = 'Frame 12 missed its deadline.';
+    const runtime = new ClaudeRuntime({
+      query: async () => ({columns: [], rows: []}),
+      getTrace: () => ({traceOs: 'android', traceFormat: 'perfetto'}),
+    } as any, {enableVerification: false, enableSubAgents: false, maxTurns: 4, maxBudgetUsd: 1});
+    (runtime as any).architectureCache.set('trace-invalid-declaration', {type: 'STANDARD', confidence: 0.9, evidence: []});
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({passed: true, heuristicIssues: [], llmIssues: [], durationMs: 1});
+    let sdkCallCount = 0;
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      sdkCallCount += 1;
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-invalid-declaration', num_turns: 1,
+        total_cost_usd: 0.1, result: candidateWithPopulation(body, sdkCallCount === 1 ? 'everywhere' : 'cited_rows', 'miss')};
+    });
+    const result = await runtime.analyze('分析当前证据', 'session-invalid-declaration', 'trace-invalid-declaration', {
+      analysisMode: 'full', runId: 'claude-invalid-declaration', packageName: 'com.example.app',
+    });
+    const calls = claudeSdkMock.__getQueryCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1].options).toMatchObject({maxTurns: 1, tools: [], allowedTools: []});
+    expect(calls[1].prompt).toContain('invalid_declaration');
+    expect(calls[1].prompt).toContain('"field":"semantics.scope.population"');
+    expect(inspectCandidateProtocol(result.conclusion).status).toBe('valid');
+    expect(result.completion).toMatchObject({status: 'completed', attemptId: expect.stringContaining(':correction:1')});
+    takeFinalizationContext(result)?.dispose();
+  });
+
+  it('keeps the issue-based correction when a rejected declaration is too large to repair', async () => {
+    const body = `${'Frame 12 missed its deadline. '.repeat(4700)}`.trimEnd();
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(128 * 1024);
+    const invalid = declaredCandidateWithClaims(body, [declaredClaim('miss', {semantics: {schemaVersion: 'other'}})]);
+    const runtime = new ClaudeRuntime({
+      query: async () => ({columns: [], rows: []}),
+      getTrace: () => ({traceOs: 'android', traceFormat: 'perfetto'}),
+    } as any, {enableVerification: false, enableSubAgents: false, maxTurns: 4, maxBudgetUsd: 1});
+    (runtime as any).architectureCache.set('trace-oversized-declaration', {type: 'STANDARD', confidence: 0.9, evidence: []});
+    mockClaudeVerifierVerifyConclusion.mockResolvedValue({passed: false, durationMs: 1, llmIssues: [], heuristicIssues: [
+      {type: 'missing_evidence', severity: 'error', message: 'Needs evidence', recoveryKind: 'correct_evidence'}]});
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      yield {type: 'result', subtype: 'success', session_id: 'sdk-oversized-declaration', num_turns: 1,
+        total_cost_usd: 0.1, result: invalid};
+    });
+    const result = await runtime.analyze('分析当前证据', 'session-oversized-declaration', 'trace-oversized-declaration', {
+      analysisMode: 'full', runId: 'claude-oversized-declaration', packageName: 'com.example.app',
+    });
+    const calls = claudeSdkMock.__getQueryCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1].prompt).not.toContain('invalid_declaration');
+    takeFinalizationContext(result)?.dispose();
   });
 
   it('uses one no-tools delivery turn to attach declarations without truncating the native body', async () => {

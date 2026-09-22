@@ -14,9 +14,10 @@ import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../run
 import {
   acceptNativeDeclarationCompletion,
   buildNativeDeclarationCompletionPrompt,
-  buildRelationProposalRecoveryPromptFragment,
+  appendRelationProposalRecoveryFragment,
   nativeDeclarationBodyCanFitOutput,
   requestNativeDeclarationCompletion,
+  INVALID_NATIVE_DECLARATION,
 } from '../../runtimeConclusionProtocol';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext, toAnalysisHistoryTurn,
   type AnalysisHistoryReader} from '../../analysisHistory';
@@ -1893,10 +1894,13 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       const declarationNeed = requestNativeDeclarationCompletion({
         intent: turnIntent, completion: acceptedCompletion, candidate: acceptedText,
         remainingDeliveryTurns: rounds < turnBudget.totalTurns ? turnBudget.deliveryTurns : 0,
+        repairInvalid: true,
       });
       const declarationRequest = declarationNeed && nativeDeclarationBodyCanFitOutput(acceptedText, 64 * 1024)
         ? declarationNeed : undefined;
-      const correctionNeeded = declarationRequest !== undefined || declarationNeed === undefined && actionable.length > 0;
+      // A repair that cannot run leaves the issue-based correction available, as before repairs existed.
+      const correctionNeeded = declarationRequest !== undefined ||
+        (declarationNeed === undefined || declarationNeed.reason === INVALID_NATIVE_DECLARATION) && actionable.length > 0;
       if (correctionNeeded &&
         rounds < (declarationRequest ? turnBudget.totalTurns : turnBudget.acquisitionTurns)
         && completionFor(acceptedAssistant, acceptedText, acceptedAttemptId, acceptedTurnLimitReached).status === 'completed') {
@@ -1914,14 +1918,12 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
             : `${originalSystemPrompt}\n\n${loadPiFinalReportCorrectionSystemPrompt(outputLanguage)}`;
           assertCurrentAnalysisContextAuthorization(options, authorizationScope, authorizationFingerprint);
           const correctionDiagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(acceptedText), 'native', 1);
-          const relationFragment = declarationRequest ? ''
-            : buildRelationProposalRecoveryPromptFragment(correctionDiagnostic, outputLanguage);
-          const correctionBasePrompt = declarationRequest ? ''
-            : `${generateCorrectionPrompt(actionable, acceptedText, outputLanguage,
-              turnIntent.sceneId)}\n\n${JSON.stringify({candidateProtocolDiagnostic: correctionDiagnostic})}`;
           const correctionPrompt = declarationRequest
             ? buildNativeDeclarationCompletionPrompt({request: declarationRequest, intent: turnIntent, outputLanguage})
-            : relationFragment ? `${correctionBasePrompt}\n\n${relationFragment}` : correctionBasePrompt;
+            : appendRelationProposalRecoveryFragment(
+              `${generateCorrectionPrompt(actionable, acceptedText, outputLanguage,
+                turnIntent.sceneId)}\n\n${JSON.stringify({candidateProtocolDiagnostic: correctionDiagnostic})}`,
+              correctionDiagnostic, outputLanguage);
           const candidate = await runProviderPrompt(correctionPrompt,
             declarationRequest ? turnBudget.totalTurns : turnBudget.acquisitionTurns);
           assertCurrentAnalysisContextAuthorization(options, authorizationScope, authorizationFingerprint);

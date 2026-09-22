@@ -66,6 +66,11 @@ export function serializedByteLength(value: unknown): number {
  * reads are bounded by the deadline the run hands over, and a delivery call
  * that used the whole reserve would leave the answer it produced unverifiable.
  */
+export interface FinalizationBudgetOptions {
+  /** Spend the remaining budget up to the hard deadline instead of at most the delivery reserve. */
+  useRemainingBudget?: boolean;
+}
+
 export interface ProgressAwareRunDeadline {
   readonly startedAt: number;
   /** Initial deadline span before any extension. */
@@ -93,9 +98,11 @@ export interface ProgressAwareRunDeadline {
    * Deadline handed to finalization; never past the hard deadline. When no
    * delivery call ran, the unused delivery reserve funds finalization (at most
    * that reserve from now): its one no-tool semantic review is exactly the
-   * call the reserve exists for, and a slow provider otherwise times it out.
+   * call the reserve exists for. A report deliverable that will make that call
+   * may use the whole remaining budget instead, because its quality gate fails
+   * whenever the review does not finish.
    */
-  finalizationDeadlineAt(now?: number, deliveryDeadlineAt?: number): number;
+  finalizationDeadlineAt(now?: number, deliveryDeadlineAt?: number, options?: FinalizationBudgetOptions): number;
   snapshot(now?: number): RunDeadlineSnapshot;
 }
 
@@ -172,12 +179,12 @@ export function createProgressAwareRunDeadline(input: {
     deliveryWindowMs(now = Date.now()) {
       return Math.max(0, Math.min(deliveryReserveMs, hardDeadlineAt - now) - finalizationReserveMs);
     },
-    finalizationDeadlineAt(now = Date.now(), deliveryDeadlineAt?: number) {
+    finalizationDeadlineAt(now = Date.now(), deliveryDeadlineAt?: number, options: FinalizationBudgetOptions = {}) {
       // A delivery window already excluded the reserve. Without a delivery call the
       // reserve is unspent: finalization may use it, bounded from now and by the hard deadline.
-      return Math.min(hardDeadlineAt, deliveryDeadlineAt !== undefined
-        ? deliveryDeadlineAt + finalizationReserveMs
-        : Math.max(current(), now + finalizationReserveMs, now + deliveryReserveMs));
+      if (deliveryDeadlineAt !== undefined) return Math.min(hardDeadlineAt, deliveryDeadlineAt + finalizationReserveMs);
+      if (options.useRemainingBudget) return hardDeadlineAt;
+      return Math.min(hardDeadlineAt, Math.max(current(), now + finalizationReserveMs, now + deliveryReserveMs));
     },
     snapshot(now = Date.now()) {
       return {baseBudgetMs, maxRunMs, elapsedMs: now - startedAt, deadlineMs: current() - startedAt, deliveryReserveMs,

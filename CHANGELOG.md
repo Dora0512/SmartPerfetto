@@ -30,7 +30,16 @@ Detailed commit-level history is available via `git log`.
 - The final semantic review may use the unspent delivery reserve, and the
   OpenAI runtime streams its intent and semantic requests. A slow reasoning
   provider previously lost every review to fetch's default five-minute headers
-  timeout; a review that outlasts the reserve is still reported as unverified.
+  timeout. On OpenAI runs and Claude scene runs, a completed report may now
+  spend its remaining run budget on the review, so a report that passes no
+  longer fails its quality gate only because the review did not finish in
+  the reserve.
+- A well-framed conclusion declaration the parser rejected is repaired in the
+  same single delivery turn on Claude, OpenCode and Qoder, where it previously
+  left every claim unverified, and on Pi, where it replaces a full-answer
+  correction. The body must stay unchanged and every declared claim must be
+  kept. Repair diagnostics name each failing claim's position and schema
+  field; OpenAI's continuation receives the same diagnostics.
 - Finalized history, conversation descriptors, trace-processor lease
   acquisition and startup run recovery take the SQLite write lock before they
   read, so a commit from another process no longer fails the run with

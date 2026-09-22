@@ -54,6 +54,7 @@ import {takeFinalizationContext} from '../analysisFinalizationContext';
 import {ArtifactStore} from '../../agentv3/artifactStore';
 import {loadPiProviderRuntimeModules} from '../engines/pi/piAgentCoreProvider';
 import {createSceneRuntimeMatrixFixture} from '../../../tests/helpers/sceneRuntimeMatrixFixture';
+import {candidateWithPopulation, declaredCandidateWithClaims, declaredClaim} from '../../../tests/helpers/conclusionDeclarationFixture';
 
 const mockClaudeVerifierVerifyConclusion = jest.fn();
 jest.mock('../engines/claude/claudeVerifier', () => {
@@ -3332,6 +3333,22 @@ describe('experimental Pi agent-core runtime contract', () => {
     conclusions: [{rank: 1, statement: 'The marker is present.'}], clusters: [], evidenceChain: [],
     claims: [], uncertainties: [], nextSteps: []} as ConclusionContract);
 
+  it('uses the reserved delivery turn to repair a rejected declaration around the unchanged body', async () => {
+    passVerification();
+    const body = 'Frame 12 missed its deadline.';
+    let completionPrompt = '';
+    FakePiAgent.promptHandler = async (_agent, prompt, index) => {
+      if (index === 2) completionPrompt = prompt;
+      return [{role: 'assistant', stopReason: 'stop', content: [{type: 'text',
+        text: candidateWithPopulation(body, index === 1 ? 'everywhere' : 'cited_rows')}]}];
+    };
+    const result = await typedRuntime().analyze('query', 'pi-invalid-declaration', 'trace-pi', {runId: 'pi-invalid-declaration'});
+    expect(FakePiAgent.instances[0].promptCount).toBe(2);
+    expect(completionPrompt).toContain('invalid_declaration');
+    expect(inspectCandidateProtocol(result.conclusion)).toMatchObject({status: 'valid'});
+    expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
+  });
+
   it('uses the reserved no-tools delivery turn to attach declarations to a full multilingual body', async () => {
     passVerification();
     const body = `${'启动阶段保持原始正文。'.repeat(700)}\n${'Full body remains byte-for-byte stable. '.repeat(140)}`.trimEnd();
@@ -3537,6 +3554,25 @@ describe('experimental Pi agent-core runtime contract', () => {
       expect(result.conclusion).toBe(body);
       expect(result.completion).toMatchObject({status: 'completed', attemptId: '1'});
     } finally { authorization.mockRestore(); }
+  });
+
+  it('keeps the issue-based correction when a rejected declaration is too large to repair', async () => {
+    const issue = {type: 'missing_evidence', severity: 'error', message: 'Needs evidence', recoveryKind: 'correct_evidence'};
+    mockClaudeVerifierVerifyConclusion.mockImplementationOnce(async () => ({passed: false, heuristicIssues: [issue], llmIssues: []}))
+      .mockImplementation(async () => ({passed: true, heuristicIssues: [], llmIssues: []}));
+    const body = 'Frame 12 missed its deadline. '.repeat(2300).trimEnd();
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(64 * 1024);
+    const invalid = declaredCandidateWithClaims(body, [declaredClaim('miss', {semantics: {schemaVersion: 'other'}})]);
+    let correctionPrompt = '';
+    FakePiAgent.promptHandler = async (_agent, prompt, index) => {
+      if (index === 2) correctionPrompt = prompt;
+      return [{role: 'assistant', stopReason: 'stop', content: [{type: 'text',
+        text: index === 1 ? invalid : declaredPiCandidate('Bounded finding')}]}];
+    };
+    await typedRuntime().analyze('same question', 'pi-oversized-declaration', 'trace-pi', {runId: 'r-oversized', analysisMode: 'fast'});
+    expect(FakePiAgent.instances[0].promptCount).toBe(2);
+    expect(correctionPrompt).not.toContain('invalid_declaration');
+    expect(correctionPrompt).toContain('candidateProtocolDiagnostic');
   });
 
   it('binds a shorter unheaded correction to its own successful SDK attempt without reclassifying', async () => {

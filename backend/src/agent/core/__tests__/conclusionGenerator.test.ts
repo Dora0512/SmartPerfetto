@@ -1846,7 +1846,8 @@ describe('versioned conclusion declaration sidecar', () => {
     expect(parsed.status).toBe('invalid');
     expect(parsed.contract?.claims?.[0].semantics).toBeUndefined();
     expect(parsed.contract?.claims?.[0].rawSemantics).toEqual(invalid.claims[0].semantics);
-    expect(parsed.issues).toContainEqual({code: 'invalid_semantics', path: 'claims[0].semantics'});
+    expect(parsed.issues).toContainEqual({code: 'invalid_semantics', path: 'claims[0].semantics',
+      claimDiagnostic: {ordinal: 1, code: 'invalid_semantics', field: 'semantics.polarity'}});
     const derived = deriveConclusionContract(rawSidecar(invalid));
     expect(derived?.bindingEligibility).toBe('ineligible');
     expect(derived?.claims?.[0].text).toBe(invalid.claims[0].text);
@@ -1891,7 +1892,9 @@ describe('versioned conclusion declaration sidecar', () => {
     expect(result.bindingEligibility).toBe('ineligible');
     expect(result.contract).not.toHaveProperty('verified');
     expect(result.issues).toEqual(expect.arrayContaining([
-      {code: 'untrusted_parser_metadata', path: '$'}, {code: 'invalid_semantics', path: 'claims[0].semantics'},
+      {code: 'untrusted_parser_metadata', path: '$'},
+      {code: 'invalid_semantics', path: 'claims[0].semantics',
+        claimDiagnostic: {ordinal: 1, code: 'invalid_semantics', field: 'semantics.schemaVersion'}},
     ]));
   });
 
@@ -1917,7 +1920,8 @@ describe('versioned conclusion declaration sidecar', () => {
       const input = {...original, claims: [{...original.claims![0], [key]: []}]};
       const first = parseConclusionContractSidecar(rawSidecar(input));
       expect(first.status).toBe('invalid');
-      expect(first.issues).toEqual([{code: 'untrusted_parser_metadata', path: 'claims[0]'}]);
+      expect(first.issues).toEqual([{code: 'untrusted_parser_metadata', path: 'claims[0]',
+        claimDiagnostic: {ordinal: 1, code: 'untrusted_parser_metadata', field: 'parser_metadata'}}]);
       expect(first.contract?.claims?.[0].semantics).toEqual(original.claims![0].semantics);
       expect(first.contract?.rawClaims).toEqual(input.claims);
       const second = parseConclusionContractSidecar(renderConclusionContractMarkdown(first.contract!, {includeMachineSidecar: true}));
@@ -1942,7 +1946,9 @@ describe('versioned conclusion declaration sidecar', () => {
     for (const text of [json, '```json\n' + json + '\n```']) {
       const parsed = parseTypedConclusionContractJson(text);
       expect(parsed.status).toBe('invalid');
-      expect(parsed.issues).toEqual([{code: 'untrusted_parser_metadata', path: level === 'root' ? '$' : 'claims[0]'}]);
+      expect(parsed.issues).toEqual([level === 'root' ? {code: 'untrusted_parser_metadata', path: '$'}
+        : {code: 'untrusted_parser_metadata', path: 'claims[0]',
+          claimDiagnostic: {ordinal: 1, code: 'untrusted_parser_metadata', field: 'parser_metadata'}}]);
       const derived = deriveConclusionContract(text);
       expect(derived?.bindingEligibility).toBe('ineligible');
       expect(derived?.parseIssues).toEqual(parsed.issues);

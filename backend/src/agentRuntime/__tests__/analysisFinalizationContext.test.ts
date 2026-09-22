@@ -7,7 +7,7 @@ import type {AnalysisResult} from '../../agent/core/orchestratorTypes';
 import {buildStrategyRegistrySnapshotFromDefinitions} from '../../agentv3/strategyLoader';
 import {analysisDeliveryFingerprint} from '../../types/analysisDelivery';
 import {attachFinalizationContext, takeFinalizationContext, isIssuedFinalizationContext,
-  type RuntimeFinalizationContextInput} from '../analysisFinalizationContext';
+  reportReviewUsesRemainingBudget, type RuntimeFinalizationContextInput} from '../analysisFinalizationContext';
 import {finalizeSourceAwareAnalysisResultWithProjection} from '../../services/codebase/sourceClaimVerifier';
 import {renderConclusionContractSidecar} from '../../agent/core/conclusionContract';
 
@@ -38,6 +38,25 @@ const textInput = (signal: AbortSignal, deadlineMs = Date.now() + 1000) => ({
 });
 
 afterEach(() => {jest.useRealTimers();});
+
+describe('report review budget', () => {
+  const intent = {schemaVersion: 1, status: 'resolved', source: 'semantic', registryFingerprint: 'r',
+    taskKind: 'investigation', sceneId: 'general', scope: 'scene_wide', recommendedComplexity: 'full',
+    deliverable: 'report', evidenceAccess: 'read_new'} as const;
+  const eligible = {conclusionContract: {bindingEligibility: 'eligible'}} as unknown as AnalysisResult;
+
+  it('extends a report that will make its review, and nothing else', () => {
+    expect(reportReviewUsesRemainingBudget({semanticCall: true, turnIntent: intent, result: eligible})).toBe(true);
+    // No declaration at all still gets reviewed; an ineligible one is skipped, so it keeps the reserve.
+    expect(reportReviewUsesRemainingBudget({semanticCall: true, turnIntent: intent, result: {} as AnalysisResult})).toBe(true);
+    expect(reportReviewUsesRemainingBudget({semanticCall: true, turnIntent: intent,
+      result: {conclusionContract: {bindingEligibility: 'ineligible'}} as unknown as AnalysisResult})).toBe(false);
+    expect(reportReviewUsesRemainingBudget({semanticCall: false, turnIntent: intent, result: eligible})).toBe(false);
+    expect(reportReviewUsesRemainingBudget({semanticCall: true, turnIntent: {...intent, deliverable: 'answer'}, result: eligible})).toBe(false);
+    expect(reportReviewUsesRemainingBudget({semanticCall: true, turnIntent: {...intent, status: 'unavailable'}, result: eligible})).toBe(false);
+    expect(reportReviewUsesRemainingBudget({semanticCall: true, result: eligible})).toBe(false);
+  });
+});
 
 describe('private runtime finalization context', () => {
   function projectedFixture() {

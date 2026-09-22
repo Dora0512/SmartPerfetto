@@ -76,6 +76,21 @@ export interface RuntimeFinalizationContext {
   dispose(): void;
 }
 
+/**
+ * A report's quality gate fails without its semantic review, so a run that will
+ * make that review may spend the rest of its budget on it. Eligibility, not the
+ * projected body, decides: an ineligible declaration skips the review entirely.
+ */
+export function reportReviewUsesRemainingBudget(input: {
+  semanticCall: boolean;
+  turnIntent?: AnalysisTurnIntent;
+  result: Pick<AnalysisResult, 'conclusionContract'>;
+}): boolean {
+  return input.semanticCall && input.turnIntent?.status === 'resolved' &&
+    input.turnIntent.deliverable === 'report' &&
+    input.result.conclusionContract?.bindingEligibility !== 'ineligible';
+}
+
 const contexts = new WeakMap<AnalysisResult, ContextState>();
 const issuedContexts = new WeakSet<RuntimeFinalizationContext>();
 

@@ -118,6 +118,41 @@ export interface ConclusionContractParseIssue {
   details?: ConclusionContractStructureDetail[];
   /** Closed relation shape only; no raw proposal fields or values. */
   relationProposalDiagnostic?: ConclusionRelationProposalDiagnostic;
+  /** Closed claim location only: position, issue code and schema field, never model values. */
+  claimDiagnostic?: ConclusionClaimDiagnostic;
+}
+
+/** Each parse issue's closed set of schema fields; never model-authored keys. */
+const CLAIM_DIAGNOSTIC_FIELDS_BY_CODE = {
+  invalid_claim: ['claim', 'text', 'id', 'conclusionId', 'kind'],
+  invalid_reference: ['references', 'artifactRefs', 'relationRefs'],
+  invalid_semantics: ['semantics', 'semantics.unknown_field', 'semantics.schemaVersion', 'semantics.predicate',
+    'semantics.polarity', 'semantics.discourse', 'semantics.quantifier', 'semantics.modality', 'semantics.conditions',
+    'semantics.scope', 'semantics.scope.unknown_field', 'semantics.scope.population', 'semantics.scope.subjectRefs',
+    'semantics.scope.objectRefs', 'semantics.scope.timeRangeNs', 'semantics.numeric', 'semantics.source'],
+  duplicate_claim_id: ['id'],
+  untrusted_parser_metadata: ['parser_metadata'],
+} as const;
+
+export type ConclusionClaimDiagnosticCode = keyof typeof CLAIM_DIAGNOSTIC_FIELDS_BY_CODE;
+export type ConclusionClaimDiagnosticField =
+  typeof CLAIM_DIAGNOSTIC_FIELDS_BY_CODE[ConclusionClaimDiagnosticCode][number];
+
+/** One failing claim: its 1-based position in `claims`, the parse issue and the schema field. */
+export interface ConclusionClaimDiagnostic {
+  readonly ordinal: number;
+  readonly code: ConclusionClaimDiagnosticCode;
+  readonly field: ConclusionClaimDiagnosticField;
+}
+
+export const MAX_CLAIM_DIAGNOSTICS = 24;
+
+/** Only a code/field pair a parser can actually produce is a claim diagnostic. */
+export function isConclusionClaimDiagnostic(value: unknown): value is ConclusionClaimDiagnostic {
+  return record(value) && keysWithin(value, ['ordinal', 'code', 'field']) &&
+    Number.isSafeInteger(value.ordinal) && Number(value.ordinal) >= 1 && typeof value.code === 'string' &&
+    hasOwn(CLAIM_DIAGNOSTIC_FIELDS_BY_CODE, value.code) &&
+    (CLAIM_DIAGNOSTIC_FIELDS_BY_CODE[value.code as ConclusionClaimDiagnosticCode] as readonly unknown[]).includes(value.field);
 }
 
 export type ConclusionRelationProposalItemReason =
@@ -405,32 +440,29 @@ function referenceList(value: unknown): value is ConclusionContractClaimReferenc
   return Array.isArray(value) && value.every(claimReference);
 }
 
-/** Schema validation only; it does not infer meaning from a claim's wording. */
-export function parseClaimSemanticsDeclaration(raw: unknown, path = 'semantics'): {
-  semantics?: ClaimSemanticsV1;
-  rawSemantics?: unknown;
-  semanticsParseIssues?: ConclusionContractParseIssue[];
-} {
-  const invalid = () => ({rawSemantics: raw, semanticsParseIssues: [{code: 'invalid_semantics' as const, path}]});
-  if (!record(raw) || !keysWithin(raw, ['schemaVersion', 'predicate', 'polarity', 'discourse',
-    'quantifier', 'modality', 'conditions', 'scope', 'numeric', 'source']) ||
-    raw.schemaVersion !== CONCLUSION_PROTOCOL_VALUES.semanticsSchemaVersion || typeof raw.predicate !== 'string' ||
-    (!raw.predicate.trim() || /\s/.test(raw.predicate)) ||
-    !oneOf(raw.polarity, CONCLUSION_PROTOCOL_VALUES.polarity) ||
-    !oneOf(raw.discourse, CONCLUSION_PROTOCOL_VALUES.discourse) ||
-    !oneOf(raw.quantifier, CONCLUSION_PROTOCOL_VALUES.quantifier) ||
-    !oneOf(raw.modality, CONCLUSION_PROTOCOL_VALUES.modality) ||
-    (raw.conditions !== undefined && !stringList(raw.conditions))) return invalid();
+/** The first schema field a semantics declaration fails on; undefined when it is valid. */
+function claimSemanticsFailure(raw: unknown): ConclusionClaimDiagnosticField | undefined {
+  if (!record(raw)) return 'semantics';
+  if (!keysWithin(raw, ['schemaVersion', 'predicate', 'polarity', 'discourse',
+    'quantifier', 'modality', 'conditions', 'scope', 'numeric', 'source'])) return 'semantics.unknown_field';
+  if (raw.schemaVersion !== CONCLUSION_PROTOCOL_VALUES.semanticsSchemaVersion) return 'semantics.schemaVersion';
+  if (typeof raw.predicate !== 'string' || !raw.predicate.trim() || /\s/.test(raw.predicate)) return 'semantics.predicate';
+  if (!oneOf(raw.polarity, CONCLUSION_PROTOCOL_VALUES.polarity)) return 'semantics.polarity';
+  if (!oneOf(raw.discourse, CONCLUSION_PROTOCOL_VALUES.discourse)) return 'semantics.discourse';
+  if (!oneOf(raw.quantifier, CONCLUSION_PROTOCOL_VALUES.quantifier)) return 'semantics.quantifier';
+  if (!oneOf(raw.modality, CONCLUSION_PROTOCOL_VALUES.modality)) return 'semantics.modality';
+  if (raw.conditions !== undefined && !stringList(raw.conditions)) return 'semantics.conditions';
   const scope = raw.scope;
-  if (!record(scope) || !keysWithin(scope, ['subjectRefs', 'objectRefs', 'population', 'timeRangeNs']) ||
-    !oneOf(scope.population, CONCLUSION_PROTOCOL_VALUES.population) ||
-    (scope.subjectRefs !== undefined && !referenceList(scope.subjectRefs)) ||
-    (scope.objectRefs !== undefined && !referenceList(scope.objectRefs))) return invalid();
+  if (!record(scope)) return 'semantics.scope';
+  if (!keysWithin(scope, ['subjectRefs', 'objectRefs', 'population', 'timeRangeNs'])) return 'semantics.scope.unknown_field';
+  if (!oneOf(scope.population, CONCLUSION_PROTOCOL_VALUES.population)) return 'semantics.scope.population';
+  if (scope.subjectRefs !== undefined && !referenceList(scope.subjectRefs)) return 'semantics.scope.subjectRefs';
+  if (scope.objectRefs !== undefined && !referenceList(scope.objectRefs)) return 'semantics.scope.objectRefs';
   if (scope.timeRangeNs !== undefined) {
     const range = scope.timeRangeNs;
     if (!record(range) || !keysWithin(range, ['start', 'end']) || typeof range.start !== 'string' ||
       typeof range.end !== 'string' || !/^-?\d+$/.test(range.start) || !/^-?\d+$/.test(range.end) ||
-      BigInt(range.start) > BigInt(range.end)) return invalid();
+      BigInt(range.start) > BigInt(range.end)) return 'semantics.scope.timeRangeNs';
   }
   if (raw.numeric !== undefined) {
     const numeric = raw.numeric;
@@ -438,7 +470,7 @@ export function parseClaimSemanticsDeclaration(raw: unknown, path = 'semantics')
       !oneOf(numeric.operator, CONCLUSION_PROTOCOL_VALUES.operator) ||
       !((typeof numeric.value === 'number' && Number.isFinite(numeric.value)) ||
         (typeof numeric.value === 'string' && /^-?(?:\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(numeric.value))) ||
-      typeof numeric.unit !== 'string' || !numeric.unit.trim()) return invalid();
+      typeof numeric.unit !== 'string' || !numeric.unit.trim()) return 'semantics.numeric';
   }
   if (raw.source !== undefined) {
     const source = raw.source;
@@ -448,9 +480,23 @@ export function parseClaimSemanticsDeclaration(raw: unknown, path = 'semantics')
       !source.filePath.trim() || source.filePath.length > MAX_SOURCE_REFERENCE_PATH_LENGTH || !record(source.lineRange) ||
       !keysWithin(source.lineRange, ['start', 'end']) || !Number.isSafeInteger(source.lineRange.start) ||
       !Number.isSafeInteger(source.lineRange.end) || Number(source.lineRange.start) < 1 ||
-      Number(source.lineRange.end) < Number(source.lineRange.start)) return invalid();
+      Number(source.lineRange.end) < Number(source.lineRange.start)) return 'semantics.source';
   }
-  return {semantics: structuredClone(raw) as unknown as ClaimSemanticsV1};
+  return undefined;
+}
+
+type ClaimSemanticsResult = {semantics?: ClaimSemanticsV1; rawSemantics?: unknown;
+  semanticsParseIssues?: ConclusionContractParseIssue[]};
+
+/** The claim item's own semantics fields; the failing field is reported to the caller separately. */
+function claimSemanticsResult(raw: unknown, path: string, failure: ConclusionClaimDiagnosticField | undefined): ClaimSemanticsResult {
+  return failure ? {rawSemantics: raw, semanticsParseIssues: [{code: 'invalid_semantics', path}]}
+    : {semantics: structuredClone(raw) as unknown as ClaimSemanticsV1};
+}
+
+/** Schema validation only; it does not infer meaning from a claim's wording. */
+export function parseClaimSemanticsDeclaration(raw: unknown, path = 'semantics'): ClaimSemanticsResult {
+  return claimSemanticsResult(raw, path, claimSemanticsFailure(raw));
 }
 
 /** Preserve array order and duplicate IDs so binding validation can reject ambiguity. */
@@ -465,21 +511,27 @@ export function parseDeclaredConclusionClaims(raw: unknown): {
   const ids = new Set<string>();
   raw.forEach((item, index) => {
     const path = `claims[${index}]`;
+    // A new issue object per claim location: claim items keep their own semantics issues untouched.
+    const fail = (code: ConclusionClaimDiagnosticCode, field: ConclusionClaimDiagnosticField, issuePath = path) =>
+      issues.push({code, path: issuePath, claimDiagnostic: {ordinal: index + 1, code, field}});
     if (!record(item) || typeof item.text !== 'string') {
-      issues.push({code: 'invalid_claim', path});
+      fail('invalid_claim', record(item) ? 'text' : 'claim');
       return;
     }
-    if (!item.text.trim() || (item.id !== undefined && (typeof item.id !== 'string' || !item.id.trim())) ||
-      (item.conclusionId !== undefined && typeof item.conclusionId !== 'string') ||
-      (item.kind !== undefined && !oneOf(item.kind, CONCLUSION_PROTOCOL_VALUES.claimKind))) issues.push({code: 'invalid_claim', path});
-    if (CLAIM_PARSER_FIELDS.some(key => hasOwn(item, key))) issues.push({code: 'untrusted_parser_metadata', path});
+    const invalidField: ConclusionClaimDiagnosticField | undefined = !item.text.trim() ? 'text'
+      : item.id !== undefined && (typeof item.id !== 'string' || !item.id.trim()) ? 'id'
+        : item.conclusionId !== undefined && typeof item.conclusionId !== 'string' ? 'conclusionId'
+          : item.kind !== undefined && !oneOf(item.kind, CONCLUSION_PROTOCOL_VALUES.claimKind) ? 'kind' : undefined;
+    if (invalidField) fail('invalid_claim', invalidField);
+    if (CLAIM_PARSER_FIELDS.some(key => hasOwn(item, key))) fail('untrusted_parser_metadata', 'parser_metadata');
     const referencesValid = referenceList(item.references);
-    if (!referencesValid) issues.push({code: 'invalid_reference', path: `${path}.references`});
+    if (!referencesValid) fail('invalid_reference', 'references', `${path}.references`);
+    const semanticsFailure = hasOwn(item, 'semantics') ? claimSemanticsFailure(item.semantics) : undefined;
     const semantics = hasOwn(item, 'semantics')
-      ? parseClaimSemanticsDeclaration(item.semantics, `${path}.semantics`) : {};
-    issues.push(...(semantics.semanticsParseIssues ?? []));
+      ? claimSemanticsResult(item.semantics, `${path}.semantics`, semanticsFailure) : {};
+    if (semanticsFailure) fail('invalid_semantics', semanticsFailure, `${path}.semantics`);
     if (typeof item.id === 'string') {
-      if (ids.has(item.id)) issues.push({code: 'duplicate_claim_id', path: `${path}.id`});
+      if (ids.has(item.id)) fail('duplicate_claim_id', 'id', `${path}.id`);
       ids.add(item.id);
     }
     const artifactRefs = item.artifactRefs;
@@ -489,7 +541,7 @@ export function parseDeclaredConclusionClaims(raw: unknown): {
       (ref.rowIndex === undefined || (Number.isSafeInteger(ref.rowIndex) && Number(ref.rowIndex) >= 0)) &&
       (ref.rowSelector === undefined || record(ref.rowSelector))));
     if (!validArtifactRefs || (item.relationRefs !== undefined && !stringList(item.relationRefs))) {
-      issues.push({code: 'invalid_reference', path});
+      fail('invalid_reference', validArtifactRefs ? 'relationRefs' : 'artifactRefs');
     }
     claims.push({
       ...(typeof item.id === 'string' ? {id: item.id} : {}),

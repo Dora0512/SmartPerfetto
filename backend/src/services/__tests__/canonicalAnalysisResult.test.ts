@@ -271,6 +271,52 @@ describe('canonical analysis result projection', () => {
     expect(JSON.stringify(diagnostic)).not.toContain('PRIVATE_RELATION_');
   });
 
+  it('locates failing claims by position and schema field so one repair can find them, even past claim 24', () => {
+    const semantics = {schemaVersion: 'claim_semantics@1', predicate: 'numeric.cell', polarity: 'affirmed',
+      discourse: 'asserted', quantifier: 'one', modality: 'certain', scope: {population: 'cited_rows'}};
+    const claim = (index: number) => ({id: `claim-${index}`, kind: 'numeric', text: `Claim ${index}.`, references: [], semantics});
+    const claims: any[] = Array.from({length: 31}, (_, index) => claim(index + 1));
+    claims[1] = {...claim(2), semantics: {...semantics, scope: {population: 'PRIVATE_POPULATION_CANARY'}}};
+    claims[2] = {...claim(3), id: 'claim-1'};
+    claims[3] = {...claim(4), artifactRefs: 'PRIVATE_REF_CANARY'};
+    claims[29] = {...claim(30), semantics: {...semantics, predicate: 'has whitespace', PRIVATE_KEY_CANARY: 1}};
+    const raw = renderConclusionContractSidecar({...declaration(), claims} as any);
+    const inspected = inspectCandidateProtocol(raw);
+    const diagnostic = buildCandidateProtocolDiagnostic(inspected, 'native', 1);
+    expect(diagnostic.claimDiagnostics).toEqual([
+      {ordinal: 2, code: 'invalid_semantics', field: 'semantics.scope.population'},
+      {ordinal: 3, code: 'duplicate_claim_id', field: 'id'},
+      {ordinal: 4, code: 'invalid_reference', field: 'artifactRefs'},
+      {ordinal: 30, code: 'invalid_semantics', field: 'semantics.unknown_field'},
+    ]);
+    expect(sanitizeCandidateProtocolDiagnostic(diagnostic)).toEqual(diagnostic);
+    expect(JSON.stringify(diagnostic)).not.toContain('PRIVATE_');
+    // Diagnostics ride on the returned issues only; stored claim items keep their own issue shape.
+    const stored = inspected.sidecar.contract!.claims!.find(item => item.id === 'claim-2') as any;
+    expect(stored.semanticsParseIssues).toEqual([{code: 'invalid_semantics', path: 'claims[1].semantics'}]);
+    expect(JSON.stringify(inspected.sidecar.contract!.claims)).not.toContain('claimDiagnostic');
+  });
+
+  it('sanitizes claim diagnostics as a bounded collection of pairs a parser can produce', () => {
+    const raw = renderConclusionContractSidecar({...declaration(), claims: [
+      {...declaration().claims![0], semantics: {schemaVersion: 'other'}}]} as any);
+    const diagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(raw), 'native', 1);
+    expect(diagnostic.claimDiagnostics).toEqual([{ordinal: 1, code: 'invalid_semantics', field: 'semantics.schemaVersion'}]);
+    const item = {ordinal: 1, code: 'invalid_semantics', field: 'semantics.predicate'};
+    const invalidCollections: unknown[] = [
+      [], null, item, [item, item], Array.from({length: 25}, (_, index) => ({...item, ordinal: index + 1})),
+      [{...item, field: 'id'}], [{...item, code: 'duplicate_claim_id'}], [{...item, field: 'PRIVATE_FIELD_CANARY'}],
+      [{...item, ordinal: 0}], [{...item, ordinal: 1.5}], [{...item, raw: 'PRIVATE_VALUE_CANARY'}],
+      [{...item, code: 'invalid_reference', field: 'references'}],
+    ];
+    for (const claimDiagnostics of invalidCollections) {
+      expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, claimDiagnostics})).toBeUndefined();
+    }
+    expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, claimDiagnostics: [{...item, ordinal: 40}]}))
+      .toMatchObject({claimDiagnostics: [{ordinal: 40}]});
+    expect(sanitizeCandidateProtocolDiagnostic({...diagnostic, status: 'valid'})).toBeUndefined();
+  });
+
   it('sanitizes relation diagnostics as a closed bounded discriminated collection', () => {
     const raw = renderConclusionContractSidecar({...declaration(), relationProposals: null} as any);
     const diagnostic = buildCandidateProtocolDiagnostic(inspectCandidateProtocol(raw), 'native', 1);

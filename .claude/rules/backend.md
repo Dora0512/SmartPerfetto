@@ -218,20 +218,39 @@ Keep these boundaries intact:
   `timeout`; no returned data or a failed delivery restores the empty result.
   Finalization evidence reads are bounded by the deadline the run hands over,
   so a fixed finalization reserve inside the delivery reserve is never spent
-  by the delivery call. When no delivery call ran, the unspent reserve funds
-  finalization (at most that reserve from now, never past hard): its one
-  no-tool semantic review is the call the reserve exists for, and a fixed 60 s
-  window timed it out on slow providers. A one-shot provider call must not
-  wait for a whole non-streamed reply: its headers arrive only after
-  generation, so a long reasoning phase hits fetch's default 300 s headers
-  timeout (a GLM review first emitted answer text at 496 s) whatever the
-  budget. The OpenAI intent and semantic requests therefore stream, leaving
-  the run deadline in charge; a body idle timeout still applies. Like
-  turn-limit results, a timeout result authorizes no semantic model call.
-  `*_MAX_RUN_TIMEOUT_MS` is part of the provider snapshot fingerprint. Claude scene dispatch uses the same
-  progress-aware budget (`CLAUDE_MAX_RUN_TIMEOUT_MS`), without a timeout
+  by the delivery call. When no delivery call ran, finalization funds its one
+  no-tool semantic review from the unspent budget: a completed report with a
+  usable declaration will make that review and may use everything up to hard
+  (OpenAI runs and Claude scene runs), because the report
+  quality gate fails whenever the review does not finish (a GLM review of a
+  176 KB report outlasted the 600 s reserve with 1157 s still left); any other
+  run gets at most the delivery reserve from now. Prefetch shares that
+  deadline, so the extension is granted only when the review will run, and
+  outer harness timeouts (evaluation replay, the SSE verifier default) can
+  now end such a run before hard. A one-shot provider call must not wait for
+  a whole non-streamed reply: its headers arrive only after generation, so a
+  long reasoning phase hits fetch's default 300 s headers timeout (a GLM
+  review first emitted answer text at 496 s) whatever the budget. The OpenAI
+  intent and semantic requests therefore stream, leaving the run deadline in
+  charge; a body idle timeout still applies. Like turn-limit results, a
+  timeout result authorizes no semantic model call. `*_MAX_RUN_TIMEOUT_MS` is
+  part of the provider snapshot fingerprint. Claude scene dispatch uses the
+  same progress-aware budget (`CLAUDE_MAX_RUN_TIMEOUT_MS`), without a timeout
   delivery call; non-scene Claude runs, Pi, OpenCode and Qoder still use fixed
   budgets.
+- One invalid claim makes the whole declaration ineligible, which skips the
+  semantic review and fails a report's quality gate. The shared native
+  declaration completion therefore also repairs a well-framed rejected
+  declaration (`repairInvalid`, Claude/OpenCode/Qoder/Pi) in the same single
+  delivery turn: the model receives the sidecar-free body and the rejected
+  declaration separately, with `claimDiagnostics` naming each failing claim's
+  position and schema field (the first failing field per claim, at most 24
+  entries, so the prompt asks for a declaration that passes the full
+  protocol). The repair is accepted only if the body is unchanged and it keeps
+  every declared claim id and at least as many claims; for Pi it replaces the
+  former full-answer correction of such a declaration. Framing failures keep
+  the existing path. OpenAI keeps its full-answer continuation for an invalid
+  protocol and receives the same diagnostics.
 - Scene runs pace acquisition at the shared registry, after scope and
   lifecycle guards, through `RuntimeAcquisitionPolicy`: a reminder, then a
   first-revision pause lifted by any segment-bearing attempt, and a monotone

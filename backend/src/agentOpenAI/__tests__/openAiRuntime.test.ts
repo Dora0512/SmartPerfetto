@@ -470,6 +470,37 @@ describe('OpenAI cancellation and bounded recovery', () => {
       expect(result.completion).toMatchObject({status: 'completed'});
     });
 
+    it('lets a completed report spend the remaining budget on its semantic review', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+      classify({...decision, taskKind: 'investigation', scope: 'scene_wide', recommendedComplexity: 'full', deliverable: 'report'});
+      mockRun(sdkStream('Report body.'));
+      const startedAt = Date.now();
+      const result = await runtime.analyze('query', 'report-budget', 'trace', {analysisMode: 'fast', providerId: null});
+      const context = finalization.takeFinalizationContext(result)!;
+      finalizationContexts.push(context);
+      expect(result.turnIntent).toMatchObject({status: 'resolved', deliverable: 'report'});
+      expect(result.completion.status).toBe('completed');
+      expect(context.hasSemanticTransport).toBe(true);
+      // up to hard (3 s), not the 500 ms delivery reserve
+      expect(context.deadlineMs).toBeGreaterThanOrEqual(startedAt + 3_000);
+      expect(context.deadlineMs).toBeLessThanOrEqual(Date.now() + 3_000);
+    });
+
+    it('keeps a completed answer within the delivery reserve for its review', async () => {
+      jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
+      const runtime = createOpenAiRuntimeForTest(); prepareStub(runtime);
+      classify({...decision, deliverable: 'answer'});
+      mockRun(sdkStream('Short answer.'));
+      const startedAt = Date.now();
+      const result = await runtime.analyze('query', 'answer-budget', 'trace', {analysisMode: 'fast', providerId: null});
+      const context = finalization.takeFinalizationContext(result)!;
+      finalizationContexts.push(context);
+      expect(result.turnIntent).toMatchObject({deliverable: 'answer'});
+      expect(result.completion.status).toBe('completed');
+      expect(context.deadlineMs).toBeLessThan(startedAt + 3_000);
+    });
+
     it('delivers a limited answer from returned data when the budget runs out', async () => {
       jest.mocked(configModule.loadOpenAIConfig).mockReturnValue(slowConfig());
       const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);

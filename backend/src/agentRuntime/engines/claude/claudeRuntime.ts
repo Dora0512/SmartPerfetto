@@ -14,12 +14,13 @@ import {
   buildNativeDeclarationCompletionPrompt,
   nativeDeclarationBodyCanFitOutput,
   requestNativeDeclarationCompletion,
+  INVALID_NATIVE_DECLARATION,
 } from '../../runtimeConclusionProtocol';
 import {createRuntimeAnalysisHistoryReader, renderAnalysisHistoryContext} from '../../analysisHistory';
 import {resolveKnowledgeScope} from '../../../services/scopedKnowledgeStore';
 import type {RuntimeToolObserver} from '../../runtimeToolObserver';
 import {runClaudeIntentTransport} from './claudeIntentTransport';
-import {attachFinalizationContext, type RuntimeFinalizationContextInput} from '../../analysisFinalizationContext';
+import {reportReviewUsesRemainingBudget, attachFinalizationContext, type RuntimeFinalizationContextInput} from '../../analysisFinalizationContext';
 import {analysisDeliveryFingerprint, type AnalysisCandidateIdentity, type AnalysisCompletion, type AnalysisOutputOrigin, type AnalysisDeliveryContext} from '../../../types/analysisDelivery';
 import type {ReadonlyStrategyRegistrySnapshot} from '../../../services/selfEvolution/effectiveRuntimeRegistryContext';
 import * as fs from 'fs';
@@ -822,16 +823,18 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         ...(identity.currentTraceId ? [{traceId: identity.currentTraceId, traceSide: 'current' as const}] : []),
         ...(identity.referenceTraceId ? [{traceId: identity.referenceTraceId, traceSide: 'reference' as const}] : []),
       ];
+      const semanticCall = allowSemantic && result.completion?.status === 'completed' &&
+        result.outputOrigin === 'sdk_final' && result.conclusion.trim().length > 0;
+      const intent = finalizationSetup.input.turnIntent;
       attachFinalizationContext(result, {
         ...finalizationSetup.input, deliveryContext, protocolProjection,
-        ...(runDeadline ? {deadlineMs: runDeadline.finalizationDeadlineAt(Date.now(), closeoutDeadlineAt)} : {}),
+        ...(runDeadline ? {deadlineMs: runDeadline.finalizationDeadlineAt(Date.now(), closeoutDeadlineAt, {
+          useRemainingBudget: reportReviewUsesRemainingBudget({semanticCall, turnIntent: intent, result})})} : {}),
         sourceUse: sourceUse?.getSourceUseDecision(),
         sourceScope: sourceUse?.getSourceExecutionScope?.(),
         evidenceReadView: store?.createEvidenceReadView({allowedTraces, ownerKey: finalizationSetup.ownerKey,
           currentRunId: finalizationSetup.input.runId}),
-        dispatchText: allowSemantic && result.completion?.status === 'completed' &&
-          result.outputOrigin === 'sdk_final' && result.conclusion.trim().length > 0
-          ? finalizationSetup.input.dispatchText : undefined,
+        dispatchText: semanticCall ? finalizationSetup.input.dispatchText : undefined,
       });
     };
     const projectAcceptedCandidate = (rawBody: string, failed = false) => {
@@ -1861,11 +1864,22 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           completion: projectedCandidate.deliveryContext.completion ?? {status: 'unknown'},
           candidate: nativeCandidate,
           remainingDeliveryTurns: remainingTurns > 0 ? turnBudget.deliveryTurns : 0,
+          repairInvalid: true,
         });
         const declarationRequest = declarationNeed &&
           nativeDeclarationBodyCanFitOutput(nativeCandidate, 128 * 1024) &&
           (remainingBudgetUsd === undefined || remainingBudgetUsd > 0) ? declarationNeed : undefined;
-        const correctionNeeded = declarationRequest !== undefined || declarationNeed === undefined && issues.length > 0;
+        // Which gate closed is otherwise unrecoverable after the run: the candidate
+        // carrying the declaration is private and never persisted.
+        if (!declarationRequest) {
+          console.log(`[ClaudeRuntime] declaration repair skipped: need=${declarationNeed?.reason ?? 'none'} ` +
+            `completion=${projectedCandidate.deliveryContext.completion?.status ?? 'unknown'} turns=${remainingTurns} ` +
+            `fits=${nativeDeclarationBodyCanFitOutput(nativeCandidate, 128 * 1024)} ` +
+            `budget=${remainingBudgetUsd === undefined ? 'unbounded' : remainingBudgetUsd > 0 ? 'available' : 'exhausted'}`);
+        }
+        // A repair that cannot run leaves the issue-based correction available, as before repairs existed.
+        const correctionNeeded = declarationRequest !== undefined ||
+          (declarationNeed === undefined || declarationNeed.reason === INVALID_NATIVE_DECLARATION) && issues.length > 0;
         if (correctionNeeded &&
             projectedCandidate.deliveryContext.completion?.status === 'completed' &&
             remainingTurns > 0 && Date.now() < requestDeadline) {

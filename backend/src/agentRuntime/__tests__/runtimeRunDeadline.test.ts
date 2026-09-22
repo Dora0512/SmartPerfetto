@@ -82,6 +82,15 @@ describe('progress-aware run deadline', () => {
     expect(deadline.investigationLimitAt).toBe(3000 * S);
   });
 
+  it('lets a report that will make its semantic review spend the remaining budget, never a delivery window', () => {
+    const deadline = createProgressAwareRunDeadline(budget);
+    // The review of a 176 KB report outlasted 600 s on a slow reasoning provider; hard still had 1157 s.
+    expect(deadline.finalizationDeadlineAt(1800 * S, undefined, {useRemainingBudget: true})).toBe(3600 * S);
+    expect(deadline.finalizationDeadlineAt(3590 * S, undefined, {useRemainingBudget: true})).toBe(3600 * S);
+    // A delivery call already spent the reserve: the option cannot reopen it.
+    expect(deadline.finalizationDeadlineAt(3100 * S, 3200 * S, {useRemainingBudget: true})).toBe(3240 * S);
+  });
+
   it('treats a maximum below the base budget as the base budget and keeps no reserve', () => {
     const deadline = createProgressAwareRunDeadline({...budget, maxRunMs: 1});
     expect(deadline.hardDeadlineAt).toBe(2000 * S);

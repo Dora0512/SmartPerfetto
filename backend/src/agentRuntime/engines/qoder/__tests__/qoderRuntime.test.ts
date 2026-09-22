@@ -228,6 +228,7 @@ import {projectCodeAwareStreamingUpdate} from '../../../../services/security/cod
 import {renderConclusionContractSidecar, type ConclusionContract} from '../../../../agent/core/conclusionContract';
 import {inspectCandidateProtocol} from '../../../../services/canonicalAnalysisResult';
 import {createSceneRuntimeMatrixFixture} from '../../../../../tests/helpers/sceneRuntimeMatrixFixture';
+import {candidateWithPopulation} from '../../../../../tests/helpers/conclusionDeclarationFixture';
 
 function createRuntime(
   env: Record<string, string | undefined> = {},
@@ -1431,6 +1432,22 @@ describe('QoderRuntime', () => {
       expect(mockQuery.mock.calls[0][0]).toMatchObject({
         prompt: 'localized trace context\n\ntest query',
       });
+    });
+
+    it('uses the same delivery turn to repair a rejected declaration around the unchanged body', async () => {
+      const body = 'Frame 12 missed its deadline.';
+      mockIntentTransport
+        .mockResolvedValueOnce({status: 'ok', text: JSON.stringify(defaultIntentDecision)})
+        .mockResolvedValueOnce({status: 'ok', text: candidateWithPopulation(body, 'cited_rows'), finishReason: 'end_turn'});
+      mockQuery.mockReturnValue(createMockSdkStream([
+        {type: 'result', subtype: 'success', is_error: false, result: candidateWithPopulation(body, 'everywhere'), num_turns: 1},
+      ]));
+      const result = await createRuntime().analyze('test', 'qoder-invalid-declaration', 'trace-1', {runId: 'qoder-invalid-declaration'});
+      expect(mockIntentTransport).toHaveBeenCalledTimes(2);
+      expect((mockIntentTransport.mock.calls[1][0] as any).prompt).toContain('invalid_declaration');
+      expect(inspectCandidateProtocol(result.conclusion)).toMatchObject({status: 'valid'});
+      expect(inspectCandidateProtocol(result.conclusion).canonicalBody.trim()).toBe(body);
+      takeFinalizationContext(result)?.dispose();
     });
 
     it('uses one no-tools delivery turn for an unchanged full native declaration candidate', async () => {

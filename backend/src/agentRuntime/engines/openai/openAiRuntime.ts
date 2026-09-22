@@ -71,13 +71,13 @@ import {TransformStream} from 'node:stream/web';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
 import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {runOpenAiIntentTransport} from './openAiIntentTransport';
-import {attachFinalizationContext} from '../../analysisFinalizationContext';
+import {attachFinalizationContext, reportReviewUsesRemainingBudget} from '../../analysisFinalizationContext';
 import {buildRuntimeTracePairIdentityContext} from '../../runtimePromptContext';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
 import {
   acceptNativeDeclarationCompletion,
   buildNativeDeclarationCompletionPrompt,
-  buildRelationProposalRecoveryPromptFragment,
+  appendRelationProposalRecoveryFragment,
   requestNativeDeclarationCompletion,
   type NativeDeclarationCompletionRequest,
 } from '../../runtimeConclusionProtocol';
@@ -526,10 +526,8 @@ function buildOpenAiOutputLimitRecoveryInput(
       completion_reason: recoveryReason,
       candidate_protocol_diagnostic: JSON.stringify(sanitizeCandidateProtocolDiagnostic(candidateDiagnostic) ?? null),
     });
-    let relationFragment: string;
-    try { relationFragment = buildRelationProposalRecoveryPromptFragment(candidateDiagnostic, language); }
+    try { prompt = appendRelationProposalRecoveryFragment(basePrompt, candidateDiagnostic, language); }
     catch { return undefined; }
-    prompt = relationFragment ? `${basePrompt}\n\n${relationFragment}` : basePrompt;
   }
   const input: AgentInputItem[] = [...history, {role: 'user', content: prompt}];
   return serializedByteLength(input) <= maxHistoryBytes ? input : undefined;
@@ -1080,9 +1078,6 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       }
       analysisAbortScope.throwIfAborted();
       acceptsToolUpdates = false;
-      // Finalization gets the deadline this run reached plus the reserved time its
-      // evidence reads need; it cannot extend it and never passes the hard deadline.
-      const finalizationDeadlineAt = runDeadline.finalizationDeadlineAt(Date.now(), deliveryDeadlineAt);
       const budget = runDeadline.snapshot();
       if (budget.extended || timeoutDelivery !== 'not_needed') {
         const delivery = timeoutDelivery !== 'attempted' ? timeoutDelivery
@@ -1116,6 +1111,11 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         result: nativeResult, runId, attemptId, finish, outputOrigin,
         sourceUse,
       });
+      // Finalization gets the deadline this run reached plus the reserved time its
+      // evidence reads need; it cannot extend it and never passes the hard deadline.
+      const semanticCall = result.completion?.reason !== 'turn_limit' && result.completion?.reason !== 'timeout';
+      const finalizationDeadlineAt = runDeadline.finalizationDeadlineAt(Date.now(), deliveryDeadlineAt, {
+        useRemainingBudget: reportReviewUsesRemainingBudget({semanticCall, turnIntent: resolvedTurnIntent, result})});
       this.emitUpdate({type: 'progress', content: {phase: 'candidate_protocol',
         candidateProtocolDiagnostic: buildCandidateProtocolDiagnostic(inspectCandidateProtocol(result.conclusion), 'runtime_projected',
           recoveryCandidate && attemptId !== recoveryCandidate.attemptId ? 2 : 1, conclusionProjection.disposition)}, timestamp: Date.now()});
@@ -1162,7 +1162,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
           }),
           // No SDK/session state survives this closure. The shared context supplies
           // the finalization caller's signal and clamps the original absolute deadline.
-          dispatchText: result.completion?.reason === 'turn_limit' || result.completion?.reason === 'timeout'
+          dispatchText: !semanticCall
             ? undefined : input => runOpenAiIntentTransport({...input,
             config: finalizationConfig, purpose: 'final_semantic',
             ...(finalizationConfig.maxOutputTokens !== undefined

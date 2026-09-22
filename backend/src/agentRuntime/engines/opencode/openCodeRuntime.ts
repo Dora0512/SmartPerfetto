@@ -2971,6 +2971,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       candidate: conclusion,
       remainingDeliveryTurns: !turnLimitReached && actualTurns < turnBudget.totalTurns
         ? turnBudget.deliveryTurns : 0,
+      repairInvalid: true,
     });
     const declarationOutputLimit = 64 * 1024;
     if (declarationRequest && nativeDeclarationBodyCanFitOutput(conclusion, declarationOutputLimit) &&
