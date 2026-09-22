@@ -279,7 +279,7 @@ export class TraceProcessorLeaseStore {
       `).run(now, expiresAt, lease.id);
       this.refreshLeaseActivityState(scope, lease.id);
       return this.getLeaseById(scope, lease.id)!;
-    })();
+    }).immediate();
   }
 
   acquireHolderForLease(
@@ -311,7 +311,7 @@ export class TraceProcessorLeaseStore {
       `).run(now, expiresAt, lease.id);
       this.refreshLeaseActivityState(scope, lease.id);
       return this.getLeaseById(scope, lease.id)!;
-    })();
+    }).immediate();
   }
 
   heartbeatHolder(

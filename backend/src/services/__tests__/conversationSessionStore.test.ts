@@ -2,11 +2,11 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import {afterEach, beforeEach, describe, expect, it} from '@jest/globals';
+import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import {ConversationSessionStore, type ConversationSessionDescriptor} from '../conversationSessionStore';
 import {toAnalysisHistoryTurn} from '../../agentRuntime/analysisHistory';
 import {openEnterpriseDb, ENTERPRISE_DB_PATH_ENV} from '../enterpriseDb';
@@ -43,6 +43,26 @@ afterEach(() => {
 });
 
 describe('logical conversation durability', () => {
+  it('holds the write lock across its owner and descriptor reads', () => {
+    // A deferred save lost its read snapshot to any commit before its first write
+    // and failed at once with SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot wait out.
+    const other = new Database(process.env[ENTERPRISE_DB_PATH_ENV]!, {timeout: 0});
+    const outcomes: string[] = [];
+    const prepare = db.prepare.bind(db);
+    const spy = jest.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.includes('INSERT INTO runtime_snapshots')) {
+        try {other.prepare("UPDATE analysis_runs SET status = 'running' WHERE id = 'run-a'").run(); outcomes.push('committed');}
+        catch (error) {outcomes.push((error as {code?: string}).code ?? 'error');}
+      }
+      return prepare(sql);
+    }) as typeof db.prepare);
+    try {
+      expect(() => new ConversationSessionStore(db).save(descriptor())).not.toThrow();
+      expect(outcomes).toEqual(['SQLITE_BUSY']);
+      expect(new ConversationSessionStore(db).load(owner, scope.sessionId)?.lastRun.runId).toBe('run-a');
+    } finally {spy.mockRestore(); other.close();}
+  });
+
   it('recovers a pre-final-commit crash as a running descriptor with explicitly partial history', () => {
     new ConversationSessionStore(db).save(descriptor(), turn());
     const restarted = new ConversationSessionStore(db);

@@ -409,6 +409,9 @@ signal, not an automatic quick/full decision.
   Source-derived history requires its original nonempty authorization fingerprint
   to match the current permitted scope, including bound-reader and restart paths.
   Missing historical scope must not be filled using current authorization.
+- Transactions on the shared SQLite files that read before they write run with
+  `.immediate()`; `busy_timeout` cannot save a deferred upgrade once another
+  process commits (see `openEnterpriseDb`).
 - Conversation descriptor and finalized turn writes are atomic. Recovery checks
   tenant/workspace/current owner before loading content, validates provider and
   source pins, and settles interrupted runs without recreating their execution.

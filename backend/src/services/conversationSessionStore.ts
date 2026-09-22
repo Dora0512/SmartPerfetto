@@ -116,6 +116,7 @@ export class ConversationSessionStore {
   save(input: ConversationSessionDescriptor, finalizedTurn?: AnalysisHistoryTurn): void {
     const descriptor = projectedDescriptor(input);
     const scope = conversationHistoryScope(descriptor);
+    // Reads the owner and previous descriptor before writing: IMMEDIATE (see openEnterpriseDb).
     this.db.transaction(() => {
       const owner = this.db.prepare(`SELECT id FROM analysis_sessions WHERE id = ? AND tenant_id = ?
         AND workspace_id = ? AND created_by = ? AND trace_id = ?`).get(scope.sessionId,
@@ -140,7 +141,7 @@ export class ConversationSessionStore {
           created_at = excluded.created_at`).run(snapshotId(descriptor), descriptor.tenantId,
         descriptor.workspaceId, descriptor.sessionId, descriptor.lastRun.runId, RUNTIME_TYPE,
         JSON.stringify(descriptor), descriptor.lastActivityAt);
-    })();
+    }).immediate();
   }
 
   close(): void { if (this.ownsDb) this.db.close(); }

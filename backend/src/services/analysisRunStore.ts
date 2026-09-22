@@ -343,5 +343,5 @@ export function failInterruptedAnalysisRunsOnStartup(
       sessionId: run.session_id,
       previousStatus: run.status,
     }));
-  })();
+  }).immediate();
 }

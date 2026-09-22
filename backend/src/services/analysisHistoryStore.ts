@@ -89,6 +89,7 @@ export class AnalysisHistoryStore {
       throw new Error('analysis_history_invalid_turn');
     }
     const db = this.injectedDb ?? historyDb();
+    // Reads the parent before writing: IMMEDIATE (see openEnterpriseDb).
     db.transaction(() => {
       const parent = db.prepare(`SELECT r.id FROM analysis_runs r JOIN analysis_sessions s
         ON s.id = r.session_id AND s.tenant_id = r.tenant_id AND s.workspace_id = r.workspace_id
@@ -105,7 +106,7 @@ export class AnalysisHistoryStore {
         VALUES (?,?,?,?,?,'analysis_history',?,?) ON CONFLICT(id) DO UPDATE SET content_json = excluded.content_json`)
         .run(entry.id, scope.tenantId, scope.workspaceId, scope.sessionId, scope.runId,
           JSON.stringify({schemaVersion: 1, kind: 'analysis_history', turn: normalized}), entry.timestamp);
-    })();
+    }).immediate();
   }
 
   list(scope: AnalysisHistoryScope): AnalysisHistoryTurn[] {

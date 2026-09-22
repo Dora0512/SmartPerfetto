@@ -24,6 +24,10 @@ export function openEnterpriseDb(dbPath = resolveEnterpriseDbPath()): Database.D
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+  // busy_timeout covers waiting for the write lock, not upgrading to it: a
+  // deferred transaction that reads first fails at once with
+  // SQLITE_BUSY_SNAPSHOT when another process commits in between. Transactions
+  // that read before writing therefore run with `.immediate()`.
   db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');
   applyEnterpriseMinimalSchema(db);

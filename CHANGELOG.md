@@ -31,6 +31,10 @@ Detailed commit-level history is available via `git log`.
   OpenAI runtime streams its intent and semantic requests. A slow reasoning
   provider previously lost every review to fetch's default five-minute headers
   timeout; a review that outlasts the reserve is still reported as unverified.
+- Finalized history, conversation descriptors, trace-processor lease
+  acquisition and startup run recovery take the SQLite write lock before they
+  read, so a commit from another process no longer fails the run with
+  "database is locked".
 - Summarized SQL results list the original row index of each sample row, and
   the Agent SSE verification script exits after writing its artifacts.
 
