@@ -48,7 +48,7 @@ const sliceSchema = `
 `;
 const counterSchema = `
   CREATE TABLE counter(id INTEGER, track_id INTEGER, ts INTEGER, value REAL);
-  CREATE TABLE counter_track(id INTEGER, name TEXT, unit TEXT);
+  CREATE TABLE counter_track(id INTEGER, name TEXT, unit TEXT, type TEXT);
   CREATE TABLE cpu_counter_track(id INTEGER, cpu INTEGER, name TEXT);
 `;
 
@@ -147,7 +147,8 @@ describe('domain system evidence range contracts', () => {
   });
 
   const thermalSchema = `${counterSchema}
-    INSERT INTO counter_track VALUES (1, 'thermal.cpu', 'C'), (2, 'cooling_device', NULL);
+    INSERT INTO counter_track VALUES
+      (1, 'thermal.cpu', 'C', 'thermal_temperature'), (2, 'cooling_device', NULL, 'cooling_device_counter');
     INSERT INTO cpu_counter_track VALUES (3, 0, 'cpufreq');
     INSERT INTO counter VALUES
       (1, 1, 0, 99), (2, 1, 10000000, 40), (3, 1, 19000000, 60), (4, 1, 20000000, 999),
