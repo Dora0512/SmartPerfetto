@@ -16,6 +16,7 @@ import {
 import {projectCriticalPathAnalysis} from '../services/criticalPathLocalization';
 import {sendResourceNotFound} from '../services/resourceOwnership';
 import {isSafeTraceId, readTraceMetadataForContext} from '../services/traceMetadataStore';
+import {isTraceProcessorQueryCancelledError} from '../services/traceProcessorCancellation';
 import {getTraceProcessorService} from '../services/traceProcessorService';
 import {clientDisconnectSignal} from './clientDisconnect';
 
@@ -55,6 +56,7 @@ const CRITICAL_PATH_INPUT_ERROR_STATUS = {
   missing_selector: 400,
   non_positive_duration: 400,
   invalid_integer: 400,
+  invalid_name: 400,
 } satisfies Record<CriticalPathInputErrorCode, 400 | 404>;
 
 function inputErrorMessage(code: CriticalPathInputErrorCode, language: OutputLanguage): string {
@@ -77,6 +79,12 @@ function inputErrorMessage(code: CriticalPathInputErrorCode, language: OutputLan
       return localize(language, '选中 task 的时长必须大于 0', 'The selected task duration must be positive');
     case 'invalid_integer':
       return localize(language, '数值参数必须是整数', 'Numeric parameters must be integers');
+    case 'invalid_name':
+      return localize(
+        language,
+        '名称不能含控制字符，且最多 200 个字符',
+        'Names must contain no control characters and be at most 200 characters',
+      );
   }
 }
 
@@ -145,6 +153,7 @@ router.post('/:traceId/analyze', async (req, res) => {
       recursionDepth: body.recursionDepth,
       recursionEnabled: body.recursionEnabled,
       segmentBudget: body.segmentBudget,
+      signal: clientGone,
     };
     const rawAnalysis = await analyzeCriticalPath(traceProcessorService, traceId, analyzeOptions);
     const aiSummary =
@@ -168,6 +177,12 @@ router.post('/:traceId/analyze', async (req, res) => {
       aiSummary,
     });
   } catch (error: unknown) {
+    // The client is gone and the engine stopped because of it: nobody is
+    // left to answer.
+    if (clientGone.aborted && isTraceProcessorQueryCancelledError(error)) {
+      console.info('[CriticalPath] Analysis cancelled: client disconnected');
+      return;
+    }
     if (error instanceof CriticalPathInputError) {
       return res.status(CRITICAL_PATH_INPUT_ERROR_STATUS[error.code]).json({
         success: false,

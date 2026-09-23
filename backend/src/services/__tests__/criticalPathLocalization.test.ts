@@ -98,12 +98,12 @@ describe('criticalPathLocalization', () => {
     const fixture: CriticalPathAnalysis = {
       ...structuredClone(analysis),
       warnings: [
-        'critical path 结果超过 3200 行上限，已截断为前 170 个链路段（展示前 160 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。',
+        'critical path 超过 2000 个链路段上限，已截断为前 170 个链路段（展示前 160 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。',
         'critical path 共 180 个链路段，仅展示前 160 个；阻塞时长、模块占比与反事实估计按完整链路计算。',
         'no recorded waker on the wakeup row (waker_utid is NULL)',
         'critical path recursion stopped at the segment budget (16); some long segments were not expanded',
         'critical path recursion failed for utid 42: no such table: foo',
-        'thread tid/upid lookup failed; GC evidence not checked',
+        'critical path recursion for utid 42 was cut at 160 segments',
       ],
       directWaker: {
         threadStateId: null,
@@ -131,7 +131,7 @@ describe('criticalPathLocalization', () => {
       '唤醒行上没有记录 waker（waker_utid 为 NULL）',
       'critical path 递归已达到段预算（16），部分长链路段未展开',
       'critical path 递归查询 utid 42 失败： no such table: foo',
-      '线程 tid/upid 查询失败；未检查 GC 证据',
+      'critical path 递归查询 utid 42 在 160 个链路段处截断',
     ]);
     expect(zh.directWaker?.hints).toEqual([
       '在 IRQ 上下文中被唤醒（唤醒行 irq_context=1）',
@@ -141,7 +141,7 @@ describe('criticalPathLocalization', () => {
 
     const en = projectCriticalPathAnalysis(fixture, 'en');
     expect(en.warnings.slice(0, 2)).toEqual([
-      'The critical-path result exceeded the 3200-row limit and was cut to the first 170 chain segments (160 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
+      'The critical path exceeded the 2000-segment limit and was cut to the first 170 chain segments (160 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
       'The critical path has 180 chain segments; only the first 160 are shown. Blocking time, module shares and the counterfactual cover the full chain.',
     ]);
     for (const value of [...en.warnings, ...(en.directWaker?.hints ?? [])]) {

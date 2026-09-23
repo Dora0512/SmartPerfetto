@@ -9367,9 +9367,7 @@ describe('analyze_wait_chain', () => {
         wakeSourceClass: 'network_receive_candidate',
         semantics: {
           segmentKey: 's1', binderTxns: [], monitorContention: [], ioSignals: [], gcEvents: [],
-          cpuCompetition: [], wakeSources: [wakeSource], warnings: [],
-          sources: {binder: 'present', monitor: 'present', io: 'present', gc: 'present',
-            cpu: 'present', wakeSource: 'present'},
+          cpuCompetition: [], wakeSources: [wakeSource],
         },
         children: [child],
       }],
@@ -9383,7 +9381,7 @@ describe('analyze_wait_chain', () => {
         {threadStateId: 1, startTs: 1_000, endTs: 5_000_000, durationMs: 4, state: 'S',
           kind: 'sleeping', cpu: null, blockedFunction: null, ioWait: null, segmentCount: 1},
         {threadStateId: 2, startTs: 5_000_000, endTs: 11_000_000, durationMs: 6, state: 'Running',
-          kind: 'running', cpu: 3, blockedFunction: null, ioWait: null, segmentCount: 0},
+          kind: 'running', cpu: 3, blockedFunction: null, ioWait: null},
       ],
       directWaker: {threadStateId: null, utid: null, tid: null, threadName: null, processName: null,
         state: null, cpu: null, irqContext: true, kind: 'irq', hints: []},
@@ -9526,7 +9524,7 @@ describe('analyze_wait_chain', () => {
       task: {utid: 42, tid: 1200, upid: 7, startTs: 1_000, dur: 10_000_000, durationMs: 10,
         state: 'Running', threadName: 'com.example.app', processName: 'com.example.app'},
       slices: [{threadStateId: 2, startTs: 1_000, endTs: 10_001_000, durationMs: 10, state: 'Running',
-        kind: 'running', cpu: 3, blockedFunction: null, ioWait: null, segmentCount: 0}],
+        kind: 'running', cpu: 3, blockedFunction: null, ioWait: null}],
     }));
     const server = createTestServer();
 
@@ -9585,6 +9583,23 @@ describe('analyze_wait_chain', () => {
     // circuit breaker's failure rate would shrink the room it needs to fix it.
     expect(isPolicyRefusalResult(raw)).toBe(true);
     expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unprintable thread name as a caller error, and hands the run signal to the engine', async () => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+
+    const refused = await server.tools.get('analyze_wait_chain')!.handler({
+      process_name: 'com.example.app', thread_name: 'main\u0000x', start_ts: 1_000, end_ts: 10_001_000,
+    }, undefined);
+    expect(JSON.parse(refused.content[0].text)).toMatchObject({
+      success: false, error: 'invalid_name', action_required: 'provide_printable_name_up_to_200_chars',
+    });
+    expect(isPolicyRefusalResult(refused)).toBe(true);
+    expect(analyze).not.toHaveBeenCalled();
+
+    await callTool(server.tools, 'analyze_wait_chain', {thread_state_id: 5});
+    expect((analyze.mock.calls[0] as unknown[])[2]).toHaveProperty('signal');
   });
 
   it('asks for a thread when the selector matches nothing', async () => {

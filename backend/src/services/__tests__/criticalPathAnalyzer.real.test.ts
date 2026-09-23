@@ -69,8 +69,9 @@ const SOURCE_STDLIB_NAMES: Record<string, string[]> = {
   cpu: ['linux.cpu.frequency', 'cpu_frequency_counters', 'thread_state'],
 };
 // Distinct stack keys bound the merged chain from above, so a candidate within
-// this many keys (and the 3200-row stack limit) is never truncated at the
-// analyzer's default 160 displayed segments, even with the range-mode margin.
+// this many keys is never truncated at the analyzer's default 160 displayed
+// segments, even with the range-mode margin. The row bound only keeps the
+// candidate set, and so the runs, the same as when the analyzer capped rows.
 const MAX_PROBE_SEGMENTS = 100;
 const MAX_STACK_ROWS = 3200;
 const MAX_POOL_RUNS = 8;
@@ -231,9 +232,14 @@ async function checkAnalysis(ctx: TraceContext, analysis: CriticalPathAnalysis, 
     observed.produced.set(hypothesis.id, producers);
   }
 
+  // Durations are summed in ns, so the external share cannot pass 100%; the
+  // module shares may only overshoot by their own 0.01 rounding each.
+  if (analysis.externalBlockingPercentage > 100) {
+    problem(`externalBlockingPercentage is ${analysis.externalBlockingPercentage}`);
+  }
   // Each segment counts once, under its primary module.
   const shareSum = analysis.moduleBreakdown.reduce((sum, stat) => sum + stat.percentage, 0);
-  if (shareSum > 100.5) problem(`moduleBreakdown shares sum to ${shareSum}`);
+  if (shareSum > 100 + 0.005 * analysis.moduleBreakdown.length) problem(`moduleBreakdown shares sum to ${shareSum}`);
   const segmentCount = analysis.moduleBreakdown.reduce((sum, stat) => sum + stat.segmentCount, 0);
   if (!analysis.truncated && segmentCount !== analysis.wakeupChain.length) {
     problem(`moduleBreakdown counts ${segmentCount} segments for a ${analysis.wakeupChain.length}-segment chain`);

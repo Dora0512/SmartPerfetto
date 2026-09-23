@@ -19,9 +19,13 @@ export interface SqlRule {
 export interface SqliteTraceProcessorOptions {
   /** Checked first, in order; the first matching rule answers the query. */
   rules?: SqlRule[];
-  /** `INCLUDE PERFETTO MODULE <module>` throws this message; every other INCLUDE succeeds. */
+  /**
+   * `INCLUDE PERFETTO MODULE <module>` resolves with this message in `error`,
+   * as the production service reports a failed INCLUDE; every other INCLUDE
+   * succeeds.
+   */
   includeErrors?: Record<string, string>;
-  /** A query matching the pattern throws this message (a transport failure, not a SQL error). */
+  /** A query matching the pattern resolves with this message in `error`. */
   queryErrors?: Array<[RegExp, string]>;
 }
 
@@ -85,11 +89,10 @@ export function sqliteTraceProcessor(
     const include = /^\s*INCLUDE\s+PERFETTO\s+MODULE\s+([\w.]+)/i.exec(sql);
     if (include) {
       const error = options.includeErrors?.[include[1]];
-      if (error) throw new Error(error);
-      return EMPTY;
+      return error ? {...EMPTY, error} : EMPTY;
     }
     for (const [pattern, error] of options.queryErrors ?? []) {
-      if (pattern.test(sql)) throw new Error(error);
+      if (pattern.test(sql)) return {...EMPTY, error};
     }
     try {
       const statement = db.prepare(sql);

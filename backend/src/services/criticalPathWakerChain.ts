@@ -19,6 +19,7 @@ import {
   toNullableNumber,
   toOptionalString,
 } from '../utils/traceProcessorRowUtils';
+import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
 
 export type WakerKind = 'irq' | 'swapper' | 'thread' | 'unknown';
@@ -38,7 +39,6 @@ export interface WakerHop {
 }
 
 export interface WakerChainResult {
-  available: boolean;
   hop: WakerHop | null;
   warnings: string[];
 }
@@ -63,6 +63,7 @@ export function classifyWaker(
 
 export interface ResolveWakerOptions {
   threadStateId: number;
+  signal?: AbortSignal;
 }
 
 const IRQ_WAKEUP_HINT = 'woken in IRQ context (irq_context=1 on the wakeup row)';
@@ -77,19 +78,20 @@ const IRQ_WAKEUP_HINT = 'woken in IRQ context (irq_context=1 on the wakeup row)'
  * collapse as blocking_chain_analysis.skill.yaml); a selected R/R+ row is the
  * wakeup row and is read directly.
  *
- * Failure modes:
- *  - thread_state row missing → available=false, warning
- *  - wakeup row carries no waker_utid (no recorded waker) → available=true, hop=null
- *  - SQL error → available=false, warning
+ * Failure modes (each returns hop=null with a warning):
+ *  - thread_state row missing
+ *  - wakeup row carries no waker_utid (no recorded waker)
+ *  - SQL error
+ * Cancellation is rethrown, never reported as a failed lookup.
  */
 export async function resolveDirectWaker(
   tp: TraceProcessorService,
   traceId: string,
   options: ResolveWakerOptions
 ): Promise<WakerChainResult> {
-  const {threadStateId} = options;
+  const {threadStateId, signal} = options;
   if (!Number.isInteger(threadStateId) || threadStateId < 0) {
-    return {available: false, hop: null, warnings: ['invalid threadStateId']};
+    return {hop: null, warnings: ['invalid threadStateId']};
   }
 
   const sql = `
@@ -134,10 +136,10 @@ export async function resolveDirectWaker(
 
   let result;
   try {
-    result = assertQuerySucceeded(await tp.query(traceId, sql));
+    result = assertQuerySucceeded(await tp.query(traceId, sql, {signal}));
   } catch (error: unknown) {
+    rethrowIfTraceProcessorQueryCancelled(error);
     return {
-      available: false,
       hop: null,
       warnings: [`waker query failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`],
     };
@@ -145,7 +147,6 @@ export async function resolveDirectWaker(
 
   if (result.rows.length === 0) {
     return {
-      available: false,
       hop: null,
       warnings: [`thread_state ${threadStateId} not found`],
     };
@@ -162,7 +163,6 @@ export async function resolveDirectWaker(
   if (wakerUtid === null) {
     if (irqContext) {
       return {
-        available: true,
         hop: {
           threadStateId: null,
           utid: null,
@@ -179,7 +179,6 @@ export async function resolveDirectWaker(
       };
     }
     return {
-      available: true,
       hop: null,
       warnings: ['no recorded waker on the wakeup row (waker_utid is NULL)'],
     };
@@ -194,7 +193,6 @@ export async function resolveDirectWaker(
   if (kind === 'swapper') hints.push('woken by idle/swapper — no upstream wait chain to chase');
 
   return {
-    available: true,
     hop: {
       threadStateId: toNullableNumber(row.waker_id),
       utid: wakerUtid,
@@ -210,7 +208,3 @@ export async function resolveDirectWaker(
     warnings: [],
   };
 }
-
-export const __INTERNAL__ = {
-  classifyWaker,
-};

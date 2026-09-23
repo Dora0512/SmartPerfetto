@@ -2,19 +2,15 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-// Layer 3 of critical-task analysis: enrich raw thread_state segments with
-// structured semantic events from Perfetto stdlib tables (NOT regex on slice
-// names — see commit history rationale).
-//
-// Schema confirmed via backend/test-output/stdlib-schema-probe.json against
-// 6 real test traces on perfetto v54:
-//   ✅ android_binder_txns   (client_*/server_*, binder_txn_id, is_sync, method_name)
-//   ✅ android_monitor_contention (blocked_utid/blocking_utid, ts/dur, short_*_method)
-//   ❌ android_io / android_io_long_tasks — DO NOT EXIST in v54
-//      → fallback uses thread_state.io_wait + blocked_function text
-//   ✅ android_garbage_collection_events (gc_ts / gc_dur / reclaimed_mb — NOT ts/dur/reclaimed_bytes)
-//   ❌ cpu_utilization_per_thread — DOES NOT EXIST in v54
-//      → R/R+ CPU competition: query same-CPU thread_state directly + cpu_frequency_counters
+// Layer 3 of critical-task analysis: enrich critical-path segments with
+// structured events from Perfetto stdlib tables, not with regexes over slice
+// names. Inputs on the pinned trace processor: android_binder_txns (both
+// sides), android_monitor_contention, android_garbage_collection_events
+// (gc_ts / gc_dur), thread_state (io_wait, blocked_function, the waker on the
+// wakeup row), and linux.cpu.frequency. There is no stdlib I/O table, so I/O
+// attribution reads thread_state; `criticalPathAnalyzer.real.test.ts` runs
+// every query here on the pinned binary, so a renamed column fails a gate
+// rather than a comment.
 
 import {
   queryRows,
@@ -27,6 +23,7 @@ import {
   type QueryRow,
 } from '../utils/traceProcessorRowUtils';
 import {classifyWaker} from './criticalPathWakerChain';
+import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
 
 export interface SegmentInput {
@@ -43,8 +40,7 @@ export type SemanticSourceStatus =
   | 'empty'
   | 'stdlib_missing'
   | 'sql_error'
-  | 'skipped'
-  | 'not_checked';
+  | 'skipped';
 
 export type SemanticSourceName = 'binder' | 'monitor' | 'io' | 'gc' | 'cpu' | 'wakeSource';
 export type SemanticSources = Record<SemanticSourceName, SemanticSourceStatus>;
@@ -300,13 +296,11 @@ export interface SegmentSemantics {
   gcEvents: GcEventSummary[];
   cpuCompetition: CpuCompetitionSummary[];
   wakeSources: WakeSourceSummary[];
-  sources: SemanticSources;
-  warnings: string[];
 }
 
 export interface EnrichSegmentsOptions {
-  /** The tid/upid lookup failed, so segment upids are unknown and GC evidence is not checked. */
-  threadLookupFailed?: boolean;
+  /** Cancels every loader query. */
+  signal?: AbortSignal;
 }
 
 export interface SemanticEnrichment {
@@ -359,6 +353,8 @@ async function tryQuery<T>(
     }
     return {status: 'present', rows: rows.map(mapRow)};
   } catch (error: unknown) {
+    // A cancelled analysis is not a missing table: let it stop the analysis.
+    rethrowIfTraceProcessorQueryCancelled(error);
     const {status, warning} = classifyError(error);
     return {status, rows: [], warning};
   }
@@ -375,6 +371,7 @@ async function includeModule(
     assertQuerySucceeded(await tp.query(traceId, `INCLUDE PERFETTO MODULE ${module};`));
     return {ok: true};
   } catch (error: unknown) {
+    rethrowIfTraceProcessorQueryCancelled(error);
     return {ok: false, ...classifyError(error, module)};
   }
 }
@@ -775,14 +772,8 @@ async function loadWakeSources(
 async function loadGcEvents(
   tp: TraceProcessorService,
   traceId: string,
-  segments: SegmentInput[],
-  threadLookupFailed: boolean
+  segments: SegmentInput[]
 ): Promise<LoaderResult<GcEventSummary>> {
-  // Segment upids come from the tid/upid lookup. Without it an empty result
-  // would read as "no GC", so report that the source was not checked.
-  if (threadLookupFailed) {
-    return {rows: [], status: 'not_checked'};
-  }
   const include = await includeModule(tp, traceId, STDLIB_MODULES.gc);
   if (!include.ok) {
     return {rows: [], status: include.status, warning: include.warning};
@@ -917,17 +908,25 @@ function emptySemantics(segment: SegmentInput, key: string): SegmentSemantics {
     gcEvents: [],
     cpuCompetition: [],
     wakeSources: [],
-    sources: skippedSources(),
-    warnings: [],
   };
 }
 
+/** The same service with `signal` attached to every query. */
+function withSignal(tp: TraceProcessorService, signal: AbortSignal | undefined): TraceProcessorService {
+  if (!signal) return tp;
+  return {
+    query: (traceId: string, sql: string, options?: Parameters<TraceProcessorService['query']>[2]) =>
+      tp.query(traceId, sql, {...options, signal}),
+  } as TraceProcessorService;
+}
+
 export async function enrichSegmentsWithSemantics(
-  tp: TraceProcessorService,
+  service: TraceProcessorService,
   traceId: string,
   segments: SegmentInput[],
   options: EnrichSegmentsOptions = {}
 ): Promise<SemanticEnrichment> {
+  const tp = withSignal(service, options.signal);
   const result = new Map<string, SegmentSemantics>();
 
   // Copies of one window would only fetch the same rows twice, so every loader
@@ -952,7 +951,7 @@ export async function enrichSegmentsWithSemantics(
     loadBinderTxns(tp, traceId, unique),
     loadMonitorContention(tp, traceId, unique),
     loadIoSignals(tp, traceId, unique),
-    loadGcEvents(tp, traceId, unique, options.threadLookupFailed === true),
+    loadGcEvents(tp, traceId, unique),
     loadCpuCompetition(tp, traceId, unique),
     loadWakeSources(tp, traceId, unique),
   ]);
@@ -972,13 +971,6 @@ export async function enrichSegmentsWithSemantics(
       )
     )
   );
-
-  // Per-segment sources/warnings repeat the analysis-level values for
-  // callers that read them from a segment.
-  for (const sem of result.values()) {
-    sem.sources = {...sources};
-    sem.warnings = [...warnings];
-  }
 
   const distribute = <T>(rows: Attributed<T>[], list: (sem: SegmentSemantics) => T[]): void => {
     for (const {segmentIdx, summary} of rows) {

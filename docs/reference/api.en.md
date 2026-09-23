@@ -768,12 +768,18 @@ The body takes `threadStateId`, or `utid` + `startTs` + `dur` (optional
 `segmentBudget`, `includeAi`, `question`, and `outputLanguage`.
 
 Success returns `{success: true, analysis, presentationAnalysis, aiSummary}`.
+Blocking time, shares, module attribution and `chainSegmentCount` /
+`chainWaitMs` / `waitClassTotalsMs` cover the whole top-level wait chain (up to
+2000 segments; beyond that `truncated` is true and `warnings` says the totals
+cover only the part before the cut); recursion children are not counted again.
+`wakeupChain` is only the displayed prefix (`maxSegments`). Durations are summed
+in ns before conversion, so the external share cannot exceed 100% by rounding.
 `aiSummary` falls back to the deterministic rule summary (`generated: false`)
 with a `fallbackReason` and localized `warnings` when AI is disabled (feature
 `critical_path_ai_summary`), the active provider is not on the Claude Agent SDK
 runtime, credentials are missing, the call times out, or the client disconnects.
 Disabling AI never turns this route into a 403. A client disconnect cancels the
-in-flight model call.
+in-flight model call and any pending trace query; no response is written then.
 
 Failures return `{success: false, code, error}` with a localized `error`:
 
@@ -781,7 +787,7 @@ Failures return `{success: false, code, error}` with a localized `error`:
 |---|---|---|
 | 400 | `invalid_trace_id` | The traceId contains characters outside the safe set |
 | 400 | `invalid_request_body` | The body failed validation; `issues` lists the fields |
-| 400 | `invalid_thread_state_id`, `missing_selector`, `non_positive_duration`, `invalid_integer` | The task selector is unusable |
+| 400 | `invalid_thread_state_id`, `missing_selector`, `non_positive_duration`, `invalid_integer`, `invalid_name` | The task selector is unusable |
 | 404 | `trace_not_found` | The trace does not exist or is not the caller's |
 | 404 | `thread_state_not_found` | The trace has no such thread_state |
 | 500 | `critical_path_failed` | Any other failure; the raw error goes only to the server log |

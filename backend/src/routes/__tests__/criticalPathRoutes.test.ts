@@ -242,6 +242,23 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     });
   });
 
+  it('passes a disconnect signal into the engine so a gone client stops the analysis', async () => {
+    const response = await request(makeApp()).post('/api/critical-path/trace-1/analyze').send(VALID_BODY);
+
+    expect(response.status).toBe(200);
+    const options = mockAnalyze.mock.calls[0][2] as {signal?: unknown};
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('maps an invalid selector name to a coded 400', async () => {
+    mockAnalyze.mockRejectedValueOnce(new CriticalPathInputError('invalid_name', 'thread_name must be printable'));
+
+    const response = await request(makeApp()).post('/api/critical-path/trace-1/analyze').send(VALID_BODY);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({success: false, code: 'invalid_name'});
+  });
+
   it('maps other engine input errors to a coded 400', async () => {
     mockAnalyze.mockRejectedValue(new CriticalPathInputError('missing_selector', 'threadStateId or utid/startTs/dur is required'));
 

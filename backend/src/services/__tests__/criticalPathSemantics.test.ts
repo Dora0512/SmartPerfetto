@@ -93,7 +93,7 @@ describe('criticalPathSemantics segment index contract', () => {
 
   it('attaches CPU competition to the runnable segment, not the sleeping one before it', async () => {
     const {tp, cpuSqls} = cpuEchoService();
-    const {segments: result} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, runnable]);
+    const {segments: result, sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, runnable]);
 
     expect(cpuSqls).toHaveLength(1);
     expect(publishedSegments(cpuSqls[0])).toEqual([{idx: 1, utid: 7, tsStart: 2_000, tsEnd: 3_000}]);
@@ -101,7 +101,7 @@ describe('criticalPathSemantics segment index contract', () => {
     const runnableSem = result.get(segmentKeyOf(runnable));
     const sleepingSem = result.get(segmentKeyOf(sleeping));
     expect(runnableSem?.cpuCompetition).toEqual([COMPETITOR]);
-    expect(runnableSem?.sources.cpu).toBe('present');
+    expect(sources.cpu).toBe('present');
     expect(sleepingSem?.cpuCompetition).toEqual([]);
   });
 
@@ -121,10 +121,10 @@ describe('criticalPathSemantics segment index contract', () => {
 
   it('skips the CPU query entirely when no segment is runnable', async () => {
     const {tp, cpuSqls} = cpuEchoService();
-    const {segments: result} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, blocked]);
+    const {sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, blocked]);
 
     expect(cpuSqls).toHaveLength(0);
-    expect(result.get(segmentKeyOf(sleeping))?.sources.cpu).toBe('skipped');
+    expect(sources.cpu).toBe('skipped');
   });
 });
 
@@ -324,19 +324,13 @@ describe('criticalPathSemantics wake sources', () => {
 describe('criticalPathSemantics source status and warnings', () => {
   const segment: SegmentInput = {utid: 7, tid: 1007, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'S'};
 
-  it('reports GC as not_checked without querying it when the thread lookup failed', async () => {
-    const {tp, sqls} = sqliteTraceProcessor(`
-      INSERT INTO android_garbage_collection_events VALUES
-        (2, ${12 * MS}, ${4 * MS}, 'young', 0, 1.0, 'HeapTaskDaemon', 'com.demo');
-    `);
+  it('rethrows a cancelled query instead of reporting the source as failed', async () => {
+    const cancelled = Object.assign(new Error('Trace processor query cancelled'), {name: 'AbortError'});
+    const {tp} = sqliteTraceProcessor('', {rules: [
+      {match: /android_binder_txns/, responder: () => { throw cancelled; }},
+    ]});
 
-    const enrichment = await enrichSegmentsWithSemantics(tp, 'trace-1', [segment], {threadLookupFailed: true});
-
-    expect(sqls.some((sql) => /garbage_collection/.test(sql))).toBe(false);
-    expect(enrichment.sources.gc).toBe('not_checked');
-    expect(enrichment.segments.get(segmentKeyOf(segment))?.sources.gc).toBe('not_checked');
-    expect(enrichment.segments.get(segmentKeyOf(segment))?.gcEvents).toEqual([]);
-    expect(enrichment.sources.io).toBe('empty');
+    await expect(enrichSegmentsWithSemantics(tp, 'trace-1', [segment])).rejects.toBe(cancelled);
   });
 
   it('labels only an unknown module as stdlib_missing; other INCLUDE failures are query errors', async () => {
@@ -363,7 +357,7 @@ describe('criticalPathSemantics source status and warnings', () => {
     ]);
   });
 
-  it('returns sources and each warning once at analysis level, and still on every segment', async () => {
+  it('returns sources and each warning once at analysis level', async () => {
     const {tp} = sqliteTraceProcessor('', {
       queryErrors: [
         [/FROM segs\s+JOIN thread_state/, 'interrupted'],
@@ -376,10 +370,6 @@ describe('criticalPathSemantics source status and warnings', () => {
 
     expect(enrichment.warnings).toEqual(['query failed: interrupted']);
     expect(enrichment.sources).toMatchObject({io: 'sql_error', gc: 'sql_error', binder: 'empty'});
-    for (const sem of enrichment.segments.values()) {
-      expect(sem.sources).toEqual(enrichment.sources);
-      expect(sem.warnings).toEqual(['query failed: interrupted']);
-    }
   });
 
   it('surfaces a failure the service reports in result.error instead of throwing', async () => {

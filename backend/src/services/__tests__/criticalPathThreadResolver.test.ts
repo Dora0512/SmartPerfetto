@@ -7,6 +7,7 @@ import {
   MAX_THREAD_CANDIDATES,
   resolveCriticalPathThread,
 } from '../criticalPathThreadResolver';
+import {CriticalPathInputError} from '../criticalPathAnalyzer';
 import type {QueryResult, TraceProcessorService} from '../traceProcessorService';
 
 const COLUMNS = ['utid', 'tid', 'thread_name', 'thread_upid', 'is_main_thread', 'pid', 'process_name'];
@@ -180,11 +181,24 @@ describe('resolveCriticalPathThread', () => {
     expect(queries[0]).toContain("process.name = 'com.ex''ample'");
   });
 
-  it('rejects a non-numeric integer selector', async () => {
+  it('rejects a non-numeric integer selector with a typed input error', async () => {
     const {service} = mockedService(() => []);
 
     await expect(resolveCriticalPathThread(service, 'trace-1', {utid: '1 OR 1=1'}))
-      .rejects.toThrow('utid must be a non-negative integer');
+      .rejects.toMatchObject({name: 'CriticalPathInputError', code: 'invalid_integer',
+        message: 'utid must be a non-negative integer'});
+    await expect(resolveCriticalPathThread(service, 'trace-1', {pid: -1}))
+      .rejects.toBeInstanceOf(CriticalPathInputError);
+  });
+
+  it('rejects a control character or an over-long name with invalid_name, before querying', async () => {
+    const {service, queries} = mockedService(() => []);
+
+    await expect(resolveCriticalPathThread(service, 'trace-1', {threadName: 'main\nDROP'}))
+      .rejects.toMatchObject({code: 'invalid_name'});
+    await expect(resolveCriticalPathThread(service, 'trace-1', {processName: 'x'.repeat(201)}))
+      .rejects.toMatchObject({code: 'invalid_name'});
+    expect(queries).toHaveLength(0);
   });
 
   // GLOB metacharacters are ordinary characters in a comm or process name, and

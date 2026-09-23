@@ -3723,7 +3723,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           } else {
             const resolution = await resolveCriticalPathThread(traceProcessorService, traceId, {
               upid, pid, processName, tid, threadName, mainThread,
-            });
+            }, {signal});
             throwIfTraceProcessorQueryCancelled(signal);
             if (resolution.status === 'ambiguous') {
               return refusal({
@@ -3763,6 +3763,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           maxSegments: maxSegments ?? 200,
           recursionDepth: recursionDepth ?? 1,
           recursionEnabled: true,
+          signal,
         };
         const raw = await analyzeCriticalPath(traceProcessorService, traceId, analyzeOptions);
         throwIfTraceProcessorQueryCancelled(signal);
@@ -7930,6 +7931,7 @@ const WAIT_CHAIN_INPUT_ERROR_ACTION = {
   missing_selector: 'provide_thread_state_id_or_thread_and_window',
   non_positive_duration: 'provide_window_with_positive_duration',
   invalid_integer: 'provide_integer_ids_and_timestamps',
+  invalid_name: 'provide_printable_name_up_to_200_chars',
 } satisfies Record<CriticalPathInputErrorCode, string>;
 
 const WAIT_CHAIN_TOP_WAITS = 8;

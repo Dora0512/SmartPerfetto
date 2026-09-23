@@ -11,6 +11,7 @@
 // Amdahl-style bookkeeping only.
 
 import {queryRows, assertQuerySucceeded, nsToMs, toNullableNumber, toNumber, toOptionalString} from '../utils/traceProcessorRowUtils';
+import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
 import type {SegmentSemantics} from './criticalPathSemantics';
 
@@ -97,14 +98,16 @@ function buildCounterfactual(
 async function loadFrameImpacts(
   tp: TraceProcessorService,
   traceId: string,
-  task: QuantifyTaskInput
+  task: QuantifyTaskInput,
+  signal: AbortSignal | undefined
 ): Promise<{impacts: FrameImpact[]; warning?: string}> {
   // expected_frame_timeline_slice gives `ts + dur` as the deadline window
   // (end-of-expected-frame). actual_frame_timeline_slice carries jank_type
   // and present_type for that frame. Join via display_frame_token.
   try {
-    assertQuerySucceeded(await tp.query(traceId, 'INCLUDE PERFETTO MODULE android.frames.timeline;'));
+    assertQuerySucceeded(await tp.query(traceId, 'INCLUDE PERFETTO MODULE android.frames.timeline;', {signal}));
   } catch (error: unknown) {
+    rethrowIfTraceProcessorQueryCancelled(error);
     return {
       impacts: [],
       warning: `frames.timeline include failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
@@ -133,7 +136,7 @@ async function loadFrameImpacts(
   `;
 
   try {
-    const rows = await queryRows(tp, traceId, sql);
+    const rows = await queryRows(tp, traceId, sql, {signal});
     const impacts: FrameImpact[] = rows.map((obj) => {
       const overlapNs = toNumber(obj.overlap_ns);
       return {
@@ -148,6 +151,7 @@ async function loadFrameImpacts(
     });
     return {impacts: impacts.filter((impact) => impact.overlapMs > 0)};
   } catch (error: unknown) {
+    rethrowIfTraceProcessorQueryCancelled(error);
     return {
       impacts: [],
       warning: `frame timeline query failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
@@ -317,10 +321,11 @@ export async function quantifyCriticalPath(
   traceId: string,
   task: QuantifyTaskInput,
   segments: QuantifySegmentInput[],
-  semantics: SegmentSemantics[]
+  semantics: SegmentSemantics[],
+  signal?: AbortSignal
 ): Promise<CriticalPathQuantification> {
   const counterfactual = buildCounterfactual(task, segments);
-  const frameResult = await loadFrameImpacts(tp, traceId, task);
+  const frameResult = await loadFrameImpacts(tp, traceId, task, signal);
   const hypotheses = buildHypotheses(semantics);
 
   const warnings: string[] = [];

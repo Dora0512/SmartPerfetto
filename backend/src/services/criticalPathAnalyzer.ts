@@ -25,6 +25,10 @@ import {
 } from './criticalPathSemantics';
 import {resolveDirectWaker, type WakerChainResult, type WakerHop} from './criticalPathWakerChain';
 import {
+  rethrowIfTraceProcessorQueryCancelled,
+  throwIfTraceProcessorQueryCancelled,
+} from './traceProcessorCancellation';
+import {
   quantifyCriticalPath,
   type CriticalPathQuantification,
   type QuantifySegmentInput,
@@ -51,6 +55,13 @@ export interface CriticalPathAnalyzeOptions {
   recursionDepth?: number;
   recursionEnabled?: boolean;
   segmentBudget?: number;
+  /**
+   * Most external segments read for the whole chain (totals, breakdown,
+   * anomalies). Beyond it the analysis is marked truncated and says so.
+   */
+  maxChainSegments?: number;
+  /** Cancels every query the analysis issues; checked between stages too. */
+  signal?: AbortSignal;
 }
 
 export type CriticalPathInputErrorCode =
@@ -58,7 +69,8 @@ export type CriticalPathInputErrorCode =
   | 'thread_state_not_found'
   | 'missing_selector'
   | 'non_positive_duration'
-  | 'invalid_integer';
+  | 'invalid_integer'
+  | 'invalid_name';
 
 /** A caller-input failure; callers map `code` to a 4xx response. */
 export class CriticalPathInputError extends Error {
@@ -103,6 +115,8 @@ export interface CriticalPathSegment {
   startOffsetMs: number;
   durationMs: number;
   utid: number;
+  /** The blocking thread_state row of this segment, when the stack names one. */
+  threadStateId?: number | null;
   tid?: number | null;
   upid?: number | null;
   processName?: string | null;
@@ -153,9 +167,6 @@ export interface SliceFinding {
   cpu: number | null;
   blockedFunction: string | null;
   ioWait: boolean | null;
-  // For Running/short slices we may skip critical-path stack lookup.
-  skippedReason?: string;
-  segmentCount: number;
 }
 
 /**
@@ -190,6 +201,8 @@ export interface CriticalPathAnalysis {
   unavailableReason?: CriticalPathUnavailableReason;
   // `wakeupChain` holds only the displayed prefix; consumers that summarise
   // waits (the MCP tool routes on them) read these whole-chain totals instead.
+  // They cover the top-level chain only: a recursion child covers the same
+  // wall time as its parent, so adding it would count that interval again.
   chainSegmentCount?: number;
   chainWaitMs?: number;
   waitClassTotalsMs?: Record<string, number>;
@@ -198,9 +211,12 @@ export interface CriticalPathAnalysis {
 // === Helpers ===
 
 interface CriticalPathStackRow {
+  id: number | null;
   ts: number;
   dur: number;
   utid: number;
+  tid: number | null;
+  upid: number | null;
   name: string;
   tableName?: string | null;
   threadName?: string | null;
@@ -211,6 +227,9 @@ interface SegmentAccumulator {
   startTs: number;
   dur: number;
   utid: number;
+  tid: number | null;
+  upid: number | null;
+  threadStateId?: number | null;
   processName?: string | null;
   threadName?: string | null;
   state?: string | null;
@@ -404,6 +423,8 @@ function getSegment(
       startTs: row.ts,
       dur: row.dur,
       utid: row.utid,
+      tid: row.tid,
+      upid: row.upid,
       processName: row.processName,
       threadName: row.threadName,
       slices: new Set<string>(),
@@ -422,9 +443,12 @@ function getSegment(
 function normalizeStackRows(rows: QueryRow[]): CriticalPathStackRow[] {
   return rows
     .map((row) => ({
+      id: toNullableNumber(row.id),
       ts: toNumber(row.ts),
       dur: toNumber(row.dur),
       utid: toNumber(row.utid),
+      tid: toNullableNumber(row.tid),
+      upid: toNullableNumber(row.upid),
       name: String(row.name ?? ''),
       tableName: toOptionalString(row.table_name),
       threadName: toOptionalString(row.thread_name),
@@ -446,6 +470,7 @@ function buildSegments(
     const state = stripPrefix(name, 'blocking thread_state:');
     if (state) {
       segment.state = state;
+      segment.threadStateId ??= row.id;
       addReason(segment, stateLabel(state));
     }
 
@@ -498,6 +523,9 @@ function buildSegments(
         startOffsetMs: nsToMs(segment.startTs - task.startTs),
         durationMs: nsToMs(segment.dur),
         utid: segment.utid,
+        tid: segment.tid,
+        upid: segment.upid,
+        threadStateId: segment.threadStateId ?? null,
         processName: segment.processName,
         threadName: segment.threadName,
         state: segment.state,
@@ -540,19 +568,20 @@ function mergeAdjacentSegments(segments: CriticalPathSegment[]): CriticalPathSeg
 
 function buildModuleBreakdown(
   segments: CriticalPathSegment[],
-  totalMs: number
+  taskDurNs: number
 ): CriticalPathModuleStat[] {
   const stats = new Map<
     string,
-    {durationMs: number; segmentCount: number; examples: Set<string>}
+    {durNs: number; segmentCount: number; examples: Set<string>}
   >();
   // Each segment counts once, under its primary module, so shares of the
-  // non-overlapping top-level chain sum to at most 100%.
+  // non-overlapping top-level chain sum to at most 100%. Durations are summed
+  // in ns and converted once: summing rounded ms can overshoot the task.
   for (const segment of segments) {
     const module = segment.modules[0] ?? '未归类';
     const current =
-      stats.get(module) ?? {durationMs: 0, segmentCount: 0, examples: new Set<string>()};
-    current.durationMs += segment.durationMs;
+      stats.get(module) ?? {durNs: 0, segmentCount: 0, examples: new Set<string>()};
+    current.durNs += segment.dur;
     current.segmentCount += 1;
     const example = segmentExample(segment);
     if (example) current.examples.add(example);
@@ -562,8 +591,8 @@ function buildModuleBreakdown(
   return Array.from(stats.entries())
     .map(([module, value]) => ({
       module,
-      durationMs: Math.round(value.durationMs * 100) / 100,
-      percentage: pct(value.durationMs, totalMs),
+      durationMs: nsToMs(value.durNs),
+      percentage: pct(value.durNs, taskDurNs),
       segmentCount: value.segmentCount,
       examples: Array.from(value.examples).slice(0, 3),
     }))
@@ -929,20 +958,23 @@ function buildEmptyAnalysis(
 
 // Waiting means an S or D state, the same reading the MCP tool applies to
 // `slices`; each wait is credited to its wake-source class or to `unknown`.
+// Callers pass the top-level chain only (see `CriticalPathAnalysis`).
 function chainWaitTotals(
   segments: readonly CriticalPathSegment[]
 ): {chainWaitMs: number; waitClassTotalsMs: Record<string, number>} {
-  const round = (value: number): number => Math.round(value * 100) / 100;
-  const waitClassTotalsMs: Record<string, number> = {};
-  let chainWaitMs = 0;
+  const classNs: Record<string, number> = {};
+  let waitNs = 0;
   for (const segment of segments) {
     const state = segment.state ?? '';
     if (!(state.startsWith('S') || state.startsWith('D'))) continue;
     const key = segment.wakeSourceClass ?? 'unknown';
-    waitClassTotalsMs[key] = round((waitClassTotalsMs[key] ?? 0) + segment.durationMs);
-    chainWaitMs = round(chainWaitMs + segment.durationMs);
+    classNs[key] = (classNs[key] ?? 0) + segment.dur;
+    waitNs += segment.dur;
   }
-  return {chainWaitMs, waitClassTotalsMs};
+  return {
+    chainWaitMs: nsToMs(waitNs),
+    waitClassTotalsMs: Object.fromEntries(Object.entries(classNs).map(([key, ns]) => [key, nsToMs(ns)])),
+  };
 }
 
 // Resolve task metadata + (when applicable) split a range selection into the
@@ -953,6 +985,7 @@ async function loadTask(
   traceId: string,
   options: CriticalPathAnalyzeOptions
 ): Promise<{primary: CriticalPathTaskInfo; slices: SliceFinding[]}> {
+  const queryOptions = {signal: options.signal};
   const threadStateId = normalizeIntegerSql(
     options.threadStateId,
     'threadStateId',
@@ -984,7 +1017,8 @@ async function loadTask(
       LEFT JOIN process USING(upid)
       WHERE target.id = ${threadStateId}
       LIMIT 1
-    `
+    `,
+      queryOptions
     );
     const row = rows[0];
     if (!row) {
@@ -1018,7 +1052,6 @@ async function loadTask(
       cpu: toNullableNumber(row.cpu),
       blockedFunction: toOptionalString(row.blocked_function),
       ioWait: toBool(row.io_wait),
-      segmentCount: 0,
     };
     return {primary, slices: [slice]};
   }
@@ -1058,7 +1091,8 @@ async function loadTask(
     LEFT JOIN process USING(upid)
     WHERE thread.utid = ${utid}
     LIMIT 1
-  `
+  `,
+    queryOptions
   );
   const threadRow = threadRows[0] ?? {};
 
@@ -1075,7 +1109,8 @@ async function loadTask(
       AND ts < ${taskEnd}
       AND ts + dur > ${taskStart}
     ORDER BY ts ASC
-  `
+  `,
+    queryOptions
   );
 
   const slices: SliceFinding[] = sliceRows.map((row) => {
@@ -1093,7 +1128,6 @@ async function loadTask(
       cpu: toNullableNumber(row.cpu),
       blockedFunction: toOptionalString(row.blocked_function),
       ioWait: toBool(row.io_wait),
-      segmentCount: 0,
     };
   });
 
@@ -1148,14 +1182,15 @@ async function resolveTaskWaker(
   tp: TraceProcessorService,
   traceId: string,
   task: CriticalPathTaskInfo,
-  slices: SliceFinding[]
+  slices: SliceFinding[],
+  signal: AbortSignal | undefined
 ): Promise<WakerChainResult | null> {
   if (typeof task.threadStateId === 'number') {
-    return resolveDirectWaker(tp, traceId, {threadStateId: task.threadStateId});
+    return resolveDirectWaker(tp, traceId, {threadStateId: task.threadStateId, signal});
   }
   const dominantWait = longestWaitingSlice(slices);
   if (dominantWait?.threadStateId === null || dominantWait?.threadStateId === undefined) return null;
-  const result = await resolveDirectWaker(tp, traceId, {threadStateId: dominantWait.threadStateId});
+  const result = await resolveDirectWaker(tp, traceId, {threadStateId: dominantWait.threadStateId, signal});
   if (result.hop) result.hop.hints.push(RANGE_WAKER_HINT);
   return result;
 }
@@ -1173,59 +1208,106 @@ function taskWakerOf(hop: WakerHop | null): NonNullable<CriticalPathTaskInfo['wa
   };
 }
 
-// Shared budget counter — passed by reference so parallel sibling fetches
-// at the same recursion level see each other's increments.
-interface BudgetRef {
-  consumed: number;
-}
-
 interface RecursionContext {
   visited: Set<string>;
-  depthLimit: number;
   segmentBudget: number;
   // Counts child segments produced by recursion only; the top-level chain is
   // not charged, so a long chain still recurses.
-  budget: BudgetRef;
-  // The analysis' own warning list, shared across levels; skipped or failed
-  // expansions are reported, never silent.
+  consumed: number;
+  maxSegmentsPerCall: number;
+  // The analysis' own warning list; skipped, cut or failed expansions are
+  // reported, never silent.
   warnings: string[];
+  signal: AbortSignal | undefined;
 }
 
+/** Slice names kept per segment; the analysis shows at most this many. */
+const MAX_SLICES_PER_SEGMENT = 8;
+
+/** Default `maxChainSegments`: whole-chain segments read before the analysis is marked truncated. */
+const DEFAULT_MAX_CHAIN_SEGMENTS = 2000;
+
+interface CriticalPathStack {
+  rows: CriticalPathStackRow[];
+  /** Rows returned by the stack query. */
+  raw: number;
+  /** More than `maxSegments` distinct segments existed; `rows` holds the first ones. */
+  truncated: boolean;
+}
+
+/**
+ * The external segments of one critical path, trimmed in SQL: rows are ranked
+ * per segment (ts, dur, utid), slice rows beyond MAX_SLICES_PER_SEGMENT (the
+ * shallowest are kept, as before) are dropped, and only the first
+ * `maxSegments + 1` segments are returned. A row budget would instead be spent
+ * on slice ancestry: on a real launch trace 4000 rows held only 26 segments.
+ */
 async function fetchCriticalPathStack(
   tp: TraceProcessorService,
   traceId: string,
-  utid: number,
-  startTs: number,
-  dur: number,
-  maxRows: number
-): Promise<{rows: CriticalPathStackRow[]; raw: number; truncated: boolean}> {
+  window: {utid: number; startTs: number; dur: number},
+  maxSegments: number,
+  signal: AbortSignal | undefined
+): Promise<CriticalPathStack> {
+  const cap = Math.max(1, Math.trunc(maxSegments));
   const rows = await queryRows(
     tp,
     traceId,
     `
+    WITH cr AS (
+      SELECT id, ts, dur, utid, name, table_name, stack_depth,
+        COALESCE(table_name = 'slice' AND name NOT GLOB 'blocking *', 0) AS is_slice
+      FROM _critical_path_stack(${Math.trunc(window.utid)}, ${Math.trunc(window.startTs)}, ${Math.trunc(window.dur)}, 1, 1, 0, 1)
+      WHERE name IS NOT NULL
+        AND utid != root_utid
+        AND dur > 0
+    ),
+    ranked AS (
+      SELECT cr.*,
+        DENSE_RANK() OVER (ORDER BY ts, dur, utid) AS segment_rank,
+        ROW_NUMBER() OVER (PARTITION BY ts, dur, utid, is_slice ORDER BY stack_depth, name) AS kind_rank
+      FROM cr
+    )
     SELECT
-      cr.ts,
-      cr.dur,
-      cr.utid,
-      cr.name,
-      cr.table_name,
+      ranked.id,
+      ranked.ts,
+      ranked.dur,
+      ranked.utid,
+      ranked.name,
+      ranked.table_name,
+      ranked.segment_rank,
+      thread.tid,
+      thread.upid,
       thread.name AS thread_name,
       process.name AS process_name
-    FROM _critical_path_stack(${Math.trunc(utid)}, ${Math.trunc(startTs)}, ${Math.trunc(dur)}, 1, 1, 0, 1) AS cr
+    FROM ranked
     LEFT JOIN thread USING(utid)
     LEFT JOIN process USING(upid)
-    WHERE cr.name IS NOT NULL
-      AND cr.utid != cr.root_utid
-    ORDER BY cr.ts ASC, cr.stack_depth ASC, cr.utid ASC
-    LIMIT ${Math.trunc(maxRows) + 1}
-  `
+    WHERE ranked.segment_rank <= ${cap + 1}
+      AND (NOT ranked.is_slice OR ranked.kind_rank <= ${MAX_SLICES_PER_SEGMENT})
+    ORDER BY ranked.ts ASC, ranked.stack_depth ASC, ranked.utid ASC
+  `,
+    {signal}
   );
-  const truncated = rows.length > maxRows;
+  const normalized = normalizeStackRows(rows);
+  // Keep the first `cap` segments in time order. Ranking again here keeps the
+  // cut exact even for rows that arrive without `segment_rank`.
+  const keys = Array.from(new Set(normalized.map(segmentRowKey)));
+  const truncated = keys.length > cap;
+  const kept = truncated ? new Set(keys.slice(0, cap)) : undefined;
   return {
-    rows: normalizeStackRows(truncated ? rows.slice(0, maxRows) : rows),
+    rows: kept ? normalized.filter((row) => kept.has(segmentRowKey(row))) : normalized,
     raw: rows.length,
     truncated,
   };
+}
+
+function segmentRowKey(row: {ts: number; dur: number; utid: number}): string {
+  return `${row.ts}|${row.dur}|${row.utid}`;
+}
+
+function recursionKey(segment: CriticalPathSegment): string {
+  return `${segment.utid}|${segment.startTs}|${segment.dur}`;
 }
 
 function pickRecursionTargets(
@@ -1237,9 +1319,8 @@ function pickRecursionTargets(
   for (const segment of candidates) {
     if (picks.length >= 3) break;
     if (segment.durationMs < 4) break;
-    const key = `${segment.utid}|${segment.startTs}|${segment.dur}`;
-    if (ctx.visited.has(key)) continue;
-    if (ctx.budget.consumed >= ctx.segmentBudget) {
+    if (ctx.visited.has(recursionKey(segment))) continue;
+    if (ctx.consumed >= ctx.segmentBudget) {
       ctx.warnings.push(
         `critical path recursion stopped at the segment budget (${ctx.segmentBudget}); some long segments were not expanded`
       );
@@ -1250,38 +1331,42 @@ function pickRecursionTargets(
   return picks;
 }
 
+// L4 — expand the longest external segments level by level: every pick of a
+// level is fetched before any child level, so a deep branch cannot spend the
+// budget its siblings were picked with. Queries on one processor run one at a
+// time anyway, so the expansion is sequential.
 async function recurseCriticalPath(
   tp: TraceProcessorService,
   traceId: string,
   segments: CriticalPathSegment[],
   ctx: RecursionContext,
-  maxRowsPerCall: number
+  depthLeft: number
 ): Promise<void> {
-  if (ctx.depthLimit <= 0) return;
-  const targets = pickRecursionTargets(segments, ctx);
-  // Reserve dedup keys upfront so concurrent siblings don't both walk the same node.
-  for (const target of targets) {
-    ctx.visited.add(`${target.utid}|${target.startTs}|${target.dur}`);
-  }
-
-  // Fetch siblings at this level concurrently — they share `ctx.visited` and
-  // `ctx.budget` (BudgetRef) but have no dependency on one another's results.
-  const fetched = await Promise.all(
-    targets.map((target) =>
-      fetchCriticalPathStack(tp, traceId, target.utid, target.startTs, target.dur, maxRowsPerCall).then(
-        (stack) => ({target, stack}),
-        (error: unknown) => {
-          const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
-          ctx.warnings.push(`critical path recursion failed for utid ${target.utid}: ${message}`);
-          return {target, stack: null};
-        }
-      )
-    )
-  );
-
-  const recursionFollowups: Array<Promise<void>> = [];
-  for (const {target, stack} of fetched) {
-    if (!stack) continue;
+  if (depthLeft <= 0) return;
+  const expanded: CriticalPathSegment[] = [];
+  for (const target of pickRecursionTargets(segments, ctx)) {
+    ctx.visited.add(recursionKey(target));
+    throwIfTraceProcessorQueryCancelled(ctx.signal);
+    let stack: CriticalPathStack;
+    try {
+      stack = await fetchCriticalPathStack(
+        tp,
+        traceId,
+        {utid: target.utid, startTs: target.startTs, dur: target.dur},
+        ctx.maxSegmentsPerCall,
+        ctx.signal
+      );
+    } catch (error: unknown) {
+      rethrowIfTraceProcessorQueryCancelled(error);
+      const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
+      ctx.warnings.push(`critical path recursion failed for utid ${target.utid}: ${message}`);
+      continue;
+    }
+    if (stack.truncated) {
+      ctx.warnings.push(
+        `critical path recursion for utid ${target.utid} was cut at ${ctx.maxSegmentsPerCall} segments`
+      );
+    }
     const childTask: CriticalPathTaskInfo = {
       utid: target.utid,
       tid: target.tid ?? null,
@@ -1298,16 +1383,15 @@ async function recurseCriticalPath(
 
     target.children = children;
     target.recursionDepth = (target.recursionDepth ?? 0) + 1;
-    ctx.budget.consumed += children.length;
-
-    // The next level checks the budget itself, so an exhausted budget is
-    // reported there rather than silently skipped here.
-    recursionFollowups.push(
-      recurseCriticalPath(tp, traceId, children, {...ctx, depthLimit: ctx.depthLimit - 1}, maxRowsPerCall)
-    );
+    ctx.consumed += children.length;
+    expanded.push(target);
   }
 
-  await Promise.all(recursionFollowups);
+  // The next level checks the budget itself, so an exhausted budget is
+  // reported there rather than silently skipped here.
+  for (const target of expanded) {
+    await recurseCriticalPath(tp, traceId, target.children ?? [], ctx, depthLeft - 1);
+  }
 }
 
 /** The segment's entity + window, in the shape `segmentKeyOf` and L3 inputs use. */
@@ -1365,8 +1449,10 @@ export async function analyzeCriticalPath(
   traceId: string,
   options: CriticalPathAnalyzeOptions = {}
 ): Promise<CriticalPathAnalysis> {
+  const {signal} = options;
   const {primary: task, slices} = await loadTask(traceProcessorService, traceId, options);
   const maxSegments = normalizePositiveInt(options.maxSegments, 160, 20, 1000);
+  const maxChainSegments = normalizePositiveInt(options.maxChainSegments, DEFAULT_MAX_CHAIN_SEGMENTS, maxSegments, 5000);
   const recursionDepth = normalizePositiveInt(options.recursionDepth, 2, 0, 2);
   const recursionEnabled = options.recursionEnabled !== false;
   const segmentBudget = normalizePositiveInt(options.segmentBudget, 16, 4, 32);
@@ -1388,30 +1474,29 @@ export async function analyzeCriticalPath(
 
   // L2 — direct waker, resolved before the stack so an empty chain still
   // reports who woke the task.
-  const wakerResult = await resolveTaskWaker(traceProcessorService, traceId, task, slices);
+  throwIfTraceProcessorQueryCancelled(signal);
+  const wakerResult = await resolveTaskWaker(traceProcessorService, traceId, task, slices, signal);
   const directWaker = wakerResult?.hop ?? null;
   if (wakerResult) {
     task.waker = taskWakerOf(wakerResult.hop);
     warnings.push(...wakerResult.warnings);
   }
 
+  throwIfTraceProcessorQueryCancelled(signal);
   assertQuerySucceeded(
     await traceProcessorService.query(
       traceId,
-      'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;'
+      'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;',
+      {signal}
     )
   );
 
-  // Self rows are excluded in SQL (enable_self_slice = 0 and the root filter),
-  // so the row limit counts only rows that describe external segments.
-  const maxRows = maxSegments * 20;
   const stack = await fetchCriticalPathStack(
     traceProcessorService,
     traceId,
-    task.utid,
-    task.startTs,
-    task.dur,
-    maxRows
+    {utid: task.utid, startTs: task.startTs, dur: task.dur},
+    maxChainSegments,
+    signal
   );
 
   // `chain` is the whole merged chain: totals, breakdown, anomalies and the
@@ -1421,7 +1506,7 @@ export async function analyzeCriticalPath(
   const truncated = stack.truncated || chain.length > maxSegments;
   if (stack.truncated) {
     warnings.push(
-      `critical path 结果超过 ${maxRows} 行上限，已截断为前 ${chain.length} 个链路段（展示前 ${segments.length} 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。`
+      `critical path 超过 ${maxChainSegments} 个链路段上限，已截断为前 ${chain.length} 个链路段（展示前 ${segments.length} 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。`
     );
   } else if (chain.length > maxSegments) {
     warnings.push(
@@ -1445,17 +1530,19 @@ export async function analyzeCriticalPath(
       segments,
       {
         visited: new Set([`${task.utid}|${task.startTs}|${task.dur}`]),
-        depthLimit: recursionDepth,
         segmentBudget,
-        budget: {consumed: 0},
+        consumed: 0,
+        maxSegmentsPerCall: maxSegments,
         warnings,
+        signal,
       },
-      maxSegments * 5
+      recursionDepth
     );
   }
 
   // L3 — Semantic enrichment for ALL segments (whole top-level chain +
-  // recursed children of the displayed prefix).
+  // recursed children of the displayed prefix). tid/upid come from the stack
+  // query's own thread join.
   const flatSegments: CriticalPathSegment[] = [];
   const collectFlat = (list: CriticalPathSegment[]): void => {
     for (const segment of list) {
@@ -1465,45 +1552,6 @@ export async function analyzeCriticalPath(
   };
   collectFlat(chain);
 
-  // Batch the tid/upid lookup into a single SQL query (replaces the previous
-  // per-segment N+1 SELECT). All segments needing resolution share one round trip.
-  const segmentsNeedingThreadInfo = flatSegments.filter(
-    (segment) => segment.tid === null || segment.tid === undefined || segment.upid === null || segment.upid === undefined
-  );
-  let threadLookupFailed = false;
-  if (segmentsNeedingThreadInfo.length > 0) {
-    const utidSet = new Set(segmentsNeedingThreadInfo.map((segment) => segment.utid));
-    const utidList = Array.from(utidSet).join(', ');
-    try {
-      const rows = await queryRows(
-        traceProcessorService,
-        traceId,
-        `SELECT utid, tid, upid FROM thread WHERE utid IN (${utidList})`
-      );
-      const map = new Map<number, {tid: number | null; upid: number | null}>();
-      for (const row of rows) {
-        const utid = toNullableNumber(row.utid);
-        if (utid === null) continue;
-        map.set(utid, {tid: toNullableNumber(row.tid), upid: toNullableNumber(row.upid)});
-      }
-      for (const segment of segmentsNeedingThreadInfo) {
-        const info = map.get(segment.utid);
-        if (info) {
-          segment.tid = info.tid;
-          segment.upid = info.upid;
-        } else {
-          segment.tid = null;
-          segment.upid = null;
-        }
-      }
-    } catch {
-      // tid/upid stay null. Without upids an empty GC result would read as
-      // "no GC", so L3 reports the GC source as not checked instead.
-      threadLookupFailed = true;
-      warnings.push('thread tid/upid lookup failed; GC evidence not checked');
-    }
-  }
-
   const semanticInputs: SemanticSegmentInput[] = flatSegments.map((segment) => ({
     ...segmentWindow(segment),
     tid: segment.tid ?? null,
@@ -1511,25 +1559,28 @@ export async function analyzeCriticalPath(
     state: segment.state ?? null,
   }));
 
+  throwIfTraceProcessorQueryCancelled(signal);
   const enrichment = await enrichSegmentsWithSemantics(
     traceProcessorService,
     traceId,
     semanticInputs,
-    {threadLookupFailed}
+    {signal}
   );
   applySemanticsToSegments(flatSegments, enrichment.segments);
   warnings.push(...enrichment.warnings);
 
-  const blockingMs =
-    Math.round(chain.reduce((sum, segment) => sum + segment.durationMs, 0) * 100) / 100;
-  const selfMs = Math.max(0, Math.round((task.durationMs - blockingMs) * 100) / 100);
-  const moduleBreakdown = buildModuleBreakdown(chain, task.durationMs);
+  // Summed in ns and converted once: rounded per-segment ms can overshoot the task.
+  const blockingNs = chain.reduce((sum, segment) => sum + segment.dur, 0);
+  const blockingMs = nsToMs(blockingNs);
+  const selfMs = nsToMs(Math.max(0, task.dur - blockingNs));
+  const moduleBreakdown = buildModuleBreakdown(chain, task.dur);
   const signals = collectChainSignals(chain);
   const longest = longestSegment(chain);
   const anomalies = buildAnomalies(task, longest, signals, blockingMs);
   const recommendations = buildRecommendations(anomalies, moduleBreakdown, signals);
 
   // L5 — Quantification.
+  throwIfTraceProcessorQueryCancelled(signal);
   const quantification = await quantifyCriticalPath(
     traceProcessorService,
     traceId,
@@ -1543,11 +1594,10 @@ export async function analyzeCriticalPath(
       segmentKey: segmentKeyOf(segmentWindow(segment)),
       durMs: segment.durationMs,
     })),
-    flatSegments.map((segment) => segment.semantics).filter((sem): sem is SegmentSemantics => sem !== undefined)
+    flatSegments.map((segment) => segment.semantics).filter((sem): sem is SegmentSemantics => sem !== undefined),
+    signal
   );
   warnings.push(...quantification.warnings);
-
-  const waitTotals = chainWaitTotals(flatSegments);
 
   return {
     available: true,
@@ -1555,7 +1605,7 @@ export async function analyzeCriticalPath(
     totalMs: task.durationMs,
     blockingMs,
     selfMs,
-    externalBlockingPercentage: pct(blockingMs, task.durationMs),
+    externalBlockingPercentage: pct(blockingNs, task.dur),
     wakeupChain: segments,
     moduleBreakdown,
     anomalies,
@@ -1568,7 +1618,7 @@ export async function analyzeCriticalPath(
     directWaker,
     quantification,
     semanticSources: enrichment.sources,
-    chainSegmentCount: flatSegments.length,
-    ...waitTotals,
+    chainSegmentCount: chain.length,
+    ...chainWaitTotals(chain),
   };
 }

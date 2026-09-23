@@ -10,8 +10,8 @@ import {queryResult, sqliteTraceProcessor, type SqlRule} from '../../../tests/he
 
 const MS = 1_000_000;
 
-// The columns the analyzer's stack query selects.
-const STACK_COLUMNS = ['ts', 'dur', 'utid', 'name', 'table_name', 'thread_name', 'process_name'];
+// The columns the analyzer's stack query selects (tid/upid come from its own thread join).
+const STACK_COLUMNS = ['id', 'ts', 'dur', 'utid', 'name', 'table_name', 'tid', 'upid', 'thread_name', 'process_name'];
 
 interface StackSegment {
   ts: number;
@@ -20,6 +20,10 @@ interface StackSegment {
   state: string;
   thread: string;
   process: string;
+  tid?: number;
+  upid?: number;
+  /** The blocking thread_state row id. */
+  stateId?: number;
   blockedFunction?: string;
   slices?: string[];
 }
@@ -28,16 +32,19 @@ interface StackSegment {
 function stackResult(segments: StackSegment[]): QueryResult {
   const rows: unknown[][] = [];
   for (const segment of segments) {
-    const row = (name: string, table: string): unknown[] => [
+    const row = (name: string, table: string, id: number | null = null): unknown[] => [
+      id,
       segment.ts,
       segment.dur,
       segment.utid,
       name,
       table,
+      segment.tid ?? null,
+      segment.upid ?? null,
       segment.thread,
       segment.process,
     ];
-    rows.push(row(`blocking thread_state: ${segment.state}`, 'thread_state'));
+    rows.push(row(`blocking thread_state: ${segment.state}`, 'thread_state', segment.stateId ?? null));
     if (segment.blockedFunction) {
       rows.push(row(`blocking kernel_function: ${segment.blockedFunction}`, 'thread_state'));
     }
@@ -514,7 +521,7 @@ describe('critical path analyzer truncation and recursion', () => {
 
     const stackSql = stackCalls(sqls)[0];
     expect(stackSql).toContain('_critical_path_stack(1, 20000000000, 60000000, 1, 1, 0, 1)');
-    expect(stackSql).toMatch(/cr\.utid != cr\.root_utid/);
+    expect(stackSql).toMatch(/utid != root_utid/);
     expect(analysis.truncated).toBe(true);
     expect(analysis.wakeupChain).toHaveLength(20);
     expect(analysis.blockingMs).toBeCloseTo(50, 2);
@@ -528,22 +535,45 @@ describe('critical path analyzer truncation and recursion', () => {
     );
   });
 
-  it('flags totals as partial when the stack itself was cut', async () => {
-    // maxSegments 20 → 400-row limit; 101 segments × 4 rows exceed it.
-    const chain = chainOf(101, 30000, 1).map((segment) => ({...segment, slices: ['a', 'b', 'c']}));
-    const {tp} = sqliteTraceProcessor(taskSetup(141, 30000, 120), {rules: [
+  it('flags totals as partial when the chain exceeds its segment cap, however many slice rows each segment has', async () => {
+    // Slice rows no longer spend the budget: the cap counts segments.
+    const chain = chainOf(101, 30000, 1).map((segment) => ({...segment, slices: ['a', 'b', 'c', 'd', 'e', 'f']}));
+    const {tp, sqls} = sqliteTraceProcessor(taskSetup(141, 30000, 120), {rules: [
       {match: /FROM _critical_path_stack/i, responder: () => stackResult(chain)},
     ]});
 
-    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 141, maxSegments: 20, recursionEnabled: false});
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {
+      threadStateId: 141, maxSegments: 20, maxChainSegments: 100, recursionEnabled: false,
+    });
 
+    expect(stackCalls(sqls)[0]).toContain('segment_rank <= 101');
     expect(analysis.truncated).toBe(true);
     expect(analysis.wakeupChain).toHaveLength(20);
-    // The 400 rows kept describe the first 100 segments; totals cover exactly those.
+    // The first 100 segments are kept; totals cover exactly those.
+    expect(analysis.chainSegmentCount).toBe(100);
     expect(analysis.blockingMs).toBeCloseTo(100, 2);
     expect(analysis.warnings).toContain(
-      'critical path 结果超过 400 行上限，已截断为前 100 个链路段（展示前 20 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。'
+      'critical path 超过 100 个链路段上限，已截断为前 100 个链路段（展示前 20 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。'
     );
+  });
+
+  it('sums durations in ns so the external share cannot exceed 100% through rounding', async () => {
+    // Three 0.3349 ms segments fill a 1.0047 ms task exactly; their rounded ms
+    // (0.33 each) would sum below it, and rounding up would overshoot it.
+    const chain = Array.from({length: 3}, (_, index) => ({
+      ts: 70000 * MS + index * 334_900, dur: 334_900, utid: 100 + index, state: 'S',
+      thread: `worker-${index}`, process: 'com.demo',
+    }));
+    const {tp} = sqliteTraceProcessor(`${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (142, 1, ${70000 * MS}, 1004700, 'S');
+    `, {rules: [{match: /FROM _critical_path_stack/i, responder: () => stackResult(chain)}]});
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 142, recursionEnabled: false});
+
+    expect(analysis.blockingMs).toBe(1);
+    expect(analysis.externalBlockingPercentage).toBe(100);
+    expect(analysis.selfMs).toBe(0);
+    expect(analysis.moduleBreakdown.reduce((sum, item) => sum + item.percentage, 0)).toBeLessThanOrEqual(100);
   });
 
   it('still recurses into a chain of 16+ segments', async () => {
@@ -567,6 +597,31 @@ describe('critical path analyzer truncation and recursion', () => {
     expect(stackCalls(sqls).map(stackRoot)).toEqual([1, 105]);
     expect(analysis.wakeupChain[5].children).toEqual([expect.objectContaining({utid: 900, threadName: 'upstream'})]);
     expect(analysis.warnings.some((warning) => warning.startsWith('critical path recursion'))).toBe(false);
+    // Wait totals cover the top-level chain only: the child covers the same wall
+    // time as its parent and must not be counted again.
+    expect(analysis.chainSegmentCount).toBe(18);
+    expect(analysis.chainWaitMs).toBeCloseTo(17 * 2 + 8, 2);
+  });
+
+  it('warns when a recursion stack is cut at its segment cap', async () => {
+    const chain = chainOf(2, 45000, 10);
+    const {tp} = sqliteTraceProcessor(taskSetup(151, 45000, 30), {rules: [
+      {
+        match: /FROM _critical_path_stack/i,
+        responder: (sql) =>
+          stackRoot(sql) === 1
+            ? stackResult(chain)
+            : stackResult(Array.from({length: 25}, (_, index) => ({
+                ts: (45000 + index * 0.2) * MS, dur: 0.2 * MS, utid: 800 + index, state: 'S',
+                thread: `up-${index}`, process: 'svc',
+              }))),
+      },
+    ]});
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 151, maxSegments: 20, recursionDepth: 1});
+
+    expect(analysis.wakeupChain[0].children).toHaveLength(20);
+    expect(analysis.warnings).toContain('critical path recursion for utid 100 was cut at 20 segments');
   });
 
   it('warns when the recursion budget stops an expansion and when a recursion stack query fails', async () => {
@@ -616,31 +671,55 @@ describe('critical path analyzer truncation and recursion', () => {
 });
 
 describe('critical path analyzer warnings and input errors', () => {
-  it('marks GC as not checked when the thread lookup fails and hoists L3 warnings once', async () => {
-    const {tp} = sqliteTraceProcessor(
+  it('takes tid/upid from the stack rows and hoists L3 warnings once', async () => {
+    const {tp, sqls} = sqliteTraceProcessor(
       `${BASE_THREADS}
       INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (170, 1, ${60000 * MS}, ${20 * MS}, 'S');
       `,
-      {rules: [
-        {match: /SELECT utid, tid, upid FROM thread WHERE utid IN/, responder: () => { throw new Error('lookup boom'); }},
-        {match: /android_monitor_contention/, responder: () => { throw new Error('no such column: mc.bogus'); }},
-        {
-          match: /FROM _critical_path_stack/i,
-          responder: () =>
-            stackResult([
-              {ts: 60000 * MS, dur: 5 * MS, utid: 2, state: 'S', thread: 'binder:system', process: 'system_server'},
-              {ts: 60005 * MS, dur: 5 * MS, utid: 3, state: 'S', thread: 'RenderThread', process: 'com.demo'},
-            ]),
-        },
-      ]}
+      {
+        queryErrors: [[/android_monitor_contention/, 'no such column: mc.bogus']],
+        rules: [
+          {
+            match: /FROM _critical_path_stack/i,
+            responder: () =>
+              stackResult([
+                {ts: 60000 * MS, dur: 5 * MS, utid: 2, tid: 3001, upid: 8, state: 'S', thread: 'binder:system', process: 'system_server'},
+                {ts: 60005 * MS, dur: 5 * MS, utid: 3, tid: 1003, upid: 7, state: 'S', thread: 'RenderThread', process: 'com.demo'},
+              ]),
+          },
+        ],
+      }
     );
 
     const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 170, recursionEnabled: false});
 
-    expect(analysis.semanticSources?.gc).toBe('not_checked');
+    expect(analysis.wakeupChain.map((segment) => [segment.tid, segment.upid])).toEqual([[3001, 8], [1003, 7]]);
+    expect(sqls.some((sql) => /FROM thread WHERE utid IN/.test(sql))).toBe(false);
+    expect(analysis.semanticSources?.gc).toBe('empty');
     expect(analysis.semanticSources?.monitor).toBe('sql_error');
-    expect(analysis.warnings).toContain('thread tid/upid lookup failed; GC evidence not checked');
     expect(analysis.warnings.filter((warning) => warning === 'schema mismatch: no such column: mc.bogus')).toHaveLength(1);
+  });
+
+  it('stops at the next stage when the signal aborts, and rethrows the cancellation', async () => {
+    const controller = new AbortController();
+    const {tp, sqls} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (171, 1, ${61000 * MS}, ${20 * MS}, 'S');
+      `,
+      {rules: [{
+        match: /FROM _critical_path_stack/i,
+        responder: () => {
+          controller.abort();
+          return stackResult([{ts: 61000 * MS, dur: 5 * MS, utid: 2, state: 'S', thread: 'binder:system', process: 'system_server'}]);
+        },
+      }]}
+    );
+
+    await expect(analyzeCriticalPath(tp, 'trace-1', {threadStateId: 171, signal: controller.signal}))
+      .rejects.toMatchObject({name: 'AbortError'});
+    // Nothing after the stack query ran: no recursion, no L3, no L5.
+    expect(sqls.some((sql) => /android_binder_txns|expected_frame_timeline_slice/.test(sql))).toBe(false);
+    expect(stackCalls(sqls)).toHaveLength(1);
   });
 
   it('throws CriticalPathInputError with a code for each caller-input failure', async () => {
@@ -714,7 +793,7 @@ describe('resolveDirectWaker', () => {
   it('reports a missing row as unavailable', async () => {
     const result = await resolveDirectWaker(service(`(1, 1, 100, 50, 'S', NULL, NULL, NULL)`), 'trace-1', {threadStateId: 42});
 
-    expect(result).toEqual({available: false, hop: null, warnings: ['thread_state 42 not found']});
+    expect(result).toEqual({hop: null, warnings: ['thread_state 42 not found']});
   });
 });
 
