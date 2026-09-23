@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   conclusionContractFragment,
+  criticalPathContractFragment,
   externalIssueReportingFragment,
   identityContractFragment,
   verbatimContractFragment,
@@ -35,6 +36,7 @@ const externalIssueReportingPath = path.join(
   projectRoot,
   'backend/src/types/externalIssueReporting.ts',
 );
+const criticalPathContractPath = path.join(projectRoot, 'backend/src/types/criticalPathContract.ts');
 const frontendOutputPath = path.join(
   projectRoot,
   'perfetto/ui/src/plugins/com.smartperfetto.AIAssistant/generated/data_contract.types.ts'
@@ -105,6 +107,9 @@ const identityContractContent = identityContractFragment(
 );
 const externalIssueReportingContent = externalIssueReportingFragment(
   fs.readFileSync(externalIssueReportingPath, 'utf-8'),
+);
+const criticalPathContractContent = criticalPathContractFragment(
+  fs.readFileSync(criticalPathContractPath, 'utf-8'),
 );
 
 // Transform content for frontend
@@ -274,6 +279,12 @@ ${queryReviewFrontendContent}
 // =============================================================================
 
 ${externalIssueReportingContent}
+
+// =============================================================================
+// Critical-path wait chain (POST /api/critical-path/:traceId/analyze)
+// =============================================================================
+
+${criticalPathContractContent}
 `);
 
 // Column Types Section

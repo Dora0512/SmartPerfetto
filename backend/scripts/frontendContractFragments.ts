@@ -29,24 +29,120 @@ const TRACE_TIMESTAMP_ALIAS = /export type TraceTimestampNs = string \| number;\
  * into the UI bundle.
  */
 export function conclusionContractFragment(content: string): string {
-  return typeDeclarations(content)
+  return inlineConstTypeQueries(content, typeDeclarations(content))
     .replace(/SourceUseDecisionV1/g, 'Record<string, unknown>')
     .replace(/SourceReferenceV1/g, 'Record<string, unknown>')
     .replace(/SourceClaimBindingV1/g, 'Record<string, unknown>');
 }
 
-/** Emit declarations, never backend imports, parsers or proof-producing code. */
+/**
+ * Emit declarations, never backend imports, parsers or proof-producing code.
+ * A module-private declaration is emitted only when an emitted one refers to
+ * it: the frontend compiles with unused-local checks, and a private helper type
+ * of the backend parser has no reader there.
+ */
 function typeDeclarations(content: string): string {
   const source = ts.createSourceFile('contract.ts', content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  return source.statements
-    .filter(statement => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
-    .map(statement => statement.getFullText(source).trim())
+  const declarations = source.statements.filter(
+    (statement): statement is ts.InterfaceDeclaration | ts.TypeAliasDeclaration =>
+      ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement));
+  const isExported = (declaration: ts.InterfaceDeclaration | ts.TypeAliasDeclaration) =>
+    Boolean(declaration.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword));
+  const included = new Set(declarations.filter(isExported));
+  for (let grew = true; grew;) {
+    grew = false;
+    const emitted = [...included].map(declaration => declaration.getText(source)).join('\n');
+    for (const declaration of declarations) {
+      if (included.has(declaration) || !new RegExp(`\\b${declaration.name.text}\\b`).test(emitted)) continue;
+      included.add(declaration);
+      grew = true;
+    }
+  }
+  return declarations
+    .filter(declaration => included.has(declaration))
+    .map(declaration => declaration.getFullText(source).trim())
     .join('\n\n');
+}
+
+/**
+ * The frontend gets types, not the backend's runtime lists, so a type read off
+ * a `const` is spelled out from that const's own string literals:
+ *   `(typeof LIST)[number]`          -> the list's values
+ *   `keyof typeof TABLE`             -> the table's keys
+ *   `typeof TABLE[Key][number]`      -> every value of every key's list
+ * A const that is not built from string literals fails the generation rather
+ * than widening the emitted type.
+ */
+function inlineConstTypeQueries(content: string, declarations: string): string {
+  const source = ts.createSourceFile('contract.ts', content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const unwrap = (node: ts.Expression | undefined): ts.Expression | undefined => {
+    let current = node;
+    while (current && (ts.isAsExpression(current) || ts.isSatisfiesExpression(current))) current = current.expression;
+    return current;
+  };
+  // Only the consts a type actually reads have to have this shape; any other
+  // const of the module is left alone.
+  const stringList = (node: ts.Expression | undefined): string[] | undefined => {
+    const list = unwrap(node);
+    if (!list || !ts.isArrayLiteralExpression(list)) return undefined;
+    const values = list.elements.filter(ts.isStringLiteral).map(element => element.text);
+    return values.length === list.elements.length ? values : undefined;
+  };
+  const lists = new Map<string, string[]>();
+  const tables = new Map<string, Map<string, string[]>>();
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name)) continue;
+      const name = declaration.name.text;
+      const list = stringList(declaration.initializer);
+      if (list) {
+        lists.set(name, list);
+        continue;
+      }
+      const table = unwrap(declaration.initializer);
+      if (!table || !ts.isObjectLiteralExpression(table)) continue;
+      const entries = new Map<string, string[]>();
+      for (const property of table.properties) {
+        const values = ts.isPropertyAssignment(property)
+          && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+          ? stringList(property.initializer) : undefined;
+        if (!values) break;
+        entries.set((property as ts.PropertyAssignment).name.getText(source).replace(/^'|'$/g, ''), values);
+      }
+      if (entries.size === table.properties.length) tables.set(name, entries);
+    }
+  }
+  const union = (values: Iterable<string>) => [...new Set(values)].map(value => `'${value}'`).join(' | ');
+  const known = (map: Map<string, unknown>, name: string) => {
+    if (!map.has(name)) throw new Error(`${name} is not a declared string list or table`);
+  };
+  return declarations
+    .replace(/typeof ([A-Za-z_][A-Za-z0-9_]*)\[[A-Za-z_][A-Za-z0-9_]*\]\[number\]/g, (_match, name: string) => {
+      known(tables, name);
+      return union([...tables.get(name)!.values()].flat());
+    })
+    .replace(/keyof typeof ([A-Za-z_][A-Za-z0-9_]*)/g, (_match, name: string) => {
+      known(tables, name);
+      return union(tables.get(name)!.keys());
+    })
+    .replace(/\(typeof ([A-Za-z_][A-Za-z0-9_]*)\)\[number\]/g, (_match, name: string) => {
+      known(lists, name);
+      return union(lists.get(name)!);
+    });
 }
 
 /** Referenced contract types are concatenated into the same generated module. */
 export function verbatimContractFragment(content: string): string {
   return typeDeclarations(content);
+}
+
+/**
+ * `criticalPathContract.ts` as it appears in the generated frontend types: its
+ * id unions, written `(typeof LIST)[number]` on the backend, are spelled out.
+ */
+export function criticalPathContractFragment(content: string): string {
+  return inlineConstTypeQueries(content, typeDeclarations(content));
 }
 
 /**

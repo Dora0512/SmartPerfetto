@@ -9,24 +9,46 @@
 // languages.
 
 import {localize, type OutputLanguage} from '../agentv3/outputLanguage';
+import type {
+  CriticalPathAnomalyId,
+  CriticalPathEvidence,
+  CriticalPathHintCode,
+  CriticalPathHypothesisId,
+  CriticalPathModuleId,
+  CriticalPathNote,
+  CriticalPathNoteCode,
+  CriticalPathReason,
+  CriticalPathRecommendationId,
+  CriticalPathWarning,
+  CriticalPathWarningCode,
+  TextParams,
+} from '../types/criticalPathContract';
 
-export const CRITICAL_PATH_MODULE_IDS = [
-  'binder_ipc',
-  'lock_futex',
-  'io_candidate',
-  'sched_cpu',
-  'graphics_surface',
-  'input',
-  'art_gc',
-  'kernel_irq',
-  'power_wakeup',
-  'lock_monitor',
-  'io_filesystem',
-  'network_receive_candidate',
-  'worker_handoff',
-  'unclassified',
-] as const;
-export type CriticalPathModuleId = (typeof CRITICAL_PATH_MODULE_IDS)[number];
+// The id lists and their types are declared in the response contract.
+export {
+  CRITICAL_PATH_ANOMALY_IDS,
+  CRITICAL_PATH_HINT_CODES,
+  CRITICAL_PATH_HYPOTHESIS_IDS,
+  CRITICAL_PATH_MODULE_IDS,
+  CRITICAL_PATH_NOTE_CODES,
+  CRITICAL_PATH_RECOMMENDATION_IDS,
+  CRITICAL_PATH_WARNING_CODES,
+} from '../types/criticalPathContract';
+export type {
+  CriticalPathAnomalyId,
+  CriticalPathEvidence,
+  CriticalPathHintCode,
+  CriticalPathHypothesisId,
+  CriticalPathModuleId,
+  CriticalPathNote,
+  CriticalPathNoteCode,
+  CriticalPathReason,
+  CriticalPathRecommendationId,
+  CriticalPathTextCode,
+  CriticalPathWarning,
+  CriticalPathWarningCode,
+  TextParams,
+} from '../types/criticalPathContract';
 
 const MODULE_TEXT: Record<CriticalPathModuleId, [zh: string, en: string]> = {
   binder_ipc: ['Binder / IPC', 'Binder / IPC'],
@@ -48,14 +70,6 @@ const MODULE_TEXT: Record<CriticalPathModuleId, [zh: string, en: string]> = {
 export function moduleText(id: CriticalPathModuleId, language: OutputLanguage): string {
   const [zh, en] = MODULE_TEXT[id];
   return localize(language, zh, en);
-}
-
-export type TextParams = Readonly<Record<string, string | number | boolean | null>>;
-
-/** A product-authored message: a stable code plus the values it quotes. */
-export interface CriticalPathTextCode<C extends string = string> {
-  code: C;
-  params?: TextParams;
 }
 
 const str = (params: TextParams | undefined, key: string): string => {
@@ -110,19 +124,6 @@ export function waitClassText(waitClass: string, language: OutputLanguage): stri
 
 // ── Segment reasons ─────────────────────────────────────────────────────────
 
-/** Why a segment is labelled what it is; `slice` and `kernel_function` are trace data. */
-export type CriticalPathReason =
-  | {kind: 'state'; state: string}
-  | {kind: 'kernel_function'; name: string}
-  | {kind: 'io_wait'}
-  | {kind: 'cpu'; cpu: number | null}
-  | {kind: 'slice'; name: string}
-  | {kind: 'binder'; process: string | null; method: string | null}
-  | {kind: 'lock'; method: string | null}
-  | {kind: 'gc_in_window'}
-  | {kind: 'cpu_competition'; cpu: number}
-  | {kind: 'wake_class'; waitClass: string};
-
 export function reasonText(reason: CriticalPathReason, language: OutputLanguage): string {
   switch (reason.kind) {
     case 'state':
@@ -158,19 +159,6 @@ export function reasonKey(reason: CriticalPathReason): string {
 
 // ── Anomaly evidence ────────────────────────────────────────────────────────
 
-export type CriticalPathEvidence =
-  | {kind: 'text'; text: string}
-  | {kind: 'task'; process: string | null; thread: string | null}
-  | {kind: 'state'; state: string | null}
-  | {kind: 'longest_segment'; process: string | null; thread: string | null; ms: number}
-  | {kind: 'duration'; ms: number}
-  | {kind: 'selected_task'; ms: number}
-  | {kind: 'external_path'; ms: number}
-  | {kind: 'task_duration'; ms: number}
-  | {kind: 'utid'; utid: number}
-  | {kind: 'module'; id: CriticalPathModuleId}
-  | {kind: 'reason'; reason: CriticalPathReason};
-
 export function evidenceText(item: CriticalPathEvidence, language: OutputLanguage): string {
   switch (item.kind) {
     case 'text':
@@ -203,25 +191,6 @@ export function evidenceText(item: CriticalPathEvidence, language: OutputLanguag
 }
 
 // ── Anomalies ───────────────────────────────────────────────────────────────
-
-export const CRITICAL_PATH_ANOMALY_IDS = [
-  'task_too_long',
-  'task_over_frame_budget',
-  'external_share_high',
-  'long_segment',
-  'io_candidate',
-  'network_receive_wait',
-  'worker_handoff_wait',
-  'binder_ipc',
-  'java_monitor',
-  'gc_overlap',
-  'cpu_contention',
-  'no_clear_anomaly',
-  'task_state_running',
-  'no_waiting_time',
-  'no_critical_path_stack',
-] as const;
-export type CriticalPathAnomalyId = (typeof CRITICAL_PATH_ANOMALY_IDS)[number];
 
 type Render = (params: TextParams | undefined, language: OutputLanguage) => string;
 const fixed = (zh: string, en: string): Render => (_params, language) => localize(language, zh, en);
@@ -353,20 +322,6 @@ export function anomalyText(
 
 // ── Recommendations ─────────────────────────────────────────────────────────
 
-export const CRITICAL_PATH_RECOMMENDATION_IDS = [
-  'follow_binder',
-  'inspect_io',
-  'inspect_locks',
-  'align_rendering',
-  'inspect_scheduling',
-  'inspect_gc',
-  'start_longest_segment',
-  'running_selection',
-  'no_waiting_selection',
-  'record_sched_events',
-] as const;
-export type CriticalPathRecommendationId = (typeof CRITICAL_PATH_RECOMMENDATION_IDS)[number];
-
 const RECOMMENDATION_TEXT: Record<CriticalPathRecommendationId, [zh: string, en: string]> = {
   follow_binder: [
     '沿 Binder / IPC 相关线程继续看调用方与被调服务，确认是否同步跨进程调用阻塞了目标线程。',
@@ -416,27 +371,6 @@ export function recommendationText(id: CriticalPathRecommendationId, language: O
 }
 
 // ── Warnings and hints ──────────────────────────────────────────────────────
-
-export const CRITICAL_PATH_WARNING_CODES = [
-  'chain_cut',
-  'display_cut',
-  'recursion_budget',
-  'recursion_failed',
-  'recursion_cut',
-  'invalid_thread_state_id',
-  'waker_query_failed',
-  'thread_state_not_found',
-  'no_recorded_waker',
-  'include_failed',
-  'stdlib_table_missing',
-  'schema_mismatch',
-  'query_failed',
-  'loader_row_cap',
-  'frames_include_failed',
-  'frame_query_failed',
-] as const;
-export type CriticalPathWarningCode = (typeof CRITICAL_PATH_WARNING_CODES)[number];
-export type CriticalPathWarning = CriticalPathTextCode<CriticalPathWarningCode>;
 
 const WARNING_TEXT: Record<CriticalPathWarningCode, Render> = {
   chain_cut: (p, l) => localize(
@@ -501,9 +435,6 @@ export function errorLine(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).split('\n')[0];
 }
 
-export const CRITICAL_PATH_HINT_CODES = ['irq_wakeup', 'swapper_wakeup', 'range_longest_waiting_slice'] as const;
-export type CriticalPathHintCode = (typeof CRITICAL_PATH_HINT_CODES)[number];
-
 const HINT_TEXT: Record<CriticalPathHintCode, [zh: string, en: string]> = {
   irq_wakeup: [
     '在 IRQ 上下文中被唤醒（唤醒行 irq_context=1）',
@@ -525,15 +456,6 @@ export function hintText(code: CriticalPathHintCode, language: OutputLanguage): 
 }
 
 // ── Hypotheses ──────────────────────────────────────────────────────────────
-
-export const CRITICAL_PATH_HYPOTHESIS_IDS = [
-  'h-binder-server-gc',
-  'h-monitor-blocking',
-  'h-io-wait',
-  'h-gc-stall',
-  'h-cpu-competition',
-] as const;
-export type CriticalPathHypothesisId = (typeof CRITICAL_PATH_HYPOTHESIS_IDS)[number];
 
 const window = (p: TextParams | undefined): string => `[${str(p, 'start')}, ${str(p, 'end')})`;
 
@@ -582,20 +504,6 @@ export function hypothesisText(
 ): string {
   return HYPOTHESIS_TEXT[id](params, language);
 }
-
-export const CRITICAL_PATH_NOTE_CODES = [
-  'sync_binder_client',
-  'main_thread_blocked',
-  'non_main_thread',
-  'io_wait_confirmed',
-  'inferred_from_blocked_function',
-  'mark_compact',
-  'non_mark_compact',
-  'cpu_max_freq',
-  'best_case_only',
-] as const;
-export type CriticalPathNoteCode = (typeof CRITICAL_PATH_NOTE_CODES)[number];
-export type CriticalPathNote = CriticalPathTextCode<CriticalPathNoteCode>;
 
 const NOTE_TEXT: Record<CriticalPathNoteCode, Render> = {
   sync_binder_client: fixed('客户端侧的同步 binder 调用', 'sync binder call on client side'),

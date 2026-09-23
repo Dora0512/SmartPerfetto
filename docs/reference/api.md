@@ -685,7 +685,7 @@ legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续�
 
 ### Critical path 等待链
 
-`POST /api/critical-path/:traceId/analyze` 服务于 AI Assistant 中选中 `thread_state` 后的 Critical path 按钮。它是全局非 workspace 接口，enterprise / OIDC 部署下固定返回 410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`，目前没有 workspace 版本。Trace 必须属于调用方 workspace，且调用方需要 `trace:read`。
+`POST /api/workspaces/:workspaceId/critical-path/:traceId/analyze` 服务于 AI Assistant 中选中 `thread_state` 后的 Critical path 抽屉，路径中的 workspace 必须与调用方上下文一致（否则 404）。旧的全局接口 `POST /api/critical-path/:traceId/analyze` 行为相同，但 enterprise / OIDC 部署下固定返回 410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`。Trace 必须属于调用方 workspace，且调用方需要 `trace:read`。请求体与响应的类型定义在 `backend/src/types/criticalPathContract.ts`，由 `npm --prefix backend run generate:frontend-types` 生成到插件的 `generated/` 中，`npm --prefix backend run check:types` 检查二者一致。
 
 请求体为 `threadStateId`，或 `utid` + `startTs` + `dur`（可选 `endTs`），另可带 `maxSegments`、`recursionDepth`、`recursionEnabled`、`segmentBudget`、`includeAi`、`question`、`outputLanguage`。
 

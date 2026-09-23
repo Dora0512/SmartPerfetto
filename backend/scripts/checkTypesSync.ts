@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   conclusionContractFragment,
+  criticalPathContractFragment,
   externalIssueReportingFragment,
   identityContractFragment,
   verbatimContractFragment,
@@ -41,6 +42,7 @@ const externalIssueReportingPath = path.join(
   projectRoot,
   'backend/src/types/externalIssueReporting.ts',
 );
+const criticalPathContractPath = path.join(projectRoot, 'backend/src/types/criticalPathContract.ts');
 const frontendTypesPath = path.join(
   projectRoot,
   'perfetto/ui/src/plugins/com.smartperfetto.AIAssistant/generated/data_contract.types.ts'
@@ -288,6 +290,7 @@ async function checkTypesSync(): Promise<boolean> {
     claimVerificationPath,
     identityContractPath,
     externalIssueReportingPath,
+    criticalPathContractPath,
   ]) {
     if (!fs.existsSync(filePath)) {
       console.error(`❌ Analysis quality contract file not found: ${filePath}`);
@@ -305,6 +308,7 @@ async function checkTypesSync(): Promise<boolean> {
     externalIssueReportingPath,
     'utf-8',
   );
+  const criticalPathContractContent = fs.readFileSync(criticalPathContractPath, 'utf-8');
   const frontendContent = fs.readFileSync(frontendTypesPath, 'utf-8');
 
   // Extract and compare type definitions
@@ -382,6 +386,7 @@ async function checkTypesSync(): Promise<boolean> {
       name: 'externalIssueReporting.ts',
       content: externalIssueReportingFragment(externalIssueReportingContent),
     },
+    {name: 'criticalPathContract.ts', content: criticalPathContractFragment(criticalPathContractContent)},
   ]);
   if (outOfSyncFragments.length > 0) {
     console.log('❌ Analysis quality contract source fragments are OUT OF SYNC!\n');

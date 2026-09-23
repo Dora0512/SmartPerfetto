@@ -23,6 +23,22 @@ import {
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
 import type {SegmentSemantics} from './criticalPathSemantics';
+import type {
+  CounterfactualEstimate,
+  CriticalPathHypothesis,
+  CriticalPathQuantification,
+  FrameImpact,
+  HypothesisStrength,
+} from '../types/criticalPathContract';
+
+// The result types are declared in the response contract.
+export type {
+  CounterfactualEstimate,
+  CriticalPathHypothesis,
+  CriticalPathQuantification,
+  FrameImpact,
+  HypothesisStrength,
+} from '../types/criticalPathContract';
 
 export interface QuantifyTaskInput {
   upid: number | null;
@@ -33,60 +49,6 @@ export interface QuantifyTaskInput {
 export interface QuantifySegmentInput {
   segmentKey: string;
   durNs: number;
-}
-
-export interface CounterfactualEstimate {
-  longestSegmentKey: string | null;
-  longestSegmentDurMs: number;
-  /** Task duration left if the longest external segment took no time (task − longest). */
-  bestCaseDurationMs: number;
-  /** The most removing that segment can save (= longestSegmentDurMs). */
-  maxSavingMs: number;
-  /** The exact ns the ms fields above are rounded from. */
-  longestSegmentDurNs: number;
-  bestCaseDurationNs: number;
-  maxSavingNs: number;
-  /** @deprecated read bestCaseDurationMs */
-  upperBoundMs: number;
-  noteCode: 'best_case_only';
-  /** `noteCode` rendered. */
-  note: string;
-}
-
-export interface FrameImpact {
-  frameId: number | null;
-  expectedDeadlineDurMs: number;
-  jankType: string | null;
-  presentType: string | null;
-  layerName: string | null;
-  appUpid: number | null;
-  overlapMs: number;
-}
-
-export type HypothesisStrength = 'strong' | 'weak' | 'speculative';
-
-export interface CriticalPathHypothesis {
-  id: CriticalPathHypothesisId;
-  /** The numbers and enums the statement quotes; the statement is rendered from them. */
-  params: TextParams;
-  statement: string;
-  strength: HypothesisStrength;
-  /**
-   * SQL that, when run on the same trace, will return rows iff the hypothesis
-   * holds. Codex P1-8: only numeric IDs are interpolated; never string
-   * literals from segment metadata.
-   */
-  verificationSql: string;
-  noteCodes: CriticalPathNote[];
-  /** `noteCodes` rendered. */
-  notes: string[];
-}
-
-export interface CriticalPathQuantification {
-  counterfactual: CounterfactualEstimate | null;
-  frameImpacts: FrameImpact[];
-  hypotheses: CriticalPathHypothesis[];
-  warnings: CriticalPathWarning[];
 }
 
 function buildCounterfactual(

@@ -756,12 +756,16 @@ The legacy agent API base is rejected by `rejectLegacyAgentApi` to avoid new ext
 
 ### Critical-path wait chain
 
-`POST /api/critical-path/:traceId/analyze` backs the AI Assistant Critical path
-button for a selected `thread_state`. It is a global, non-workspace route: in
-enterprise / OIDC deployments it always returns 410
-`ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`, and there is no workspace-scoped
-replacement yet. The trace must belong to the caller's workspace, and the caller
-needs `trace:read`.
+`POST /api/workspaces/:workspaceId/critical-path/:traceId/analyze` backs the AI
+Assistant Critical path drawer for a selected `thread_state`; the path's
+workspace must be the caller's (otherwise 404). The legacy global
+`POST /api/critical-path/:traceId/analyze` behaves the same but always returns
+410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED` in enterprise / OIDC deployments. The
+trace must belong to the caller's workspace, and the caller needs `trace:read`.
+The request and response types live in `backend/src/types/criticalPathContract.ts`;
+`npm --prefix backend run generate:frontend-types` emits them into the
+plugin's `generated/` types and `npm --prefix backend run check:types` fails
+when the two drift.
 
 The body takes `threadStateId`, or `utid` + `startTs` + `dur` (optional
 `endTs`), plus optional `maxSegments`, `recursionDepth`, `recursionEnabled`,

@@ -19,6 +19,11 @@ import {sendResourceNotFound} from '../services/resourceOwnership';
 import {isSafeTraceId, readTraceMetadataForContext} from '../services/traceMetadataStore';
 import {isTraceProcessorQueryCancelledError} from '../services/traceProcessorCancellation';
 import {getTraceProcessorService} from '../services/traceProcessorService';
+import type {
+  CriticalPathAnalyzeRequest,
+  CriticalPathAnalyzeResponse,
+  CriticalPathErrorResponse,
+} from '../types/criticalPathContract';
 import {clientDisconnectSignal} from './clientDisconnect';
 
 const router = express.Router();
@@ -45,6 +50,13 @@ const AnalyzeBodySchema = z.object({
   question: z.string().max(500).optional(),
   outputLanguage: z.enum(['zh-CN', 'en']).optional(),
 });
+
+/** True only when two types accept exactly the same values. */
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+// The schema is what the route accepts; the contract is what the frontend is
+// told it may send. A field added to one and not the other is a type error.
+const bodyMatchesContract: SameType<z.infer<typeof AnalyzeBodySchema>, CriticalPathAnalyzeRequest> = true;
+void bodyMatchesContract;
 
 /**
  * Caller-input failures the engine reports. They become 4xx bodies carrying
@@ -89,6 +101,10 @@ function inputErrorMessage(code: CriticalPathInputErrorCode, language: OutputLan
   }
 }
 
+function sendError(res: express.Response, status: number, body: CriticalPathErrorResponse): express.Response {
+  return res.status(status).json(body);
+}
+
 function traceNotFound(res: express.Response, language: OutputLanguage, traceId: string) {
   return sendResourceNotFound(
     res,
@@ -109,7 +125,7 @@ router.post('/:traceId/analyze', async (req, res) => {
 
   const {traceId} = req.params;
   if (!traceId || !isSafeTraceId(traceId)) {
-    return res.status(400).json({
+    return sendError(res, 400, {
       success: false,
       code: 'invalid_trace_id',
       error: localize(outputLanguage, 'traceId 无效', 'traceId is invalid'),
@@ -120,7 +136,7 @@ router.post('/:traceId/analyze', async (req, res) => {
   // processor.
   const parsed = AnalyzeBodySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
-    return res.status(400).json({
+    return sendError(res, 400, {
       success: false,
       code: 'invalid_request_body',
       error: localize(outputLanguage, '请求体无效', 'Invalid request body'),
@@ -171,15 +187,13 @@ router.post('/:traceId/analyze', async (req, res) => {
               userId: requestContext.userId,
             },
           });
-    return res.json({
+    const response: CriticalPathAnalyzeResponse = {
       success: true,
       analysis: rawAnalysis,
-      presentationAnalysis: projectCriticalPathAnalysis(
-        rawAnalysis,
-        outputLanguage,
-      ),
-      aiSummary,
-    });
+      presentationAnalysis: projectCriticalPathAnalysis(rawAnalysis, outputLanguage),
+      ...(aiSummary ? {aiSummary} : {}),
+    };
+    return res.json(response);
   } catch (error: unknown) {
     // The client is gone and the engine stopped because of it: nobody is
     // left to answer.
@@ -188,14 +202,14 @@ router.post('/:traceId/analyze', async (req, res) => {
       return;
     }
     if (error instanceof CriticalPathInputError) {
-      return res.status(CRITICAL_PATH_INPUT_ERROR_STATUS[error.code]).json({
+      return sendError(res, CRITICAL_PATH_INPUT_ERROR_STATUS[error.code], {
         success: false,
         code: error.code,
         error: inputErrorMessage(error.code, outputLanguage),
       });
     }
     console.error('[CriticalPath] Analyze error:', error);
-    return res.status(500).json({
+    return sendError(res, 500, {
       success: false,
       code: 'critical_path_failed',
       error: localize(

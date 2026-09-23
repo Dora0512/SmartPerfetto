@@ -18,23 +18,19 @@ import {
   type OneShotFallbackReason,
 } from './oneShotModelCall';
 import type {ProviderScope} from './providerManager';
+import type {CriticalPathAiFallbackReason, CriticalPathAiSummary} from '../types/criticalPathContract';
 
 // Re-exported so the critical-path route keeps its historical import site while
 // the pure summary itself no longer drags the Claude Agent SDK in with it.
 export {buildDeterministicCriticalPathSummary};
 
-/** Why the deterministic rule summary was returned instead of a model answer. */
-export type CriticalPathAiFallbackReason = OneShotFallbackReason;
+export type {CriticalPathAiFallbackReason, CriticalPathAiSummary} from '../types/criticalPathContract';
 
-export interface CriticalPathAiSummary {
-  generated: boolean;
-  model?: string;
-  summary: string;
-  warnings: string[];
-  redactionApplied?: boolean;
-  /** Set whenever `generated` is false; `warnings` carries the localized explanation. */
-  fallbackReason?: CriticalPathAiFallbackReason;
-}
+/** True only when two types accept exactly the same values. */
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+// The contract spells the fallback reasons out for the frontend; they must stay
+// the one-shot helper's reasons, which is where every one of them comes from.
+const fallbackReasonsMatchOneShot: SameType<CriticalPathAiFallbackReason, OneShotFallbackReason> = true;
 
 export interface CriticalPathAiSummaryOptions {
   /**

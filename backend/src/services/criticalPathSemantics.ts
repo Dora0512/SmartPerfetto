@@ -33,6 +33,36 @@ import {errorLine, type CriticalPathWarning} from './criticalPathText';
 import {composeFragmentSql} from './skillEngine/skillFragments';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
+import type {
+  BinderTxnSummary,
+  CpuCompetitionSummary,
+  GcEventSummary,
+  IoSignal,
+  MonitorContentionSummary,
+  SegmentSemantics,
+  SemanticSourceName,
+  SemanticSources,
+  SemanticSourceStatus,
+  WaitClass,
+  WakeSource,
+  WakeSourceSummary,
+} from '../types/criticalPathContract';
+
+// The result types are declared in the response contract.
+export type {
+  BinderTxnSummary,
+  CpuCompetitionSummary,
+  GcEventSummary,
+  IoSignal,
+  MonitorContentionSummary,
+  SegmentSemantics,
+  SemanticSourceName,
+  SemanticSources,
+  SemanticSourceStatus,
+  WaitClass,
+  WakeSource,
+  WakeSourceSummary,
+} from '../types/criticalPathContract';
 
 export interface SegmentInput {
   utid: number;
@@ -48,133 +78,6 @@ export interface SegmentInput {
    * thread.
    */
   waiterUtid?: number | null;
-}
-
-export type SemanticSourceStatus =
-  | 'present'
-  | 'empty'
-  | 'stdlib_missing'
-  | 'sql_error'
-  | 'skipped';
-
-export type SemanticSourceName = 'binder' | 'monitor' | 'io' | 'gc' | 'cpu' | 'wakeSource';
-export type SemanticSources = Record<SemanticSourceName, SemanticSourceStatus>;
-
-// Every duration below is attributable time: the event's overlap with the
-// segment window it is attached to. `eventDurMs` is the whole event.
-export interface BinderTxnSummary {
-  binderTxnId: number | null;
-  binderReplyId: number | null;
-  side: 'client' | 'server' | 'both';
-  interfaceName: string | null;
-  methodName: string | null;
-  isSync: boolean | null;
-  isMainThread: boolean | null;
-  clientProcess: string | null;
-  clientThread: string | null;
-  serverProcess: string | null;
-  serverThread: string | null;
-  clientUtid: number | null;
-  serverUtid: number | null;
-  clientTid: number | null;
-  serverTid: number | null;
-  durMs: number;
-  eventDurMs: number;
-}
-
-export interface MonitorContentionSummary {
-  rowId: number;
-  /** `blocked`: the segment's thread waited for the lock; `owner`: it held the lock its waiter waited for. */
-  side: 'blocked' | 'owner';
-  shortBlockedMethod: string | null;
-  shortBlockingMethod: string | null;
-  blockedThreadName: string | null;
-  blockingThreadName: string | null;
-  blockedTid: number | null;
-  blockingTid: number | null;
-  blockedUtid: number | null;
-  blockingUtid: number | null;
-  durMs: number;
-  eventDurMs: number;
-  isBlockedThreadMain: boolean | null;
-}
-
-export interface IoSignal {
-  source: 'io_wait_flag' | 'blocked_function';
-  blockedFunction: string | null;
-  durMs: number;
-  eventDurMs: number;
-  ioWait: boolean;
-}
-
-// Wake-source labels, produced in SQL by fragments/sleep_wake_source_labels.sql:
-// Android emits sched_blocked_reason only for D-state waits, so an S wait's
-// only kernel signal is who woke it. Both labels are candidates, never causes.
-export type WaitClass =
-  | 'network_receive_candidate'
-  | 'timer_or_device_wake'
-  | 'worker_handoff'
-  | 'binder_reply'
-  | 'system_service'
-  | 'unknown';
-
-export type WakeSource =
-  | 'irq_or_softirq'
-  | 'same_process_thread'
-  | 'binder_thread'
-  | 'system_process'
-  | 'swapper'
-  | 'unknown';
-
-export interface WakeSourceSummary {
-  state: string | null;
-  durMs: number;
-  eventDurMs: number;
-  threadName: string | null;
-  threadRole: string;
-  wakerThreadName: string | null;
-  wakerProcessName: string | null;
-  wakerRole: string;
-  irqContext: boolean;
-  wakeSource: WakeSource;
-  waitClass: WaitClass;
-}
-
-export interface GcEventSummary {
-  gcType: string | null;
-  isMarkCompact: boolean | null;
-  reclaimedMb: number | null;
-  durMs: number;
-  eventDurMs: number;
-  thread: string | null;
-  process: string | null;
-}
-
-export interface CpuCompetitionSummary {
-  cpu: number;
-  competingTid: number | null;
-  competingUtid: number | null;
-  competingThread: string | null;
-  competingProcess: string | null;
-  competingState: string | null;
-  competingDurMs: number;
-  eventDurMs: number;
-  cpuMaxFreqKhz: number | null;
-}
-
-export interface SegmentSemantics {
-  segmentKey: string;
-  // The segment the evidence below was attached to (entity + window).
-  utid: number;
-  upid: number | null;
-  startTs: number;
-  endTs: number;
-  binderTxns: BinderTxnSummary[];
-  monitorContention: MonitorContentionSummary[];
-  ioSignals: IoSignal[];
-  gcEvents: GcEventSummary[];
-  cpuCompetition: CpuCompetitionSummary[];
-  wakeSources: WakeSourceSummary[];
 }
 
 export interface EnrichSegmentsOptions {

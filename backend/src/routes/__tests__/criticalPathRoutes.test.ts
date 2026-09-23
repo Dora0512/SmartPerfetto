@@ -8,6 +8,9 @@ import express from 'express';
 import request from 'supertest';
 import {query as sdkQuery} from '@anthropic-ai/claude-agent-sdk';
 import criticalPathRoutes from '../criticalPathRoutes';
+import {authenticate} from '../../middleware/auth';
+import {rejectEnterpriseUnscopedApi} from '../../middleware/enterpriseRouteBoundary';
+import {bindWorkspaceRouteContext, requireWorkspaceRouteContext} from '../../middleware/workspaceRouteContext';
 import {clientDisconnectSignal} from '../clientDisconnect';
 import {resolveAgentRuntimeSelection} from '../../agentRuntime/runtimeSelection';
 import {createSdkEnv, hasClaudeCredentials} from '../../agentv3/claudeConfig';
@@ -503,5 +506,101 @@ describe('clientDisconnectSignal', () => {
     const signal = clientDisconnectSignal(res);
     res.emit('close');
     expect(signal.aborted).toBe(false);
+  });
+});
+
+describe('critical-path route mounts', () => {
+  const envKeys = ['SMARTPERFETTO_ENTERPRISE', 'SMARTPERFETTO_SSO_TRUSTED_HEADERS', 'SMARTPERFETTO_API_KEY', AI_CAPABILITY_ENV_KEY];
+  const savedEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+  /** The production chain: global auth, the legacy mount behind the enterprise gate, the workspace mount. */
+  function mountedApp(): express.Express {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', (req, res, next) => {
+      void authenticate(req as any, res, next);
+    });
+    app.use(
+      '/api/workspaces/:workspaceId/critical-path',
+      bindWorkspaceRouteContext,
+      (req, res, next) => {
+        void authenticate(req as any, res, next);
+      },
+      requireWorkspaceRouteContext,
+      criticalPathRoutes,
+    );
+    app.use('/api/critical-path', rejectEnterpriseUnscopedApi, criticalPathRoutes);
+    return app;
+  }
+
+  function sso(test: request.Test, role: string, scopes: string, workspaceId = 'workspace-a'): request.Test {
+    return test
+      .set('X-SmartPerfetto-SSO-User-Id', 'user-a')
+      .set('X-SmartPerfetto-SSO-Email', 'user-a@example.test')
+      .set('X-SmartPerfetto-SSO-Tenant-Id', 'tenant-a')
+      .set('X-SmartPerfetto-SSO-Workspace-Id', workspaceId)
+      .set('X-SmartPerfetto-SSO-Roles', role)
+      .set('X-SmartPerfetto-SSO-Scopes', scopes);
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.SMARTPERFETTO_ENTERPRISE = 'true';
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    delete process.env.SMARTPERFETTO_API_KEY;
+    delete process.env[AI_CAPABILITY_ENV_KEY];
+    mockGetOrLoadTrace.mockResolvedValue({id: 'trace-1'});
+    mockGetTraceProcessorService.mockReturnValue({getOrLoadTrace: mockGetOrLoadTrace});
+    mockReadMetadata.mockResolvedValue({id: 'trace-1'});
+    mockAnalyze.mockResolvedValue(analysisFixture());
+    mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
+    mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockHasClaudeCredentials.mockReturnValue(true);
+    mockQuery.mockImplementation(() => sdkStream('## model summary'));
+  });
+
+  afterEach(() => {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it('keeps the legacy mount closed in enterprise mode and serves the workspace mount', async () => {
+    const app = mountedApp();
+
+    const legacy = await sso(request(app).post('/api/critical-path/trace-1/analyze'), 'analyst', 'trace:read,agent:run')
+      .send(VALID_BODY);
+    expect(legacy.status).toBe(410);
+    expect(legacy.body.code).toBe('ENTERPRISE_WORKSPACE_ROUTE_REQUIRED');
+
+    const scoped = await sso(
+      request(app).post('/api/workspaces/workspace-a/critical-path/trace-1/analyze'), 'analyst', 'trace:read,agent:run',
+    ).send(VALID_BODY);
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.aiSummary).toMatchObject({generated: true});
+    expect(mockReadMetadata).toHaveBeenCalledWith('trace-1', expect.objectContaining({
+      tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a',
+    }));
+  });
+
+  it('answers 404 for another workspace\'s path without reading the trace', async () => {
+    const res = await sso(
+      request(mountedApp()).post('/api/workspaces/workspace-b/critical-path/trace-1/analyze'), 'analyst', 'trace:read,agent:run',
+    ).send(VALID_BODY);
+
+    expect(res.status).toBe(404);
+    expect(mockReadMetadata).not.toHaveBeenCalled();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('gives a workspace viewer the rule summary without a model call', async () => {
+    const res = await sso(
+      request(mountedApp()).post('/api/workspaces/workspace-a/critical-path/trace-1/analyze'), 'viewer', 'trace:read',
+    ).send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.aiSummary).toMatchObject({generated: false, fallbackReason: 'permission_denied'});
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });

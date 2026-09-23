@@ -10,7 +10,10 @@ import {
   ANALYSIS_COMPLETED_PUBLIC_TYPE_PATHS,
   analysisCompletedContractFragment,
   analysisCompletedPublicTypeFragment,
+  conclusionContractFragment,
+  criticalPathContractFragment,
 } from '../../../scripts/frontendContractFragments';
+import {CRITICAL_PATH_HINT_CODES, CRITICAL_PATH_MODULE_IDS} from '../criticalPathContract';
 import {
   buildColumnDefinitions,
   createDataEnvelope,
@@ -156,6 +159,27 @@ describe('dataContract column inference', () => {
     expect(event).not.toContain('import(');
     expect(event).toContain('completion?: AnalysisCompletion;');
     expect(event).toContain('sourceClaimVerificationResult?: SourceClaimVerificationResult;');
+  });
+
+  it('spells out const-backed unions and drops private helpers in the contract fragments', () => {
+    const criticalPath = criticalPathContractFragment(
+      fs.readFileSync(path.resolve(__dirname, '../criticalPathContract.ts'), 'utf8'));
+    expect(criticalPath).not.toContain('typeof ');
+    expect(criticalPath).not.toMatch(/export const /);
+    expect(criticalPath).toContain(`export type CriticalPathModuleId = ${CRITICAL_PATH_MODULE_IDS.map(id => `'${id}'`).join(' | ')};`);
+    expect(criticalPath).toContain(`export type CriticalPathHintCode = ${CRITICAL_PATH_HINT_CODES.map(id => `'${id}'`).join(' | ')};`);
+    expect(criticalPath).toContain('export interface CriticalPathAnalyzeResponse {');
+
+    const conclusion = conclusionContractFragment(
+      fs.readFileSync(path.resolve(__dirname, '../../agent/core/conclusionContract.ts'), 'utf8'));
+    expect(conclusion).not.toContain('typeof ');
+    expect(conclusion).toMatch(/export type ConclusionClaimDiagnosticCode = 'invalid_claim' \| /);
+    expect(conclusion).toMatch(/export type ConclusionClaimDiagnosticField =\s+'claim' \| /);
+    // A module-private parser helper has no reader in the frontend.
+    expect(conclusion).not.toContain('ClaimSemanticsResult');
+
+    expect(() => criticalPathContractFragment('export type Broken = (typeof MISSING)[number];'))
+      .toThrow('MISSING is not a declared string list or table');
   });
 
   it('infers start timestamp columns as range-navigable', () => {

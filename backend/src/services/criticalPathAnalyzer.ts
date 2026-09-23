@@ -63,6 +63,34 @@ import {
   type TextParams,
 } from './criticalPathText';
 import {renderCriticalPathAnalysis} from './criticalPathLocalization';
+import type {
+  CriticalPathAnalysis,
+  CriticalPathAnomaly,
+  CriticalPathInputErrorCode,
+  CriticalPathLongestSegment,
+  CriticalPathModuleStat,
+  CriticalPathSegment,
+  CriticalPathTaskInfo,
+  CriticalPathTotalsNs,
+  CriticalPathUnavailableReason,
+  SliceFinding,
+  SliceKind,
+} from '../types/criticalPathContract';
+
+// The result types are declared in the response contract.
+export type {
+  CriticalPathAnalysis,
+  CriticalPathAnomaly,
+  CriticalPathInputErrorCode,
+  CriticalPathLongestSegment,
+  CriticalPathModuleStat,
+  CriticalPathSegment,
+  CriticalPathTaskInfo,
+  CriticalPathTotalsNs,
+  CriticalPathUnavailableReason,
+  SliceFinding,
+  SliceKind,
+} from '../types/criticalPathContract';
 
 /**
  * Version of what the engine's numbers mean. Evidence captures fingerprint
@@ -117,14 +145,6 @@ export interface CriticalPathAnalyzeOptions {
   signal?: AbortSignal;
 }
 
-export type CriticalPathInputErrorCode =
-  | 'invalid_thread_state_id'
-  | 'thread_state_not_found'
-  | 'missing_selector'
-  | 'non_positive_duration'
-  | 'invalid_integer'
-  | 'invalid_name';
-
 /** A caller-input failure; callers map `code` to a 4xx response. */
 export class CriticalPathInputError extends Error {
   readonly code: CriticalPathInputErrorCode;
@@ -136,171 +156,8 @@ export class CriticalPathInputError extends Error {
   }
 }
 
-// === Backward-compatible types (do NOT remove fields) ===
-
-export interface CriticalPathTaskInfo {
-  threadStateId?: number;
-  utid: number;
-  tid?: number | null;
-  upid?: number | null;
-  startTs: number;
-  dur: number;
-  durationMs: number;
-  state?: string | null;
-  blockedFunction?: string | null;
-  ioWait?: boolean | null;
-  cpu?: number | null;
-  threadName?: string | null;
-  processName?: string | null;
-  waker?: {
-    threadStateId?: number | null;
-    utid?: number | null;
-    threadName?: string | null;
-    processName?: string | null;
-    state?: string | null;
-    interruptContext?: boolean | null;
-  };
-}
-
-export interface CriticalPathSegment {
-  startTs: number;
-  dur: number;
-  startOffsetMs: number;
-  durationMs: number;
-  utid: number;
-  /** The blocking thread_state row of this segment, when the stack names one. */
-  threadStateId?: number | null;
-  tid?: number | null;
-  upid?: number | null;
-  processName?: string | null;
-  threadName?: string | null;
-  state?: string | null;
-  blockedFunction?: string | null;
-  ioWait?: boolean | null;
-  cpu?: number | null;
-  slices: string[];
-  /** Module ids, primary first. */
-  moduleIds: CriticalPathModuleId[];
-  /** `moduleIds` rendered. */
-  modules: string[];
-  reasonItems: CriticalPathReason[];
-  /** `reasonItems` rendered. */
-  reasons: string[];
-  semantics?: SegmentSemantics;
-  // Which wake source ended this sleep, when the segment was sleeping at all.
-  // It is a candidate label, not a cause: an IRQ-context wake is equally a
-  // NET_RX softirq and a timer expiry.
-  wakeSourceClass?: WaitClass;
-  recursionDepth?: number;
-  // Children: result of recursing _critical_path_stack on this segment.
-  children?: CriticalPathSegment[];
-}
-
-export interface CriticalPathModuleStat {
-  moduleId: CriticalPathModuleId;
-  /** `moduleId` rendered. */
-  module: string;
-  durationMs: number;
-  percentage: number;
-  segmentCount: number;
-  examples: string[];
-}
-
-export interface CriticalPathAnomaly {
-  id: CriticalPathAnomalyId;
-  /** The values the detail quotes (numbers, trace names). */
-  params?: TextParams;
-  severity: 'critical' | 'warning' | 'info';
-  /** Rendered from `id`. */
-  title: string;
-  /** Rendered from `id` and `params`. */
-  detail: string;
-  evidenceItems: CriticalPathEvidence[];
-  /** `evidenceItems` rendered. */
-  evidence: string[];
-}
-
-/** The longest segment of the whole chain (the displayed prefix may not hold it). */
-export interface CriticalPathLongestSegment {
-  processName: string | null;
-  threadName: string | null;
-  durationMs: number;
-  moduleIds: CriticalPathModuleId[];
-}
-
-// === New types (additive) ===
-
-export type SliceKind = 'sleeping' | 'uninterruptible' | 'runnable' | 'running' | 'unknown';
-
-export interface SliceFinding {
-  threadStateId: number | null;
-  startTs: number;
-  endTs: number;
-  durationMs: number;
-  state: string | null;
-  kind: SliceKind;
-  cpu: number | null;
-  blockedFunction: string | null;
-  ioWait: boolean | null;
-}
-
-/**
- * Why `available` is false: the selected row is Running, the window holds no
- * S/D/DK/R/R+ time, or Perfetto returned no critical-path stack.
- */
-export type CriticalPathUnavailableReason =
-  | 'task_state_running'
-  | 'no_critical_path_stack'
-  | 'no_waiting_time';
-
-export interface CriticalPathAnalysis {
-  available: boolean;
-  task: CriticalPathTaskInfo;
-  totalMs: number;
-  blockingMs: number;
-  selfMs: number;
-  externalBlockingPercentage: number;
-  wakeupChain: CriticalPathSegment[];
-  moduleBreakdown: CriticalPathModuleStat[];
-  anomalies: CriticalPathAnomaly[];
-  /** Rendered from the fields below. */
-  summary: string;
-  recommendationIds: CriticalPathRecommendationId[];
-  /** `recommendationIds` rendered. */
-  recommendations: string[];
-  warningCodes: CriticalPathWarning[];
-  /** `warningCodes` rendered. */
-  warnings: string[];
-  rawRows: number;
-  truncated: boolean;
-  longestSegment?: CriticalPathLongestSegment | null;
-  // Additive fields:
-  slices?: SliceFinding[];
-  directWaker?: WakerHop | null;
-  quantification?: CriticalPathQuantification;
-  semanticSources?: Record<string, SemanticSourceStatus>;
-  unavailableReason?: CriticalPathUnavailableReason;
-  // `wakeupChain` holds only the displayed prefix; consumers that summarise
-  // waits (the MCP tool routes on them) read these whole-chain totals instead.
-  // They cover the top-level chain only: a recursion child covers the same
-  // wall time as its parent, so adding it would count that interval again.
-  chainSegmentCount?: number;
-  chainWaitMs?: number;
-  waitClassTotalsMs?: Record<string, number>;
-  /**
-   * The exact ns behind the rounded headline ms fields: the window, the
-   * whole-chain blocking and self time, and the chain's S/D time. Evidence
-   * captures read these, never the rounded values.
-   */
-  totalsNs?: CriticalPathTotalsNs;
-}
-
-export interface CriticalPathTotalsNs {
-  window: number;
-  blocking: number;
-  self: number;
-  chainWait: number;
-}
+// The result types live in types/criticalPathContract.ts (additive only:
+// consumers of the legacy fields keep working).
 
 // === Helpers ===
 
@@ -1152,7 +1009,6 @@ function longestSlice(
 function longestWaitingSlice(slices: SliceFinding[]): SliceFinding | null {
   return longestSlice(slices, (slice) => WAITING_KINDS.has(slice.kind) && slice.endTs > slice.startTs);
 }
-
 
 // L2 — the one waker resolution. Thread-state-id mode resolves the selected
 // row; range mode resolves the longest waiting slice. Returns null when there

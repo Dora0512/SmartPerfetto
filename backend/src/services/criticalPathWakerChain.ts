@@ -27,24 +27,10 @@ import {
 } from './criticalPathText';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
+import type {WakerHop, WakerKind} from '../types/criticalPathContract';
 
-export type WakerKind = 'irq' | 'swapper' | 'thread' | 'unknown';
-
-export interface WakerHop {
-  threadStateId: number | null;
-  utid: number | null;
-  tid: number | null;
-  threadName: string | null;
-  processName: string | null;
-  state: string | null;
-  cpu: number | null;
-  irqContext: boolean;
-  kind: WakerKind;
-  /** What the wakeup says about the chain upstream of it. */
-  hintCodes: CriticalPathHintCode[];
-  /** `hintCodes` rendered (zh-CN until a projection renders another language). */
-  hints: string[];
-}
+// The hop is declared in the response contract.
+export type {WakerHop, WakerKind} from '../types/criticalPathContract';
 
 export interface WakerChainResult {
   hop: WakerHop | null;
