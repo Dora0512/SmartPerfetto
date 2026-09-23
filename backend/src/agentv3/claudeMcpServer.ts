@@ -3810,7 +3810,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         return createRuntimeToolResult({
           ...projection,
           success: true,
-          // `segmentCount` is what the chain has; this is what the artifact
+          // `segmentCount` counts the whole chain; this is what the artifact
           // actually holds, so a fetch of it is not read as the whole chain.
           ...(stored ? {artifactId: stored.artifactId, evidenceRefId: stored.evidenceRefId,
             storedSegmentRows: rows.length} : {}),
@@ -7893,7 +7893,7 @@ function storeToolTableArtifact(
  * accepts; no `.strict()` anywhere, because the registry injects `planPhaseId`.
  */
 const waitChainIntLike = z.union([
-  z.number().int(),
+  z.number().int().nonnegative(),
   z.string().regex(/^\d+$/, 'must be a non-negative integer string'),
 ]);
 
@@ -8033,11 +8033,9 @@ function projectWaitChainForModel(
     (stateBreakdown.sleeping?.ms ?? 0) + (stateBreakdown.uninterruptible?.ms ?? 0),
   );
 
-  const waitClassSummary: Record<string, number> = {};
-  for (const segment of waits) {
-    const key = segment.wakeSourceClass ?? 'unknown';
-    waitClassSummary[key] = roundMs((waitClassSummary[key] ?? 0) + segment.durationMs);
-  }
+  // Wait totals come from the engine over the whole chain. `wakeupChain`, and
+  // so `waits`, holds only the displayed prefix, which still serves `topWaits`.
+  const waitClassSummary: Record<string, number> = analysis.waitClassTotalsMs ?? {};
 
   const topWaits = [...waits]
     .sort((a, b) => b.durationMs - a.durationMs || a.startTs - b.startTs)
@@ -8115,7 +8113,7 @@ function projectWaitChainForModel(
     selfMs: analysis.selfMs,
     externalBlockingPercentage: analysis.externalBlockingPercentage,
     waitingMs,
-    chainWaitMs: roundMs(waits.reduce((sum, segment) => sum + segment.durationMs, 0)),
+    chainWaitMs: analysis.chainWaitMs ?? 0,
     stateBreakdown,
     waitClassSummary,
     topWaits,
@@ -8138,7 +8136,7 @@ function projectWaitChainForModel(
     // removal can save; another wait may become the bottleneck first.
     counterfactualBestCaseMs: analysis.quantification?.counterfactual?.bestCaseDurationMs ?? null,
     counterfactualMaxSavingMs: analysis.quantification?.counterfactual?.maxSavingMs ?? null,
-    segmentCount: flat.length,
+    segmentCount: analysis.chainSegmentCount ?? flat.length,
     truncated: analysis.truncated,
     warnings: analysis.warnings.slice(0, WAIT_CHAIN_MAX_WARNINGS),
     deterministicSummary: buildDeterministicCriticalPathSummary(analysis, outputLanguage),

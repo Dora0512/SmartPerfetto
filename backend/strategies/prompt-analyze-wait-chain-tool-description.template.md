@@ -7,4 +7,4 @@ Use when a window is slow and it is still unknown whether the thread computed, q
 
 Select by `thread_state_id`, by `utid`, or by `process_name` plus `thread_name` or `main_thread`. Without `thread_state_id`, `start_ts` and `end_ts` are required. An ambiguous selector returns candidates, not an answer.
 
-`wake_source_class` is a candidate label, not a root cause: timer and network wakes share one IRQ-context signal and are separated only by thread role. Needs `sched_waking`, else `available: false`.
+`wake_source_class` is a candidate label, not a root cause: timer and network wakes share one IRQ-context signal and are separated only by thread role. `available: false` carries `unavailableReason`: `task_state_running` (the selected row was running), `no_waiting_time` (the window has no waiting time), or `no_critical_path_stack` (no chain came back; the trace may lack `sched_waking`).

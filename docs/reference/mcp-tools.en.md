@@ -49,7 +49,7 @@ Agent wants a tool call
 | `invoke_skill` | Run a YAML Skill analysis pipeline | Preferred evidence path; returns DataEnvelope / artifacts |
 | `list_skills` | List available Skills | Filterable by category; count comes from the file tree |
 | `detect_architecture` | Detect rendering architecture for the trace | Guides strategy and pipeline analysis |
-| `analyze_wait_chain` | Break one thread's window into running / runnable / sleeping / uninterruptible time, longest waits, wake sources, and the recursed waker chain | Shares the critical-path engine; `wake_source_class` is a candidate label, not a root cause; returns `available: false` without `sched_waking` |
+| `analyze_wait_chain` | Break one thread's window into running / runnable / sleeping / uninterruptible time, longest waits, wake sources, and the recursed waker chain | Shares the critical-path engine; `wake_source_class` is a candidate label, not a root cause; `available: false` carries `unavailableReason` (`task_state_running`, `no_waiting_time`, or `no_critical_path_stack` when `sched_waking` is missing) |
 | `lookup_sql_schema` | Search Perfetto SQL schema / stdlib index | Available in quick and full paths |
 | `query_perfetto_source` | Search Perfetto stdlib SQL source | Falls back to packaged indexes when source is absent |
 | `list_stdlib_modules` | List Perfetto stdlib modules | Avoids putting the full module list in the prompt |

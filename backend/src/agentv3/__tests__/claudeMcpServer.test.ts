@@ -9377,6 +9377,8 @@ describe('analyze_wait_chain', () => {
         detail: '该段睡眠由 IRQ 上下文唤醒，且线程角色为 network。', evidence: []}],
       summary: '选中 task 等待 4ms。', recommendations: [], warnings: ['critical path 结果较大'],
       rawRows: 12, truncated: false,
+      chainSegmentCount: 2, chainWaitMs: 5,
+      waitClassTotalsMs: {network_receive_candidate: 4, binder_reply: 1},
       slices: [
         {threadStateId: 1, startTs: 1_000, endTs: 5_000_000, durationMs: 4, state: 'S',
           kind: 'sleeping', cpu: null, blockedFunction: null, ioWait: null, segmentCount: 1},
@@ -9495,6 +9497,25 @@ describe('analyze_wait_chain', () => {
 
     expect(payload).toMatchObject({success: true, available: false, unavailableReason: 'task_state_running'});
     expect(payload.topWaits).toEqual([]);
+  });
+
+  it('reads wait totals and the segment count from the whole chain, not the displayed prefix', async () => {
+    // The engine may display 200 segments of a 250-segment chain; routing
+    // numbers must still describe all 250.
+    spyAnalyzer(fakeAnalysis({
+      truncated: true, chainSegmentCount: 250, chainWaitMs: 900,
+      waitClassTotalsMs: {unknown: 800, network_receive_candidate: 100},
+    }));
+    const server = createTestServer();
+
+    const payload = await callTool(server.tools, 'analyze_wait_chain', {thread_state_id: 1});
+
+    expect(payload).toMatchObject({
+      segmentCount: 250, chainWaitMs: 900, truncated: true,
+      waitClassSummary: {unknown: 800, network_receive_candidate: 100},
+    });
+    // `topWaits` still lists the displayed prefix: the fake's segment and its child.
+    expect(payload.topWaits).toHaveLength(2);
   });
 
   it('passes the engine\'s own reason through, never one re-derived from the task state', async () => {

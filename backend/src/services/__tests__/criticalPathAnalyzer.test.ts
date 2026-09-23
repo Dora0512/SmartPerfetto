@@ -520,6 +520,9 @@ describe('critical path analyzer truncation and recursion', () => {
     expect(analysis.blockingMs).toBeCloseTo(50, 2);
     expect(analysis.selfMs).toBeCloseTo(10, 2);
     expect(analysis.moduleBreakdown.reduce((sum, item) => sum + item.segmentCount, 0)).toBe(25);
+    expect(analysis.chainSegmentCount).toBe(25);
+    expect(Object.values(analysis.waitClassTotalsMs ?? {}).reduce((sum, ms) => sum + ms, 0))
+      .toBeCloseTo(analysis.chainWaitMs ?? 0, 2);
     expect(analysis.warnings).toContain(
       'critical path 共 25 个链路段，仅展示前 20 个；阻塞时长、模块占比与反事实估计按完整链路计算。'
     );

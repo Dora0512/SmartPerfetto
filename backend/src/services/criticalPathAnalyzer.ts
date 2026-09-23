@@ -188,6 +188,11 @@ export interface CriticalPathAnalysis {
   quantification?: CriticalPathQuantification;
   semanticSources?: Record<string, SemanticSourceStatus>;
   unavailableReason?: CriticalPathUnavailableReason;
+  // `wakeupChain` holds only the displayed prefix; consumers that summarise
+  // waits (the MCP tool routes on them) read these whole-chain totals instead.
+  chainSegmentCount?: number;
+  chainWaitMs?: number;
+  waitClassTotalsMs?: Record<string, number>;
 }
 
 // === Helpers ===
@@ -916,7 +921,28 @@ function buildEmptyAnalysis(
     rawRows: 0,
     truncated: false,
     unavailableReason: reason,
+    chainSegmentCount: 0,
+    chainWaitMs: 0,
+    waitClassTotalsMs: {},
   };
+}
+
+// Waiting means an S or D state, the same reading the MCP tool applies to
+// `slices`; each wait is credited to its wake-source class or to `unknown`.
+function chainWaitTotals(
+  segments: readonly CriticalPathSegment[]
+): {chainWaitMs: number; waitClassTotalsMs: Record<string, number>} {
+  const round = (value: number): number => Math.round(value * 100) / 100;
+  const waitClassTotalsMs: Record<string, number> = {};
+  let chainWaitMs = 0;
+  for (const segment of segments) {
+    const state = segment.state ?? '';
+    if (!(state.startsWith('S') || state.startsWith('D'))) continue;
+    const key = segment.wakeSourceClass ?? 'unknown';
+    waitClassTotalsMs[key] = round((waitClassTotalsMs[key] ?? 0) + segment.durationMs);
+    chainWaitMs = round(chainWaitMs + segment.durationMs);
+  }
+  return {chainWaitMs, waitClassTotalsMs};
 }
 
 // Resolve task metadata + (when applicable) split a range selection into the
@@ -1521,6 +1547,8 @@ export async function analyzeCriticalPath(
   );
   warnings.push(...quantification.warnings);
 
+  const waitTotals = chainWaitTotals(flatSegments);
+
   return {
     available: true,
     task,
@@ -1540,5 +1568,7 @@ export async function analyzeCriticalPath(
     directWaker,
     quantification,
     semanticSources: enrichment.sources,
+    chainSegmentCount: flatSegments.length,
+    ...waitTotals,
   };
 }
