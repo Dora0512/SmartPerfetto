@@ -99,12 +99,12 @@ import {
   getStrategyDetails,
   loadPromptSegment,
   loadPromptTemplate,
+  renderTemplate,
   stripPromptComments,
 } from './strategyLoader';
 import { buildActivePhaseReminder } from './activePhaseReminder';
 import {loadSourceInvestigationPolicy} from './sourceInvestigationPolicy';
 import { summarizeToolCallInput } from './toolCallSummary';
-import { buildQuickArtifactGuidance } from './quickAnswerContract';
 import {
   findCompletedPhaseEvidenceGaps,
   getPhaseToolEvidenceStatus,
@@ -3366,8 +3366,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         // Artifact mode: return compact references whenever any fetchable
         // artifact was created.
         if (artifactStore && (artifacts?.length || diagnosticsArtifactId || synthesizeArtifacts?.length)) {
+          // Bound inline previews, not the evidence inventory. Later, empty and
+          // unavailable artifacts still need locators so findings are not lost.
           const lightweightArtifacts = options.lightweight
-            ? artifacts?.filter(summary => summary.rowCount > 0 || summary.preview || summary.executionStatus === 'unavailable').slice(0, 10)
+            ? artifacts?.map((summary, index) => {
+                if (index < 10) return summary;
+                const {preview: _preview, ...locator} = summary;
+                return {...locator, previewOmitted: true};
+              })
             : artifacts;
           return createRuntimeToolResult({
             success: result.success,
@@ -3378,16 +3384,6 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             skillName: localizedSkillName,
             ...(result.error ? { error: result.error } : {}),
             ...(paramResolution.audit ? {drillDownResolution: paramResolution.audit} : {}),
-            ...(options.lightweight
-              ? {
-                  quickMode: {
-                    answerNow: true,
-                    guidance: artifactAccessPolicy.forbidRows
-                      ? 'Answer from row-free artifact metadata and evidence references. Raw artifact rows are unavailable for this request.'
-                      : buildQuickArtifactGuidance(),
-                  },
-                }
-              : {}),
             ...(result.identityResolution
               ? options.lightweight
                 ? {
@@ -3403,17 +3399,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               : {}),
             artifacts: lightweightArtifacts,
             ...(diagnosticsArtifactId ? { diagnosticsArtifactId } : {}),
-            ...((!options.lightweight || !artifacts?.length) && synthesizeArtifacts && synthesizeArtifacts.length > 0
+            ...(synthesizeArtifacts && synthesizeArtifacts.length > 0
               ? { synthesizeArtifacts }
               : {}),
             ...(vendorOverrideHint ? { vendorOverride: vendorOverrideHint } : {}),
-            hint: artifactAccessPolicy.forbidRows
-              ? 'The user forbids raw artifact rows for this request. Use row-free summaries and aggregates only; fetch_artifact rows/full are blocked.'
-              : artifactAccessPolicy.requireSummaryBeforeRows
-                ? 'Fetch detail="summary" for each artifact first. Read rows/full only when that artifact summary is incomplete and the missing evidence requires it.'
-                : options.lightweight
-                  ? 'Quick mode: answer from previews/evidenceRefId now; fetch artifacts only for explicit row-level follow-up.'
-                  : 'Use fetch_artifact(artifactId=<id>, detail="summary") first. If the summary lacks a required field or representative sample, fetch only the minimum rows needed with a concrete purpose; do not paginate mechanically.',
+            hint: renderTemplate(requireToolDescription('prompt-artifact-result-guidance'), {
+              forbidRows: String(artifactAccessPolicy.forbidRows),
+              requireSummaryBeforeRows: String(artifactAccessPolicy.requireSummaryBeforeRows),
+            }),
           }, {
             facts: {success: result.success, planPhaseId: producer.planPhaseId},
             decorate: text => skillNotesPrefix + consumeWatchdogWarning(text) + (result.success ? getReasoningNudge() : ''),

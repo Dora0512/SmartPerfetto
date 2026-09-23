@@ -203,13 +203,10 @@ describe('sqlIncludeInjector - completeness gate', () => {
   // builtin (no INCLUDE needed) or a module path. Auto-extracts both
   // directions, so the gate self-maintains as strategy markdown evolves.
   const STRATEGIES_DIR = path.resolve(__dirname, '../../../strategies');
-  const METHODOLOGY_PATH = path.resolve(
+  const SQL_GUIDANCE_PATH = path.resolve(
     STRATEGIES_DIR,
-    'prompt-methodology.template.md',
+    'prompt-sql-evidence-guidance.template.md',
   );
-  const SQL_DISCIPLINE_HEADER = '### SQL Discipline';
-  const SQL_DISCIPLINE_FOOTER = '### Reasoning And State';
-
   // Identifiers in the prompt that are deliberately not stdlib symbols
   // (e.g. MCP tool names, frontmatter literals). Listed explicitly so the
   // gate fails loudly on genuinely new advertised names.
@@ -236,18 +233,9 @@ describe('sqlIncludeInjector - completeness gate', () => {
     'inflate', 'wait_ms', 'run_ms_in_wait',
   ]);
 
-  const extractSqlDisciplineSection = () => {
-    const md = fs.readFileSync(METHODOLOGY_PATH, 'utf-8');
-    const start = md.indexOf(SQL_DISCIPLINE_HEADER);
-    const end = md.indexOf(SQL_DISCIPLINE_FOOTER, start);
-    if (start < 0 || end < 0) {
-      throw new Error(
-        `Section markers not found in ${METHODOLOGY_PATH}. ` +
-        `Looking for "${SQL_DISCIPLINE_HEADER}" -> "${SQL_DISCIPLINE_FOOTER}".`,
-      );
-    }
-    return md.slice(start, end);
-  };
+  const extractSqlGuidance = () => [SQL_GUIDANCE_PATH,
+    path.join(STRATEGIES_DIR, 'knowledge-perfetto-sql.template.md')]
+    .map(file => fs.readFileSync(file, 'utf-8')).join('\n');
 
   const extractStrategySqlRecommendationText = () => {
     return fs
@@ -261,7 +249,7 @@ describe('sqlIncludeInjector - completeness gate', () => {
 
   const extractAdvertisedNames = () => {
     const promptText = [
-      extractSqlDisciplineSection(),
+      extractSqlGuidance(),
       extractStrategySqlRecommendationText(),
     ].join('\n');
     const out = new Set<string>();
@@ -287,7 +275,7 @@ describe('sqlIncludeInjector - completeness gate', () => {
     }
     if (missing.length) {
       throw new Error(
-        `Methodology drift: ${missing.length}/${advertised.size} stdlib ` +
+        `SQL guidance drift: ${missing.length}/${advertised.size} stdlib ` +
         `name(s) advertised in strategy prompt surfaces cannot be ` +
         `resolved by the injector:\n` +
         missing.map(n => `  - ${n}`).join('\n') +

@@ -7,6 +7,8 @@ import type express from 'express';
 import { StreamProjector } from '../streamProjector';
 import { createDataEnvelope, type DataEnvelope } from '../../../types/dataContract';
 import {projectDataEnvelopePreview, projectSerializedDataEvent, TABLE_PREVIEW_MAX_BYTES, TABLE_PREVIEW_MAX_ROWS} from '../dataEnvelopePreview';
+import {runClaimVerification} from '../../../services/verifier/claimVerificationRunner';
+import type {ConclusionContract} from '../../../agent/core/conclusionContract';
 
 class MockSseResponse {
   readonly writes: string[] = [];
@@ -86,6 +88,72 @@ describe('StreamProjector SSE Contract', () => {
     expect(projected.display.preview).toMatchObject({totalRows: 2, returnedRows: 2, detailsOmitted: true});
     expect(detailed.data.expandableData).toHaveLength(1);
     expect(projectDataEnvelopePreview(projected)).toEqual(projected);
+  });
+
+  it.each([false, true])('preserves conclusion evidence beyond the preview on both trace sides (wrong claim: %s)', (wrongClaim) => {
+    const envelopes = (['current', 'reference'] as const).map((side, index) =>
+      createDataEnvelope({columns: ['launch_ms'], rows: Array.from({length: 1000}, (_, row) => [row === 900 ? 120 + index * 80 : 1])}, {
+        type: 'skill_result', source: 'compare_skill', title: side, layer: 'list', format: 'table',
+        traceSide: side, traceId: `trace-${side}`, evidenceRefId: `evidence:${side}`,
+        sourceToolCallId: `compare:${side}`,
+      }));
+    const conclusionContract: ConclusionContract = {
+      schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer',
+      conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
+      claims: envelopes.map((envelope, index) => ({
+        id: `claim-${index}`, kind: 'numeric', text: `${envelope.meta.traceSide} startup`,
+        references: [{evidenceRefId: envelope.meta.evidenceRefId,
+          sourceToolCallId: envelope.meta.sourceToolCallId,
+          rowIndex: 900, column: 'launch_ms', value: wrongClaim ? 999 : 120 + index * 80}],
+      })),
+    };
+    const before = runClaimVerification({conclusionContract, dataEnvelopes: envelopes});
+    const retained: DataEnvelope[] = [];
+    const response = new MockSseResponse();
+    new StreamProjector().broadcastStreamingUpdate('comparison', [response as unknown as express.Response], {
+      type: 'data', content: envelopes, timestamp: 1,
+    } as any, {onValidDataEnvelopes: (data) => retained.push(...data)});
+    const displayed = parseSsePayload(response.writes.join(''))[0].data.envelope;
+    expect(displayed.map((envelope: DataEnvelope) => envelope.data.rows?.[900])).toEqual([undefined, undefined]);
+    const after = runClaimVerification({conclusionContract, dataEnvelopes: retained});
+    expect(after.claimSupport).toEqual(before.claimSupport);
+    expect(after.claimVerificationResult.claimResults).toEqual(before.claimVerificationResult.claimResults);
+    expect(after.claimVerificationResult.issues).toEqual(before.claimVerificationResult.issues);
+    for (const [index, side] of (['current', 'reference'] as const).entries()) {
+      const anchor = after.claimSupport[index].anchors[0];
+      expect(anchor.context).toMatchObject({traceSide: side, traceId: `trace-${side}`});
+      expect(anchor.cells).toEqual([expect.objectContaining({rowIndex: 900, column: 'launch_ms',
+        actualValue: 120 + index * 80, value: wrongClaim ? 999 : 120 + index * 80})]);
+    }
+    // Replayed display cells alone are not native execution proof, even when
+    // their numbers match. This transport change must not promote them.
+    expect(after.claimVerificationResult.passed).toBe(false);
+  });
+
+  it('sends and replays the entire long final conclusion and all declarations outside table preview limits', () => {
+    const claims = Array.from({length: 240}, (_, index) => ({id: `phase-${index}`, kind: 'numeric',
+      text: `Phase ${index} took ${index + 0.125} ms.`,
+      references: [{evidenceRefId: 'data:all-phases', rowIndex: index + 1000,
+        column: 'duration_ms', value: index + 0.125}]}));
+    const conclusion = claims.map(claim => `${claim.text} This phase is scoped to its original investigation interval. ` +
+      'Overlapping work cannot be summed into the launch total, and its cause remains unresolved.\n').join('\n') +
+      '\n| Final finding | Duration (ms) |\n| --- | ---: |\n| TAIL_PHASE_239 | 239.125 |\n\n' +
+      'TAIL_LIMITATION: No cause has been verified for the last measured phase.';
+    expect(conclusion.length).toBeGreaterThan(40_000);
+    const payload = {type: 'analysis_completed', data: {conclusion, conclusionContract: {claims},
+      claimVerificationResult: {schemaVersion: 'claim_verifier@2', status: 'not_checked', passed: false}}};
+    const projector = new StreamProjector();
+    const res = new MockSseResponse();
+    projector.sendEvent(res as unknown as express.Response, 'analysis_completed', payload, 10);
+    projector.replayBufferedEvents(res as unknown as express.Response,
+      [{seqId: 10, eventType: 'analysis_completed', eventData: JSON.stringify(payload)}], 9);
+
+    const events = parseSsePayload(res.writes.join(''));
+    expect(events).toHaveLength(2);
+    for (const event of events) {
+      expect(event.event).toBe('analysis_completed');
+      expect(event.data).toEqual(payload);
+    }
   });
 
   it('reprojects old table events on direct send and buffered or persisted replay', () => {

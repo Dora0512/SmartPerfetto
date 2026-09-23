@@ -1877,10 +1877,9 @@ describe('createClaudeMcpServer', () => {
         params: { process_name: 'com.example' },
       });
 
-      expect(result.quickMode).toMatchObject({
-        answerNow: true,
-      });
-      expect(result.hint).toContain('answer from previews');
+      expect(result.quickMode).toBeUndefined();
+      expect(result.hint).toContain('Previews do not limit conclusion coverage');
+      expect(result.hint).not.toMatch(/900|3 claims|answer.*now|exactly two headings/i);
       expect(result.identity).toMatchObject({
         identityRefId: 'identity:test',
         status: 'verified',
@@ -1888,7 +1887,9 @@ describe('createClaudeMcpServer', () => {
         processName: 'com.example',
       });
       expect(result.identityResolution).toBeUndefined();
-      expect(result.synthesizeArtifacts).toBeUndefined();
+      expect(result.synthesizeArtifacts).toEqual([
+        expect.objectContaining({stepId: 'large_synth', rowCount: 1}),
+      ]);
       expect(result.artifacts).toEqual([
         expect.objectContaining({
           id: 'art-1',
@@ -1902,6 +1903,43 @@ describe('createClaudeMcpServer', () => {
           },
         }),
       ]);
+    });
+
+    it('keeps every lightweight evidence locator while bounding only inline previews', async () => {
+      const {tools, mockSkillExecutor} = createTestServer({lightweight: true});
+      const displayResults = Array.from({length: 14}, (_, index) => ({
+        stepId: `step_${index}`, title: `Finding ${index}`, layer: 'detail', format: 'table',
+        data: {columns: ['value'], rows: index < 12 ? [[index]] : []},
+        ...(index === 13 ? {executionStatus: 'unavailable', executionMessage: 'Not captured'} : {}),
+      }));
+      mockSkillExecutor.execute.mockResolvedValueOnce({
+        skillId: 'scrolling_analysis', success: true, displayResults, diagnostics: [],
+        synthesizeData: [{stepId: 'hidden_tail', stepName: 'Internal evidence', success: true,
+          data: [{value: 9001}]}], executionTimeMs: 5,
+      } as any);
+      const result = await callTool(tools, 'invoke_skill', {skillId: 'scrolling_analysis'});
+      expect(result.artifacts.map((artifact: any) => artifact.stepId))
+        .toEqual(displayResults.map(row => row.stepId));
+      expect(result.artifacts.filter((artifact: any) => artifact.preview)).toHaveLength(10);
+      for (const artifact of result.artifacts.slice(10)) {
+        expect(artifact).toMatchObject({previewOmitted: true,
+          evidenceRefId: expect.stringContaining('data:skill:scrolling_analysis'),
+          sourceToolCallId: expect.stringContaining('invoke_skill:')});
+        expect(artifact).not.toHaveProperty('preview');
+      }
+      expect(result.artifacts[12]).toMatchObject({rowCount: 0});
+      expect(result.artifacts[13]).toMatchObject({rowCount: 0, executionStatus: 'unavailable'});
+      const tail = await callTool(tools, 'fetch_artifact', {
+        artifactId: result.artifacts[11].id, detail: 'rows',
+        purpose: 'Read the later finding omitted from inline previews',
+      });
+      expect(tail).toMatchObject({success: true, rows: [[11]]});
+      expect(result.synthesizeArtifacts).toHaveLength(1);
+      const hidden = await callTool(tools, 'fetch_artifact', {
+        artifactId: result.synthesizeArtifacts[0].artifactId, detail: 'rows',
+        purpose: 'Read the independently collected internal evidence',
+      });
+      expect(hidden).toMatchObject({success: true, rows: [[9001]]});
     });
 
     it('keeps duplicate step ids aligned with their own artifacts and query reviews', async () => {

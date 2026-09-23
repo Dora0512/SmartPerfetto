@@ -4,40 +4,24 @@
 
 import {describe, expect, it} from '@jest/globals';
 
+import type {ClaudeAnalysisContext} from '../types';
+
 import {buildAgentDefinitions} from '../../agentRuntime/engines/claude/claudeAgentDefinitions';
 import {buildQuickSystemPrompt, buildSystemPrompt} from '../claudeSystemPrompt';
-import {getRegisteredScenes, loadPromptTemplate, renderTemplate} from '../strategyLoader';
+import {buildStrategyRegistrySnapshotFromDefinitions, getRegisteredScenes, loadPromptTemplate} from '../strategyLoader';
 
-describe('code-aware.template golden rules', () => {
-  const rendered = renderTemplate(loadPromptTemplate('code-aware') ?? '', {
-    codeAwareMode: 'metadata_only',
-    codebaseIds: 'cb_app, cb_kernel',
-  });
+const registry = buildStrategyRegistrySnapshotFromDefinitions({
+  definitions: getRegisteredScenes(), overlayGeneration: 'source-prompt-golden-test',
+});
+function typedContext(overrides: Partial<ClaudeAnalysisContext> = {}): ClaudeAnalysisContext {
+  return {query: 'Explain the observed work.', strategyRegistry: registry,
+    turnIntent: {schemaVersion: 1, status: 'resolved', source: 'semantic', taskKind: 'investigation',
+      sceneId: overrides.sceneType ?? 'general', scope: 'scene_wide', recommendedComplexity: 'full',
+      deliverable: 'report', evidenceAccess: 'read_new', registryFingerprint: registry.registryFingerprint},
+    ...overrides};
+}
 
-  it('locks the source lookup order and domain split', () => {
-    expect(rendered).toContain('search_codebase');
-    expect(rendered).toContain('不要求预先建立索引');
-    expect(rendered).toContain('read_codebase_file');
-    expect(rendered).toContain('query_code_graph');
-    expect(rendered).toContain('inspect_code_symbol');
-    expect(rendered).toContain('可选加速器');
-    expect(rendered).toContain('freshness="stale"');
-    expect(rendered).toContain('resolve_symbol');
-    expect(rendered).toContain('lookup_app_source');
-    expect(rendered).toContain('lookup_aosp_source');
-    expect(rendered).toContain('lookup_kernel_source');
-    expect(rendered).toContain('inspect_code_symbol` 的 `referenceId` 不授予 patch 能力');
-    expect(rendered).toContain('包名/进程');
-    expect(rendered).toContain('线程/slice');
-    expect(rendered).toContain('symbol/class/method');
-    expect(rendered).toContain('路径/文件');
-    expect(rendered).toContain('App');
-    expect(rendered).toContain('AOSP/framework');
-    expect(rendered).toContain('kernel/vendor');
-    expect(rendered).toContain('多个 codebase');
-    expect(rendered).toContain('先 Trace');
-  });
-
+describe('typed source contract golden rules', () => {
   it.each(['zh', 'en'] as const)('loads the %s source-use decision contract from assets', language => {
     const contract = loadPromptTemplate(`prompt-source-use-decision-${language}`) ?? '';
     expect(contract.match(/<!-- tool-description:start -->/g) ?? []).toHaveLength(1);
@@ -73,20 +57,20 @@ describe('code-aware.template golden rules', () => {
   it.each(getRegisteredScenes().map(definition => [definition.scene]))(
     'injects source contracts for discovered Full scene %s and excludes them in trace-only mode',
     scene => {
-      const active = buildSystemPrompt({
+      const active = buildSystemPrompt(typedContext({
         query: 'analyze',
         sceneType: scene,
         codeAwareMode: 'metadata_only',
         codebaseIds: ['cb_app', 'cb_kernel'],
         outputLanguage: 'en',
-      });
-      const traceOnly = buildSystemPrompt({
+      }));
+      const traceOnly = buildSystemPrompt(typedContext({
         query: 'analyze',
         sceneType: scene,
         codeAwareMode: 'off',
         codebaseIds: ['cb_app', 'cb_kernel'],
         outputLanguage: 'en',
-      });
+      }));
 
       expect(active).toContain('Source Use Decision Contract');
       expect(active).toContain('record_source_use_decision');
@@ -98,21 +82,21 @@ describe('code-aware.template golden rules', () => {
   );
 
   it('makes Quick/Conversation source-aware only for an active selected codebase', () => {
-    const active = buildQuickSystemPrompt({
+    const active = buildQuickSystemPrompt(typedContext({
       codeAwareMode: 'provider_send',
       codebaseIds: ['cb_quick'],
       outputLanguage: 'en',
-    } as any);
-    const off = buildQuickSystemPrompt({
+    }));
+    const off = buildQuickSystemPrompt(typedContext({
       codeAwareMode: 'off',
       codebaseIds: ['cb_quick'],
       outputLanguage: 'en',
-    } as any);
-    const emptySelection = buildQuickSystemPrompt({
+    }));
+    const emptySelection = buildQuickSystemPrompt(typedContext({
       codeAwareMode: 'provider_send',
       codebaseIds: [],
       outputLanguage: 'en',
-    } as any);
+    }));
 
     expect(active).toContain('Source Use Decision Contract');
     expect(active).toContain('cb_quick');
@@ -162,15 +146,6 @@ describe('code-aware.template golden rules', () => {
     }
   });
 
-  it('locks degraded and metadata-only output discipline', () => {
-    expect(rendered).toContain('metadata_only');
-    expect(rendered).toContain('provider_send_disabled_for_session');
-    expect(rendered).toContain('GitNexus 结果只能作为导航提示');
-    expect(rendered).toContain('不能单独当作 trace 真相');
-    expect(rendered).toContain('symbol_only_low_confidence');
-    expect(rendered).toContain('不能生成 patch');
-  });
-
   it('requires successful source lookups to remain locatable in the final report', () => {
     const contract = loadPromptTemplate('prompt-code-reference-contract-zh') ?? '';
     expect(contract).toContain('成功返回源码 CodeRef');
@@ -182,18 +157,31 @@ describe('code-aware.template golden rules', () => {
     expect(contract).toContain('不得编造行号');
   });
 
-  it('locks patchStatus output discipline', () => {
-    expect(rendered).toContain('patchStatus="verified"');
-    expect(rendered).toContain('patchStatus="sketch"');
-    expect(rendered).toContain('patchStatus="unverified"');
-    expect(rendered).toContain('不能输出 unified diff');
-    expect(rendered).toContain('multi_codebase_not_supported_phase1');
+  it.each(['zh-CN', 'en'] as const)('preserves source navigation and version authority in %s prompts', outputLanguage => {
+    const prompt = buildSystemPrompt(typedContext({outputLanguage, codeAwareMode: 'provider_send',
+      codebaseIds: ['cb_app', 'cb_kernel']}));
+    for (const fact of ['metadata_only', 'provider_send', 'search_codebase', 'read_codebase_file']) {
+      expect(prompt).toContain(fact);
+    }
+    if (outputLanguage === 'en') {
+      expect(prompt).toContain('Graph/index results are navigation, not evidence of this run');
+      expect(prompt).toContain('never merge implementations across repositories');
+      expect(prompt).toContain('build/commit');
+    } else {
+      expect(prompt).toContain('图谱');
+      expect(prompt).toContain('build/commit');
+    }
   });
 
-  it('keeps legacy Plan 44/54/55 recall out of code evidence', () => {
-    expect(rendered).toContain('recall_project_memory');
-    expect(rendered).toContain('recall_similar_case');
-    expect(rendered).toContain('legacy `lookup_blog_knowledge`');
-    expect(rendered).toContain('不等同于用户代码证据');
+  it('preserves patch authority and validation limits in the live patch tool asset', () => {
+    const patch = loadPromptTemplate('prompt-propose-patch-tool-description');
+    expect(patch).toContain('result.hits[].chunkId');
+    expect(patch).toContain('context_chunk_ids');
+    expect(patch).toContain('reference IDs and public-pack hits cannot authorize patches');
+    expect(patch).toContain('verified only means git apply --check passed');
+    expect(patch).toContain('not applied, compiled, tested or correct');
+    expect(patch).toContain('sketch is non-copyable');
+    expect(patch).toContain('unverified is rejection');
   });
+
 });

@@ -72,3 +72,37 @@ Preserve returned evidence and source identifiers. Trace evidence establishes
 occurrence; source evidence explains implementation. A source location alone
 does not prove a cause. State uncertainty when evidence cannot establish the
 claim, and never infer successful completion from the appearance of prose.
+
+## Answer presentation
+
+The final answer is the user's primary analysis record. Accuracy and completeness
+within the requested scope take precedence over brevity. Make it self-contained:
+retain every material finding, supporting evidence, uncertainty and applicable
+recommendation even when intermediate tables are hidden. Do not cap findings,
+claims, table rows or prose length merely to shorten delivery. Organize a long
+answer with sections and tables; do not replace its substance with an overview
+or refer the user to intermediate output. Actual missing evidence or incomplete
+execution must remain explicit, never disguised as a complete conclusion.
+
+In final answers and reports, prefer a compact Markdown table when several
+comparable measurements, phase durations, rankings or trace differences are
+easier to scan as rows and columns than repeated prose. Lead with the answer,
+then the relevant table and explanation. A single value, yes/no answer or causal
+mechanism can stay in prose; user-requested formats take precedence. Do not dump
+raw query tables or remove distinct findings, affected intervals, exceptions or
+causal explanations merely to shorten a table. Use only available evidence;
+presentation does not require more queries or a broader report.
+
+Label units, trace sides, windows and denominators where applicable. For
+comparisons, align comparable metrics and state the delta direction; missing or
+incomparable values remain unknown, never zero. Do not compute percentage changes
+from a zero or missing baseline. Put readable evidence and limits beside the
+relevant rows or table. Every checkable table assertion still needs faithful
+declaration references; derived differences/percentages retain their operands
+and calculation basis. Mark rounded table values as approximate; keep declaration
+propositions and references exact. Presentation and browser previews cannot change
+scope or verification status. Avoid repeating table cells
+in paragraphs; use prose to explain mechanisms and implications.
+At the first comparison, identify each full package/process name, baseline and
+comparison role, and physical pane when supplied. Resolve user labels through
+the supplied trace aliases; never infer a trace side from a metric's value.

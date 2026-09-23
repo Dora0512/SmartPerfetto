@@ -16,13 +16,51 @@ const table = [
 ].join('\n');
 
 describe('real quick prompt context assembly', () => {
+  it.each(['zh-CN', 'en'] as const)('guides typed %s answers and reports toward evidence-backed tables in quick and full modes', outputLanguage => {
+    const registry = buildStrategyRegistrySnapshotFromDefinitions({
+      definitions: getRegisteredScenes(), overlayGeneration: 'final-table-presentation-test',
+    });
+    for (const deliverable of ['answer', 'report'] as const) {
+      for (const recommendedComplexity of ['quick', 'full'] as const) {
+        const context: ClaudeAnalysisContext = {
+          query: 'Compare startup stage timings.', outputLanguage, strategyRegistry: registry,
+          turnIntent: {schemaVersion: 1, status: 'resolved', source: 'semantic', sceneId: 'startup',
+            taskKind: 'comparison', scope: 'bounded_question', recommendedComplexity, deliverable,
+            evidenceAccess: 'existing_only', registryFingerprint: registry.registryFingerprint},
+          comparison: {referenceTraceId: 'trace-reference', commonCapabilities: []},
+        };
+        const parts = buildSystemPromptParts(context);
+        const policy = parts.segments.find(segment => segment.label === 'turn_protocol')!;
+        expect(policy).toMatchObject({droppable: false, truncatable: false});
+        expect(policy.content).toContain('prefer a compact Markdown table');
+        expect(policy.content).toContain('user-requested formats take precedence');
+        expect(policy.content).toContain('presentation does not require more queries or a broader report');
+        expect(policy.content).toContain('Every checkable table assertion still needs faithful');
+        expect(policy.content).toContain('from a zero or missing baseline');
+        expect(policy.content).toContain('Mark rounded table values as approximate');
+        expect(policy.content).toContain('propositions and references exact');
+        expect(parts.fullPrompt).toContain('trace-reference');
+        expect(parts.fullPrompt).toContain('existing_only');
+        expect(parts.fullPrompt).toContain('conclusion_contract_v1');
+        expect(buildQuickSystemPrompt(context)).toBe(parts.fullPrompt);
+      }
+    }
+  });
+
   it('renders supplied table rows, units and references without relying on fixed guidance wording', () => {
+    const registry = buildStrategyRegistrySnapshotFromDefinitions({
+      definitions: getRegisteredScenes(), overlayGeneration: 'supplied-table-test',
+    });
     const prompt = buildQuickSystemPrompt({
+      strategyRegistry: registry,
+      turnIntent: {schemaVersion: 1, status: 'resolved', source: 'semantic', sceneId: 'general',
+        taskKind: 'fact', scope: 'bounded_question', recommendedComplexity: 'quick', deliverable: 'answer',
+        evidenceAccess: 'existing_only', registryFingerprint: registry.registryFingerprint},
       outputLanguage: 'en', runtimeEvidenceContext: table,
       quickMemoryContext: 'HISTORY_CONTEXT_CANARY', knowledgeBaseContext: 'SCHEMA_CONTEXT_CANARY',
       packageName: 'com.fixture.prompt',
     });
-    expect(prompt).toContain(table);
+    expect(prompt).toContain(JSON.stringify(table));
     expect(prompt).toContain('HISTORY_CONTEXT_CANARY');
     expect(prompt).toContain('SCHEMA_CONTEXT_CANARY');
     expect(prompt).toContain('com.fixture.prompt');

@@ -576,6 +576,35 @@ describe('HTMLReportGenerator', () => {
     expect(data.result.conclusion).toBe('Keep the original conclusion.');
   });
 
+  test('renders a long conclusion through its final table row and all 240 claim references', () => {
+    const claims = Array.from({length: 240}, (_, index) => ({id: `phase-${index}`, kind: 'numeric',
+      text: `Phase ${index} took ${index + 0.125} ms.`,
+      references: [{evidenceRefId: `data:phase-${index}`, sourceToolCallId: `tool:phase-${index}`,
+        rowIndex: index + 1000, column: 'duration_ms', value: index + 0.125}]}));
+    const body = claims.map(claim => `${claim.text} This phase is scoped to its original investigation interval. ` +
+      'Overlapping work cannot be summed into the launch total, and its cause remains unresolved.\n').join('\n') +
+      '\n| Final finding | Duration (ms) |\n| --- | ---: |\n| TAIL_PHASE_239 | 239.125 |\n\n' +
+      'TAIL_LIMITATION: A measured duration does not establish the cause of this phase.';
+    const data = claimDetailReport({claims});
+    data.result.conclusion = body;
+    data.result.claimVerificationResult = {schemaVersion: 'claim_verifier@2', status: 'not_checked',
+      policy: 'record_only', passed: false, checkedClaimCount: 0, unsupportedClaimCount: 0,
+      claimResults: [], issues: []};
+    expect(body.length).toBeGreaterThan(40_000);
+    const html = new HTMLReportGenerator().generateAgentDrivenHTML(data);
+
+    expect(html).toMatch(/<td[^>]*>TAIL_PHASE_239<\/td>/);
+    expect(html).toContain('TAIL_LIMITATION: A measured duration does not establish the cause of this phase.');
+    expect(html.match(/class="claim-source-card"/g)).toHaveLength(240);
+    expect(html).toContain('Phase 239 took 239.125 ms.');
+    expect(html).toContain('data:phase-239');
+    expect(html).toContain('tool:phase-239');
+    expect(html).toContain('未核验');
+    expect(data.result.conclusion).toBe(body);
+    expect(data.result.conclusionContract).toEqual({claims});
+    expect(data.result.claimVerificationResult.passed).toBe(false);
+  });
+
   test('names why claims were not checked, including closed triage detail codes', () => {
     const data = claimDetailReport({claims: [{id: 'claim-0', text: 'Unchecked claim', references: []}]});
     data.result.claimVerificationResult = {

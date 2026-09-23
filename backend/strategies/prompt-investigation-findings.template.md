@@ -26,6 +26,15 @@ an alert alone is not a cause. Follow significant waits or unexplained intervals
 to the available dependencies rather than merely naming them. A successful empty
 result proves only no match in exact query/view scope and filters, never broader
 event/mechanism absence; missing evidence remains a gap.
+Respect producer `claim_boundary` and `evidence_scope`. `aggregate.complete`
+means the artifact's rows were aggregated, not that every eligible event was
+collected. Before inferring recovery or no recurrence after a time, establish
+that the monitored activity continued in that later window; stopped activity
+cannot prove recovery. Identify supported synthetic/mock/benchmark provenance
+and limit extrapolation to production; names alone are only a candidate signal.
+State relevant collection, capability and version limits. When allowed, suggest
+the specific missing evidence needed to resolve uncertainty, without acquiring
+new data under `existing_only`.
 Exclusive/self time is wall time outside recorded children, not necessarily CPU
 time or removable work; it does not establish a recoverable-time bound.
 Cross-check nested self versus inclusive time, clipping, overlapping intervals
@@ -54,6 +63,12 @@ fact/inference/exclusion/advice, including support/limitation facts. Map each on
 to faithful claim/evidence; reuse for repeated prose. Do not generate claims
 mechanically from prose fragments or omit propositions to save budget. Preserve
 supported findings/gaps; explain rejection, supersession or scope exclusion.
+Give each numeric proposition its own faithful declaration; a cell proving one
+number cannot cover other numbers or a causal clause in the same sentence.
+Copy the observed original row locator, column and value; never guess a row.
+Keep exact declarations and references even when the body displays an explicitly
+marked approximation. Apply this check to every occurrence in tables, summaries
+and prose, including the final finding, not just the opening summary.
 For a source mechanism, bind the matching proposition only when an actual read
 covers the implementation claimed; a caller, label or unread callee is not enough.
 Otherwise retain the explicit mechanism gap. This authoring check uses the current

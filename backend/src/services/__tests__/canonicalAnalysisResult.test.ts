@@ -182,6 +182,49 @@ describe('exact native prose semantic input receipt', () => {
 });
 
 describe('canonical analysis result projection', () => {
+  it('preserves a long final answer and every declared measurement beyond display preview limits', () => {
+    const contract = declaration();
+    contract.claims = Array.from({length: 240}, (_, index) => ({
+      id: `phase-${index}`, kind: 'numeric', text: `Phase ${index} took ${index + 0.125} ms.`,
+      references: [{evidenceRefId: 'data:all-phases', rowIndex: index + 1000,
+        column: 'duration_ms', value: index + 0.125}],
+    }));
+    const body = contract.claims.map(claim => `${claim.text} This measurement describes only the cited phase. ` +
+      'Overlapping work must not be added to the launch total, and the measurement alone does not establish a cause.\n')
+      .join('\n') + '\n| Final phase | Duration (ms) | Source |\n| --- | ---: | --- |\n' +
+      '| Tail-only finding | 239.125 | data:all-phases, row 1239 |\n\n' +
+      'TAIL_FINDING: The last phase remains independently relevant; its cause is still unknown.';
+    expect(body.length).toBeGreaterThan(40_000);
+    const source = result(`${body}\n\n${renderConclusionContractSidecar(contract)}`);
+    const canonical = canonicalizeAnalysisResult(source, {context: contextFor(source)});
+
+    expect(canonical.result.conclusion).toBe(`${body}\n\n`);
+    expect(canonical.result.conclusionContract?.claims).toEqual(contract.claims);
+    expect(canonical.validationContract?.claims).toEqual(contract.claims);
+    expect(canonical.result.claimVerificationResult).toBeUndefined();
+    expect(source.conclusion).toContain(renderConclusionContractSidecar(contract));
+  });
+
+  it('preserves a final comparison table and its original references while removing only the sidecar', () => {
+    const body = [
+      '阶段耗时对比如下，机制仍需结合调度证据解释。', '',
+      '| 阶段 | 基线（ms） | 对比（ms） | 来源 |',
+      '| --- | ---: | ---: | --- |',
+      '| `bind\\|Application` | 120 | 200 | 两侧启动阶段原始记录 |', '',
+      '比例分母和因果关系尚未核验，不从这张表推断根因。',
+    ].join('\n');
+    const contract = declaration(120);
+    contract.claims![0].references[0] = {evidenceRefId: 'data:baseline', rowIndex: 900, column: 'duration_ms', value: 120};
+    contract.claims!.push({...contract.claims![0], id: 'comparison-duration', text: 'Comparison duration is 200 ms.',
+      references: [{evidenceRefId: 'data:comparison', rowIndex: 901, column: 'duration_ms', value: 200}]});
+    const source = result(`${body}\n\n${renderConclusionContractSidecar(contract)}`);
+    const canonical = canonicalizeAnalysisResult(source, {context: contextFor(source)});
+    expect(canonical.result.conclusion).toBe(`${body}\n\n`);
+    expect(canonical.validationContract?.claims?.map(claim => claim.references))
+      .toEqual(contract.claims!.map(claim => claim.references));
+    expect(canonical.result.conclusion).not.toContain('conclusion_contract_v1');
+  });
+
   it('uses the same protocol inspection for native diagnostics and canonical narrative', () => {
     const raw = `Visible body\n${renderConclusionContractSidecar(declaration())}`;
     const inspected = inspectCandidateProtocol(raw);

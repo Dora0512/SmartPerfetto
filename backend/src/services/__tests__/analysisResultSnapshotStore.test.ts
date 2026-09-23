@@ -213,6 +213,35 @@ describe('AnalysisResultSnapshotRepository', () => {
     expect(restored?.summary).not.toHaveProperty('deliveryAssurance');
   });
 
+  test('round-trips a long conclusion and all late claims and references without promoting verification', () => {
+    const claims = Array.from({length: 240}, (_, index) => ({id: `phase-${index}`, kind: 'numeric',
+      text: `Phase ${index} took ${index + 0.125} ms.`,
+      references: [{evidenceRefId: `data:phase-${index}`, rowIndex: index + 1000,
+        column: 'duration_ms', value: index + 0.125}]}));
+    const body = claims.map(claim => `${claim.text} This phase is scoped to its original investigation interval. ` +
+      'Overlapping work cannot be summed into the launch total, and its cause remains unresolved.\n').join('\n') +
+      '\n| Final finding | Duration (ms) |\n| --- | ---: |\n| TAIL_PHASE_239 | 239.125 |\n' +
+      '\nTAIL_LIMITATION: The last phase is measured, but no causal explanation has been verified.';
+    const value = snapshot({summary: {headline: 'Per-phase measurements', conclusion: body},
+      conclusionContract: {claims}, claimSupport: [],
+      claimVerificationResult: {schemaVersion: 'claim_verifier@2', status: 'not_checked', policy: 'record_only',
+        passed: false, checkedClaimCount: 0, unsupportedClaimCount: 0, claimResults: [], issues: []},
+      evidenceRefs: claims.map((claim, index) => ({id: `reference-${index}`, type: 'data_envelope',
+        dataEnvelopeId: claim.references[0].evidenceRefId, runId: 'run-a'})),
+    });
+    expect(body.length).toBeGreaterThan(40_000);
+    const repository = createAnalysisResultSnapshotRepository(db!);
+    repository.createSnapshot(value);
+    const loaded = repository.getSnapshot({tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'}, value.id);
+
+    expect(loaded?.summary.conclusion).toBe(body);
+    expect(loaded?.conclusionContract).toEqual({claims});
+    expect(loaded?.evidenceRefs).toHaveLength(value.evidenceRefs.length);
+    expect(loaded?.evidenceRefs).toEqual(expect.arrayContaining(value.evidenceRefs));
+    expect(loaded?.claimVerificationResult).toEqual(value.claimVerificationResult);
+    expect(loaded?.claimSupport).toEqual([]);
+  });
+
   test('persists snapshot, metrics, evidence, and audit event', () => {
     const repo = createAnalysisResultSnapshotRepository(db!);
     repo.createSnapshot(snapshot({}));

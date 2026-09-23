@@ -1302,14 +1302,6 @@ export function loadStrategyYaml<T>(
 }
 
 /**
- * Load a selection context template from `backend/strategies/selection-<kind>.template.md`.
- * Delegates to `loadPromptTemplate()` with the `selection-` prefix.
- */
-export function loadSelectionTemplate(kind: string): string | undefined {
-  return loadPromptTemplate(`selection-${kind}`);
-}
-
-/**
  * Substitute `{{key}}` placeholders in a template string with provided values.
  */
 export function renderTemplate(template: string, vars: Record<string, string | number | undefined>): string {

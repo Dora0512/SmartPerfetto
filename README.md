@@ -120,6 +120,8 @@ cache; unsupported or unavailable catalogs keep the curated preset list.
    `Analyze the ANR in this trace`.
 
 Server verification details are collapsed by default; expand them to read the full record. Verification warnings remain visible.
+Final conclusions retain all material findings, supporting evidence and limitations within the requested scope, even when intermediate tables are hidden. Length alone does not justify dropping findings or claims.
+Final answers prefer compact tables for comparable metrics, phase timings and trace differences, alongside explanations and evidence references. Single values and questions better answered in prose remain free-form.
 
 Each round shows its analysis process and steps above its final conclusion,
 which stays before the next round's question.

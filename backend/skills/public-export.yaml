@@ -1421,9 +1421,6 @@ strategies:
   backend/strategies/prompt-final-semantic-assessment.template.md:
     disposition: product-only
     reason: SmartPerfetto finalization semantic assessment protocol
-  backend/strategies/prompt-quick-sql-definitions.template.md:
-    disposition: product-only
-    reason: SmartPerfetto runtime SQL catalog injection and execute_sql guidance
   backend/strategies/prompt-turn-policy.template.md:
     disposition: product-only
     reason: SmartPerfetto resolved turn policy and source authorization
@@ -1443,22 +1440,6 @@ strategies:
     workflow: anr-blocking
     disposition: exported
     destination: references/generated/strategies/anr.strategy.md
-  backend/strategies/arch-compose.template.md:
-    workflow: rendering-pipeline
-    disposition: exported
-    destination: references/generated/strategies/arch-compose.template.md
-  backend/strategies/arch-flutter.template.md:
-    workflow: rendering-pipeline
-    disposition: exported
-    destination: references/generated/strategies/arch-flutter.template.md
-  backend/strategies/arch-standard.template.md:
-    workflow: rendering-pipeline
-    disposition: exported
-    destination: references/generated/strategies/arch-standard.template.md
-  backend/strategies/arch-webview.template.md:
-    workflow: rendering-pipeline
-    disposition: exported
-    destination: references/generated/strategies/arch-webview.template.md
   backend/strategies/case-background-case-line-en.template.md:
     disposition: product-only
     reason: SmartPerfetto Case Library retrieval and runtime localization
@@ -1474,29 +1455,10 @@ strategies:
   backend/strategies/case-candidate-review.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
-  backend/strategies/code-aware.template.md:
-    disposition: product-only
-    reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
   backend/strategies/comparison-conclusion.template.md:
     workflow: trace-comparison
     disposition: exported
     destination: references/generated/strategies/comparison-conclusion.template.md
-  backend/strategies/comparison-context-en.template.md:
-    workflow: trace-comparison
-    disposition: exported
-    destination: references/generated/strategies/comparison-context-en.template.md
-  backend/strategies/comparison-context.template.md:
-    workflow: trace-comparison
-    disposition: exported
-    destination: references/generated/strategies/comparison-context.template.md
-  backend/strategies/comparison-methodology.template.md:
-    workflow: trace-comparison
-    disposition: exported
-    destination: references/generated/strategies/comparison-methodology.template.md
-  backend/strategies/comparison-result-methodology.template.md:
-    workflow: trace-comparison
-    disposition: exported
-    destination: references/generated/strategies/comparison-result-methodology.template.md
   backend/strategies/external-issue-triage.template.md:
     disposition: product-only
     reason: SmartPerfetto feedback sessions, provider pinning, review attestation, and draft-only GitHub handoff
@@ -1692,10 +1654,6 @@ strategies:
   backend/strategies/prompt-language-zh.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
-  backend/strategies/prompt-methodology.template.md:
-    workflow: trace-overview
-    disposition: exported
-    destination: references/generated/strategies/prompt-methodology.template.md
   backend/strategies/prompt-openai-final-report-continuation-en.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
@@ -1708,23 +1666,13 @@ strategies:
   backend/strategies/prompt-final-report-quality-issue-zh.template.md:
     disposition: product-only
     reason: SmartPerfetto final-report runtime orchestration
-  backend/strategies/prompt-output-format.template.md:
-    workflow: trace-overview
-    disposition: exported
-    destination: references/generated/strategies/prompt-output-format.template.md
   backend/strategies/prompt-plan-completion-continuation-en.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime plan-completion orchestration
   backend/strategies/prompt-plan-completion-continuation-zh.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime plan-completion orchestration
-  backend/strategies/prompt-quick.template.md:
-    disposition: product-only
-    reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
   backend/strategies/prompt-recent-sql-results.template.md:
-    disposition: product-only
-    reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
-  backend/strategies/prompt-role.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime, session, case, language, or codebase orchestration
   backend/strategies/prompt-runtime-conversation-context-en.template.md:
@@ -1866,14 +1814,6 @@ strategies:
   backend/strategies/golden-trace-eval.registry.json:
     disposition: product-only
     reason: SmartPerfetto golden trace evaluation corpus and gated overlay lifecycle
-  backend/strategies/selection-area.template.md:
-    workflow: trace-overview
-    disposition: exported
-    destination: references/generated/strategies/selection-area.template.md
-  backend/strategies/selection-slice.template.md:
-    workflow: trace-overview
-    disposition: exported
-    destination: references/generated/strategies/selection-slice.template.md
   backend/strategies/smart.strategy.md:
     workflow: trace-overview
     disposition: exported
@@ -1897,6 +1837,21 @@ strategies:
     workflow: trace-overview
     disposition: exported
     destination: references/generated/strategies/verifier-misdiagnosis.strategy.md
+  backend/strategies/prompt-artifact-result-guidance.template.md:
+    disposition: product-only
+    reason: Runtime artifact access policy and preview interpretation
+  backend/strategies/knowledge-trace-comparison.template.md:
+    workflow: trace-comparison
+    disposition: exported
+    destination: references/generated/strategies/knowledge-trace-comparison.template.md
+  backend/strategies/knowledge-selection-scope.template.md:
+    workflow: trace-overview
+    disposition: exported
+    destination: references/generated/strategies/knowledge-selection-scope.template.md
+  backend/strategies/knowledge-perfetto-sql.template.md:
+    workflow: trace-overview
+    disposition: exported
+    destination: references/generated/strategies/knowledge-perfetto-sql.template.md
 pipeline_docs:
   docs/rendering_pipelines/S01_rendering_types_overview.md:
     disposition: exported

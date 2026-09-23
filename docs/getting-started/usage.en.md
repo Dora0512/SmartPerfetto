@@ -254,7 +254,17 @@ SmartPerfetto answers usually contain three evidence types:
 - Skill results from YAML analysis pipelines under `backend/skills/`, rendered in L1-L4 layers.
 - Agent conclusions based on SQL, Skills, strategies, and verifier output.
 
+Comparable metrics, phase timings, rankings and trace differences are good
+candidates for compact Markdown tables in the final answer, followed by
+mechanisms, impact and limits. These are evidence summaries, not copies of all
+intermediate query rows. Values still need original references and clear units,
+trace sides, windows and delta direction. Missing is not zero; incomparable data
+does not justify a delta or ratio. Tables do not replace material findings or
+causal explanations.
+
 The conclusion should trace back to tables, time ranges, threads, slices, or Skill results. Suggestions that are not supported by trace data should not be treated as confirmed findings.
+
+The final conclusion is the primary deliverable: an overview can lead, followed by all material findings, evidence and uncertainty. Quick/full budgets share one conclusion contract without a fixed word, table-row or claim-count limit. Intermediate table previews only limit display. The model retains locators for all evidence artifacts, including later, empty and unavailable results, for authorized on-demand reads. Actual provider or review capacity limits remain explicit incomplete states, never a partial answer presented as complete and verified.
 
 ## Generated Reports
 

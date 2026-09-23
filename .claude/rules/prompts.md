@@ -10,10 +10,11 @@ Runtime prompt assets:
 
 - Scene strategies: `backend/strategies/*.strategy.md`
 - Prompt templates: `backend/strategies/prompt-*.template.md`
-- Architecture templates: `backend/strategies/arch-*.template.md`
-- Selection templates: `backend/strategies/selection-*.template.md`
+- Architecture knowledge: `backend/strategies/knowledge-rendering-pipeline.template.md`
+- Selection scope: `backend/strategies/knowledge-selection-scope.template.md`
 - Knowledge templates: `backend/strategies/knowledge-*.template.md`
-- Comparison methodology: `backend/strategies/comparison-methodology.template.md`
+- Comparison methodology: `backend/strategies/knowledge-trace-comparison.template.md`
+  and `backend/strategies/multi-trace-result-comparison.strategy.md`
 
 Current strategy set is discovered from strategy frontmatter through
 `strategyLoader.ts`; do not duplicate the scene list in TypeScript when the
@@ -56,6 +57,15 @@ templates. Scene choices come from the pinned strategy registry, and the finite
 proof catalog comes from `SUPPORTED_DETERMINISTIC_CLAIM_RULES`. Valid JSON only
 establishes a declaration's shape; it does not prove its interpretation or
 claims correct.
+
+All system-prompt entrypoints require the resolved turn intent and pinned
+strategy registry. There is no legacy quick/full prompt fallback. Missing
+context fails explicitly instead of selecting a different answer contract.
+Final conclusions are the primary user record: retain all material findings,
+evidence, uncertainty and relevant recommendations within scope. Neither a
+runtime budget setting nor an artifact preview imposes a conclusion length,
+table-row or claim-count limit. Actual provider/review limits remain explicit
+incomplete states; do not truncate a conclusion or waive verification to pass.
 
 Keep budget, question scope, deliverable and evidence access separate. An
 `existing_only` turn cannot acquire new evidence; `read_new` never widens
@@ -103,7 +113,7 @@ entering the native prompt path. Missing or evicted data remains unavailable.
 - The full-mode prompt is budget-bound (`MAX_PROMPT_TOKENS`). Before adding a
   section, measure with
   `npx jest src/agentv3/__tests__/claudeSystemPrompt.realStrategyTokenRegression.test.ts`
-  and read the `[SystemPromptTokenGate]` line: a new section that pushes
+  and read the typed prompt budget report: a new section that pushes
   `droppedLabels` wider has traded trace-completeness or schema context for
   its own text.
 

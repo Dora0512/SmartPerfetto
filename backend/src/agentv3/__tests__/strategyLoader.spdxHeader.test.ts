@@ -370,84 +370,64 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
     ]));
   });
 
-  it('keeps the AgentV3 output template wired for machine-parseable claim provenance', () => {
-    const content = loadPromptTemplate('prompt-output-format');
-    expect(content).toContain('## 逐句数据引用（结构化来源）');
-    expect(content).toContain('evidence_ref_id=<data:* 或 ev_* 证据 ID>');
-    expect(content).toContain('source_tool_call_id=<工具调用 ID，如可见>');
-    expect(content).toContain('row_index=<0-based 行号，如可见>');
+  it('removes retired prompt assets instead of leaving an alternate output contract', () => {
+    for (const name of ['prompt-role', 'prompt-quick', 'prompt-quick-sql-definitions', 'code-aware',
+      'prompt-output-format', 'prompt-methodology', 'comparison-context', 'comparison-context-en',
+      'comparison-methodology', 'comparison-result-methodology', 'arch-compose', 'arch-flutter',
+      'arch-standard', 'arch-webview', 'selection-area', 'selection-slice']) {
+      expect(loadPromptTemplate(name)).toBeUndefined();
+    }
   });
 
-  it('loads the evidence provenance knowledge topic and global evidence contract', () => {
-    const outputFormat = loadPromptTemplate('prompt-output-format');
-    expect(outputFormat).toContain('证据来源、置信度与版本边界');
-    expect(outputFormat).toContain('trace_direct');
-    expect(outputFormat).toContain('missing_evidence');
-    expect(outputFormat).toContain('thread-state-blocked-reason');
-
-    const methodology = loadPromptTemplate('prompt-methodology');
-    expect(methodology).toContain('lookup_knowledge("evidence-provenance")');
-    expect(methodology).toContain('packet-level 网络 trace');
-    expect(methodology).toContain('原始且不可变的假设命题');
-    expect(methodology).toContain('先 rejected 原命题，再 submit_hypothesis');
-
+  it('loads evidence provenance and dimension-specific knowledge independently from the retired output template', () => {
     const knowledge = loadPromptTemplate('knowledge-evidence-provenance');
-    expect(knowledge).toContain('## 证据来源与置信度边界');
-    expect(knowledge).toContain('external_aggregate');
-    expect(knowledge).toContain('版本敏感能力');
-
-    const networkKnowledge = loadPromptTemplate('knowledge-network-evidence');
-    expect(networkKnowledge).toContain('Network Evidence Boundaries');
-    expect(networkKnowledge).toContain('request_telemetry');
-    expect(networkKnowledge).toContain('local-network permission');
-
-    const observabilityKnowledge = loadPromptTemplate('knowledge-observability-diagnostics');
-    expect(observabilityKnowledge).toContain('ApplicationExitInfo');
-    expect(observabilityKnowledge).toContain('ApplicationStartInfo');
-    expect(observabilityKnowledge).toContain('ProfilingManager');
-    expect(observabilityKnowledge).toContain('Play Vitals');
-    expect(observabilityKnowledge).toContain('App Performance Score');
-
-    const blockedReasonKnowledge = loadPromptTemplate('knowledge-thread-state-blocked-reason');
-    expect(blockedReasonKnowledge).toContain('sched/sched_blocked_reason');
-    expect(blockedReasonKnowledge).toContain('single frame');
-    expect(blockedReasonKnowledge).toContain('filemap_read');
+    for (const fact of ['trace_direct', 'derived_metric', 'external_aggregate', 'missing_evidence',
+      '版本敏感能力', 'claim_boundary', 'evidence_scope', 'aggregate.complete=true']) {
+      expect(knowledge).toContain(fact);
+    }
+    const network = loadPromptTemplate('knowledge-network-evidence');
+    expect(network).toContain('request_telemetry');
+    expect(network).toContain('local-network permission');
+    const observability = loadPromptTemplate('knowledge-observability-diagnostics');
+    for (const api of ['ApplicationExitInfo', 'ApplicationStartInfo', 'ProfilingManager', 'Play Vitals',
+      'App Performance Score']) expect(observability).toContain(api);
+    const blocked = loadPromptTemplate('knowledge-thread-state-blocked-reason');
+    for (const anchor of ['sched/sched_blocked_reason', 'single frame', 'filemap_read']) {
+      expect(blocked).toContain(anchor);
+    }
   });
 
-  it('loads v58 stdlib discovery and case-insensitive regexp guidance', () => {
-    const methodology = loadPromptTemplate('prompt-methodology');
-
-    expect(methodology).toContain('__intrinsic_stdlib_objects');
-    expect(methodology).toContain('读取候选对象的 `__intrinsic_stdlib_objects.summary` 和实际 schema');
-    expect(methodology).toContain("regexp(pattern, input, 'i')");
-    expect(methodology).toContain('精确匹配继续使用 `=`');
-    expect(methodology).toContain('通配匹配继续使用 `GLOB`');
+  it('loads schema discovery and intentional SQL matching guidance from the live knowledge asset', () => {
+    const sql = loadPromptTemplate('knowledge-perfetto-sql');
+    expect(sql).toContain('__intrinsic_stdlib_objects');
+    expect(sql).toContain('Read candidate summary/schema before querying');
+    expect(sql).toContain("regexp(pattern, input, 'i')");
+    expect(sql).toContain('Exact matching uses =');
+    expect(sql).toContain('matching uses GLOB');
+    expect(sql).toContain('Trace ts/dur filters use nanoseconds');
+    expect(loadPromptTemplate('prompt-sql-evidence-guidance')).toContain('fetch_artifact, not VALUES');
+  });
+  it('keeps selection and comparison evidence boundaries in discoverable knowledge assets', () => {
+    const selection = loadPromptTemplate('knowledge-selection-scope');
+    expect(selection).toContain('lookup input, not a');
+    expect(selection).toContain('different namespaces');
+    expect(selection).toContain('selection grants no new read');
+    expect(selection).toContain('Overlapping parent/child durations cannot');
+    const comparison = loadPromptTemplate('knowledge-trace-comparison');
+    expect(comparison).toContain('currentParams/referenceParams');
+    expect(comparison).toContain('one side does not collect evidence from both');
+    expect(comparison).toContain('Do not recover numbers from report prose');
+    expect(comparison).toContain('zero or');
+    expect(comparison).toContain('missing baseline does not support percentage change');
   });
 
-  it('keeps the quick prompt wired for machine-parseable claim provenance', () => {
-    const content = loadPromptTemplate('prompt-quick');
-    expect(content).toContain('## 逐句数据引用（结构化来源）');
-    expect(content).toContain('evidence_ref_id=<data:* 或 ev_* 证据 ID>');
-    expect(content).toContain('source_ref=<表 1/摘要 1>');
-    expect(content).toContain('column=<列名>; value=<原始值>');
+  it('preserves summary-first artifact access without reducing final conclusion coverage', () => {
+    const guidance = loadPromptTemplate('prompt-artifact-result-guidance');
+    expect(guidance).toContain('forbidRows={{forbidRows}}');
+    expect(guidance).toContain('requireSummaryBeforeRows={{requireSummaryBeforeRows}}');
+    expect(guidance).toContain('fetch detail="summary" first');
+    expect(guidance).toContain('Previews do not limit conclusion coverage');
+    expect(guidance).toContain('do not end analysis or drop findings');
   });
 
-  it('keeps the quick prompt wired to fetch Skill artifacts instead of querying pseudo-tables', () => {
-    const content = loadPromptTemplate('prompt-quick');
-    expect(content).toContain('## Artifact 读取规则');
-    expect(content).toContain('fetch_artifact(artifactId="art-N", detail="summary")');
-    expect(content).toContain('只读取解决该缺口所需的最少 rows');
-    expect(content).toContain('不要机械分页');
-    expect(content).toContain('__intrinsic_artifact_rows');
-    expect(content).toContain('这些都不是 SQL 表');
-  });
-
-  it('keeps the quick prompt routed through scrolling_analysis for scroll/jank overviews', () => {
-    const content = loadPromptTemplate('prompt-quick');
-    expect(content).toContain('## 快速工具路由');
-    expect(content).toContain('invoke_skill("scrolling_analysis", ...)');
-    expect(content).toContain('enable_frame_details');
-    expect(content).toContain('不要把 FrameTimeline 原始 SQL 作为滑动概览的第一步');
-    expect(content).toContain('不是 `dur_ns`');
-  });
 });
