@@ -85,7 +85,7 @@ RUN . /tmp/pin.env && \
 FROM node:24-bookworm-slim AS frontend-prebuild-check
 
 WORKDIR /app
-COPY scripts/check-frontend-prebuild.cjs ./scripts/check-frontend-prebuild.cjs
+COPY scripts/check-frontend-prebuild.cjs scripts/frontend-static-assets.json ./scripts/
 COPY frontend ./frontend
 RUN node scripts/check-frontend-prebuild.cjs
 
