@@ -19,6 +19,8 @@ import {
   type SegmentInput as SemanticSegmentInput,
   type SegmentSemantics,
   type SemanticSourceStatus,
+  type WaitClass,
+  type WakeSourceSummary,
 } from './criticalPathSemantics';
 import {resolveDirectWaker, type WakerHop} from './criticalPathWakerChain';
 import {
@@ -93,6 +95,10 @@ export interface CriticalPathSegment {
   modules: string[];
   reasons: string[];
   semantics?: SegmentSemantics;
+  // Which wake source ended this sleep, when the segment was sleeping at all.
+  // It is a candidate label, not a cause: an IRQ-context wake is equally a
+  // NET_RX softirq and a timer expiry.
+  wakeSourceClass?: WaitClass;
   recursionDepth?: number;
   // Children: result of recursing _critical_path_stack on this segment.
   children?: CriticalPathSegment[];
@@ -270,6 +276,14 @@ function modulesFromSemantics(semantics?: SegmentSemantics): string[] {
   if (semantics.ioSignals.length > 0) modules.push('IO / 文件系统');
   if (semantics.gcEvents.length > 0) modules.push('ART / GC');
   if (semantics.cpuCompetition.length > 0) modules.push('调度 / CPU 竞争');
+  // S-state waits carry no blocked_function on Android, so their only kernel
+  // signal is who woke the thread. Both labels stay candidates.
+  if (semantics.wakeSources.some((wake) => wake.waitClass === 'network_receive_candidate')) {
+    modules.push('网络收包等待候选');
+  }
+  if (semantics.wakeSources.some((wake) => wake.waitClass === 'worker_handoff')) {
+    modules.push('worker 交接等待');
+  }
   return modules;
 }
 
@@ -523,6 +537,36 @@ function buildAnomalies(
       evidence: [ioSegment.blockedFunction, ...ioSegment.slices, `${ioSegment.durationMs.toFixed(2)} ms`].filter(
         (item): item is string => typeof item === 'string' && item.length > 0
       ),
+    });
+  }
+
+  // S-state waits have no blocked_function on Android, so the IO check above
+  // cannot see them at all. This is their counterpart: it reports what woke the
+  // thread and says plainly that the wake source alone cannot name the cause.
+  // One finding per wait class, each naming its own longest segment. Picking
+  // the first segment of either class reported whichever happened to come first
+  // in chain order: a 0.4 ms hand-off ahead of a 30 ms receive candidate hid the
+  // segment worth looking at, and the other class was never mentioned at all.
+  for (const waitClass of ['network_receive_candidate', 'worker_handoff'] as const) {
+    const wakeSegment = segments
+      .filter((segment) => segment.wakeSourceClass === waitClass)
+      .reduce<CriticalPathSegment | undefined>(
+        (longest, segment) =>
+          longest === undefined || segment.durationMs > longest.durationMs ? segment : longest,
+        undefined
+      );
+    if (!wakeSegment) continue;
+    const isNetwork = waitClass === 'network_receive_candidate';
+    anomalies.push({
+      severity: 'info',
+      title: isNetwork ? '等待链涉及网络收包等待候选' : '等待链涉及 worker 交接等待',
+      detail: isNetwork
+        ? 'critical path 中有 S 态等待由 irq 上下文唤醒，且等待线程是网络角色。Android 只对 D 态发 sched_blocked_reason，S 态没有 blocked_function，irq 唤醒同样可能是定时器到期；要确认为收包，需要 rx 包时间相关或网络库请求埋点。'
+        : 'critical path 中有 S 态等待由同进程线程唤醒，属于线程间交接。交接本身不说明谁慢，需要看上游线程在这段等待里做了什么。',
+      evidence: [
+        `${wakeSegment.processName ?? '-'} / ${wakeSegment.threadName ?? '-'}`,
+        `${wakeSegment.durationMs.toFixed(2)} ms`,
+      ],
     });
   }
 
@@ -1035,6 +1079,19 @@ function applySemanticsToSegments(
     }
     if (sem.cpuCompetition.length > 0) {
       segment.reasons = Array.from(new Set([...segment.reasons, `cpu ${sem.cpuCompetition[0].cpu} competition`])).slice(0, 8);
+    }
+    // Longest wait decides the segment's label; a segment can contain several
+    // short sleeps with different wake sources.
+    const dominantWake = sem.wakeSources.reduce<WakeSourceSummary | undefined>(
+      (longest, wake) => (longest === undefined || wake.durMs > longest.durMs ? wake : longest),
+      undefined
+    );
+    if (dominantWake) {
+      segment.wakeSourceClass = dominantWake.waitClass;
+      segment.reasons = Array.from(new Set([
+        ...segment.reasons,
+        `wake: ${dominantWake.waitClass}`,
+      ])).slice(0, 8);
     }
   }
 }

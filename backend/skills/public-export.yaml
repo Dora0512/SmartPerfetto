@@ -92,6 +92,12 @@ sql_fragments:
   backend/skills/fragments/target_threads.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/target_threads.sql
+  backend/skills/fragments/thread_role.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/thread_role.sql
+  backend/skills/fragments/sleep_wake_source.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/sleep_wake_source.sql
   backend/skills/fragments/thread_states_quadrant.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/thread_states_quadrant.sql
@@ -640,6 +646,11 @@ skills:
     workflow: trace-overview
     disposition: exported
     destination: references/generated/skills/process_identity_resolver.md
+  process_thread_wait_sources_in_range:
+    source: backend/skills/atomic/process_thread_wait_sources_in_range.skill.yaml
+    workflow: anr-blocking
+    disposition: exported
+    destination: references/generated/skills/process_thread_wait_sources_in_range.md
   process_slice_cpu_hotspots:
     source: backend/skills/atomic/process_slice_cpu_hotspots.skill.yaml
     workflow: cpu-scheduling

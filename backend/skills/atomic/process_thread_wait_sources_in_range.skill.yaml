@@ -1,0 +1,595 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2024-2026 Gracker (Chris)
+# This file is part of SmartPerfetto. See LICENSE for details.
+
+# =============================================================================
+# 线程等待来源归因（按唤醒者）
+# =============================================================================
+# 回答"这个进程的线程在等什么"——在 S/I 态等待无法用 blocked_function 归因时。
+#
+# 认知边界（必须随结论一起表述）：
+# - Android 通用内核只对 TASK_UNINTERRUPTIBLE 发 sched_blocked_reason
+#   （android14-6.1 try_to_wake_up、android16-6.12 __schedule），所以
+#   thread_state.blocked_function 只出现在 D/DK/I 行上，S 行恒为 NULL。
+#   socket 收包、epoll 等待都是 S 态，内核侧没有函数名可读。
+# - 因此 S 态只能按"谁唤醒了它"归因。irq_context=1 既可能是 NET_RX 软中断，
+#   也可能是定时器到期（Object.wait(timeout)/Thread.sleep/epoll 超时）或设备中断，
+#   单独不能判定为网络。只有再叠加"睡眠线程的角色"才收窄为候选，
+#   只有再叠加 rx 包时间相关才升级为 trace_direct:packet_activity。
+# - 线程角色来自线程名（fragments/thread_role.sql），是用途提示，不是行为证据。
+# - 本 Skill 不能证明请求级耗时（DNS/TCP/TLS/TTFB/服务端处理），
+#   那需要网络库埋点、request_id 或接入层日志补证。
+
+name: process_thread_wait_sources_in_range
+version: "1.0"
+type: composite
+category: diagnostics
+tier: B
+
+meta:
+  display_name: "线程等待来源归因"
+  description: "按唤醒来源归因进程内线程的 S/I 态等待：网络收包候选、worker 交接、binder 回复、系统服务、定时器"
+  icon: "hourglass_empty"
+  tags: [wait, wake_source, waker, network, worker, loading, diagnostics]
+
+prerequisites:
+  required_tables:
+    - thread_state
+    - thread
+    - process
+  modules:
+    - android.network_packets
+
+triggers:
+  keywords:
+    zh: [线程等待, 等待来源, 唤醒来源, 内容加载, 网络等待, worker, 交接, 加载慢]
+    en: [wait source, wake source, waker, thread wait, network wait, worker handoff, loading]
+  patterns:
+    - ".*等待来源.*"
+    - ".*唤醒来源.*"
+    - ".*wait source.*"
+    - ".*wake source.*"
+
+identity:
+  policy: verify_if_present
+  scope: process
+  aliases: [package, process_name]
+
+inputs:
+  - name: package
+    type: string
+    required: true
+    description: "目标进程名/包名"
+  - name: start_ts
+    type: timestamp
+    required: true
+    description: "分析起始时间戳(ns)"
+  - name: end_ts
+    type: timestamp
+    required: true
+    description: "分析结束时间戳(ns)"
+  - name: upid
+    type: number
+    required: false
+    description: "可选：精确 upid，用于在同名多进程时消歧"
+  - name: pid
+    type: number
+    required: false
+    description: "可选：精确 pid，用于在同名多进程时消歧"
+  - name: top_k
+    type: number
+    required: false
+    description: "汇总与明细的最大返回行数"
+
+steps:
+  # ==========================================================================
+  # Step 1: sched_waking 证据可用性与证据范围
+  # ==========================================================================
+  - id: wake_evidence_scope
+    type: atomic
+    name: "唤醒证据可用性"
+    display:
+      level: summary
+      layer: overview
+      title: "唤醒来源证据范围"
+      columns:
+        - name: status
+          label: "唤醒证据"
+          type: string
+        - name: evidence_class
+          label: "证据类型"
+          type: string
+        - name: waker_rows
+          label: "带唤醒者的 R 行"
+          type: number
+          format: compact
+        - name: irq_wake_rows
+          label: "irq 上下文唤醒行"
+          type: number
+          format: compact
+        - name: sleep_rows
+          label: "窗口内 S/I 等待行"
+          type: number
+          format: compact
+        - name: supported_claims
+          label: "可支持结论"
+          type: string
+        - name: unsupported_claims
+          label: "不可直接证明"
+          type: string
+    synthesize:
+      role: overview
+      fields:
+        - key: status
+          label: 唤醒证据
+        - key: sleep_rows
+          label: S/I 等待行
+      insights:
+        - condition: "status === 'unavailable'"
+          template: "该进程窗口内没有带唤醒者的 R 行，等待来源无法归因；需补录 sched/sched_waking"
+    process_scope:
+      role: target
+      binding: native_upid
+    sql: |
+      -- Perfetto 把 waker_utid 记录在睡眠之后的第一个 R/R+ 行上，所以"有没有唤醒证据"
+      -- 要数 R 行而不是 S 行。没有这些行时，S 态等待在内核侧完全不可归因。
+      WITH target_utids AS (
+        SELECT t.utid
+        FROM thread t
+        JOIN process p ON p.upid = t.upid
+        WHERE (${__process_scope.upid} IS NULL OR p.upid = ${__process_scope.upid})
+          AND (
+            ${__process_scope.upid} IS NOT NULL
+            OR '${package}' = ''
+            OR p.name = '${package}'
+            OR p.name GLOB '${package}:*'
+          )
+          AND (${upid} IS NULL OR p.upid = ${upid})
+          AND (${pid} IS NULL OR p.pid = ${pid})
+      )
+      SELECT
+        CASE WHEN (
+          SELECT COUNT(*) FROM thread_state s JOIN target_utids u ON u.utid = s.utid
+          WHERE s.state IN ('R', 'R+') AND s.waker_utid IS NOT NULL
+            AND s.ts < ${end_ts} AND s.ts + MAX(s.dur, 0) > ${start_ts}
+        ) > 0 THEN 'available' ELSE 'unavailable' END AS status,
+        'trace_direct:sched_waking' AS evidence_class,
+        (SELECT COUNT(*) FROM thread_state s JOIN target_utids u ON u.utid = s.utid
+          WHERE s.state IN ('R', 'R+') AND s.waker_utid IS NOT NULL
+            AND s.ts < ${end_ts} AND s.ts + MAX(s.dur, 0) > ${start_ts}) AS waker_rows,
+        (SELECT COUNT(*) FROM thread_state s JOIN target_utids u ON u.utid = s.utid
+          WHERE s.state IN ('R', 'R+') AND s.irq_context = 1
+            AND s.ts < ${end_ts} AND s.ts + MAX(s.dur, 0) > ${start_ts}) AS irq_wake_rows,
+        (SELECT COUNT(*) FROM thread_state s JOIN target_utids u ON u.utid = s.utid
+          WHERE s.state IN ('S', 'I') AND s.dur > 0
+            AND s.ts < ${end_ts} AND s.ts + s.dur > ${start_ts}) AS sleep_rows,
+        '唤醒者线程/进程、irq 上下文、同进程交接、binder 回复、系统服务唤醒' AS supported_claims,
+        'S 态没有 blocked_function；irq 唤醒不等于网络收包；请求级 DNS/TCP/TLS/TTFB 与服务端耗时均不可证' AS unsupported_claims
+    save_as: wake_evidence_scope
+
+  # ==========================================================================
+  # Step 2: 按线程角色的状态分布
+  # ==========================================================================
+  - id: role_state_summary
+    type: atomic
+    name: "按角色的线程状态分布"
+    display:
+      level: key
+      layer: overview
+      title: "线程角色状态分布（窗口内）"
+      columns:
+        - name: thread_role
+          label: "线程角色"
+          type: string
+        - name: thread_count
+          label: "线程数"
+          type: number
+          format: compact
+        - name: running_ms
+          label: "Running(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: runnable_ms
+          label: "Runnable(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: sleeping_ms
+          label: "S/I 等待(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: uninterruptible_ms
+          label: "D/DK 等待(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: state_rows
+          label: "状态行数"
+          type: number
+          format: compact
+    process_scope:
+      role: target
+      binding: native_upid
+    sql_fragments:
+      - fragments/thread_role.sql
+    sql: |
+      -- 角色来自线程名，只说明"这个线程通常干什么"；D/DK 才可能带 blocked_function。
+      WITH target_threads AS (
+        SELECT tr.utid, tr.role
+        FROM thread_roles tr
+        JOIN process p ON p.upid = tr.upid
+        WHERE (${__process_scope.upid} IS NULL OR p.upid = ${__process_scope.upid})
+          AND (
+            ${__process_scope.upid} IS NOT NULL
+            OR '${package}' = ''
+            OR p.name = '${package}'
+            OR p.name GLOB '${package}:*'
+          )
+          AND (${upid} IS NULL OR p.upid = ${upid})
+          AND (${pid} IS NULL OR p.pid = ${pid})
+      ),
+      role_threads AS (
+        SELECT role, COUNT(*) AS thread_count FROM target_threads GROUP BY role
+      ),
+      clipped AS (
+        SELECT tt.role, s.state,
+          MIN(s.ts + s.dur, ${end_ts}) - MAX(s.ts, ${start_ts}) AS dur_ns
+        FROM thread_state s
+        JOIN target_threads tt ON tt.utid = s.utid
+        WHERE s.dur > 0 AND s.ts < ${end_ts} AND s.ts + s.dur > ${start_ts}
+      )
+      SELECT
+        c.role AS thread_role,
+        rt.thread_count,
+        ROUND(SUM(CASE WHEN c.state = 'Running' THEN c.dur_ns ELSE 0 END) / 1e6, 2) AS running_ms,
+        ROUND(SUM(CASE WHEN c.state IN ('R', 'R+') THEN c.dur_ns ELSE 0 END) / 1e6, 2) AS runnable_ms,
+        ROUND(SUM(CASE WHEN c.state IN ('S', 'I') THEN c.dur_ns ELSE 0 END) / 1e6, 2) AS sleeping_ms,
+        ROUND(SUM(CASE WHEN c.state IN ('D', 'DK') THEN c.dur_ns ELSE 0 END) / 1e6, 2) AS uninterruptible_ms,
+        COUNT(*) AS state_rows
+      FROM clipped c
+      LEFT JOIN role_threads rt ON rt.role = c.role
+      GROUP BY c.role
+      ORDER BY SUM(CASE WHEN c.state IN ('S', 'I') THEN c.dur_ns ELSE 0 END) DESC
+    save_as: role_state_summary
+
+  # ==========================================================================
+  # Step 3: 等待类别分布（候选标签）
+  # ==========================================================================
+  - id: wait_class_summary
+    type: atomic
+    name: "等待类别分布"
+    display:
+      level: key
+      layer: overview
+      title: "S/I 等待按唤醒来源归类（候选）"
+      columns:
+        - name: thread_role
+          label: "线程角色"
+          type: string
+        - name: wait_class
+          label: "等待类别（候选）"
+          type: string
+        - name: wake_source
+          label: "唤醒来源"
+          type: string
+        - name: wait_count
+          label: "等待次数"
+          type: number
+          format: compact
+        - name: thread_count
+          label: "涉及线程数"
+          type: number
+          format: compact
+        - name: total_wait_ms
+          label: "窗口内等待(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: max_wait_ms
+          label: "最长单次等待(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+    synthesize:
+      role: overview
+      fields:
+        - key: wait_class
+          label: 等待类别
+        - key: total_wait_ms
+          label: 等待时长
+          format: "{{value}} ms"
+      insights:
+        - condition: "wait_class === 'network_receive_candidate'"
+          template: "{{thread_role}} 线程有 {{total_wait_ms}} ms 的等待由 irq 上下文唤醒，是收包候选；需 rx 包相关或网络库埋点确认"
+        - condition: "wait_class === 'worker_handoff'"
+          template: "{{thread_role}} 线程有 {{total_wait_ms}} ms 的等待由同进程线程唤醒，属于线程间交接"
+    process_scope:
+      role: target
+      binding: native_upid
+    sql_fragments:
+      - fragments/thread_role.sql
+      - fragments/sleep_wake_source.sql
+    sql: |
+      -- wait_class 是候选标签，不是根因：timer_or_device_wake 与
+      -- network_receive_candidate 共享同一个 irq_context=1 信号，只靠线程角色区分。
+      WITH target_threads AS (
+        SELECT tr.utid FROM thread_roles tr
+        JOIN process p ON p.upid = tr.upid
+        WHERE (${__process_scope.upid} IS NULL OR p.upid = ${__process_scope.upid})
+          AND (
+            ${__process_scope.upid} IS NOT NULL
+            OR '${package}' = ''
+            OR p.name = '${package}'
+            OR p.name GLOB '${package}:*'
+          )
+          AND (${upid} IS NULL OR p.upid = ${upid})
+          AND (${pid} IS NULL OR p.pid = ${pid})
+      ),
+      wake_source_scope AS (
+        SELECT utid FROM target_threads
+      )
+      SELECT
+        s.thread_role,
+        s.wait_class,
+        s.wake_source,
+        COUNT(*) AS wait_count,
+        COUNT(DISTINCT s.utid) AS thread_count,
+        ROUND(SUM(MIN(s.ts + s.dur, ${end_ts}) - MAX(s.ts, ${start_ts})) / 1e6, 2) AS total_wait_ms,
+        ROUND(MAX(s.dur) / 1e6, 2) AS max_wait_ms
+      FROM sleep_wake_source s
+      WHERE s.state IN ('S', 'I')
+      GROUP BY s.thread_role, s.wait_class, s.wake_source
+      ORDER BY SUM(MIN(s.ts + s.dur, ${end_ts}) - MAX(s.ts, ${start_ts})) DESC
+      LIMIT ${top_k|20}
+    save_as: wait_class_summary
+
+  # ==========================================================================
+  # Step 4: 最长等待明细
+  # ==========================================================================
+  - id: top_waits
+    type: atomic
+    name: "最长等待明细"
+    display:
+      level: detail
+      layer: list
+      title: "最长 S/I 等待及其唤醒者"
+      columns:
+        - name: wait_start_ts
+          label: "等待开始"
+          type: timestamp
+          unit: ns
+          clickAction: navigate_range
+          durationColumn: dur_ns
+        - name: dur_ns
+          label: "等待(ns)"
+          type: duration
+          unit: ns
+          hidden: true
+        - name: wait_ms
+          label: "等待(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: thread_name
+          label: "等待线程"
+          type: string
+        - name: tid
+          label: "TID"
+          type: number
+        - name: thread_role
+          label: "线程角色"
+          type: string
+        - name: state
+          label: "状态"
+          type: string
+        - name: wait_class
+          label: "等待类别（候选）"
+          type: string
+        - name: wake_source
+          label: "唤醒来源"
+          type: string
+        - name: waker_thread_name
+          label: "唤醒者线程"
+          type: string
+        - name: waker_process_name
+          label: "唤醒者进程"
+          type: string
+        - name: waker_role
+          label: "唤醒者角色"
+          type: string
+        - name: irq_context
+          label: "irq 上下文"
+          type: number
+        - name: process_name
+          label: "进程"
+          type: string
+          hidden: true
+    process_scope:
+      role: target
+      binding: native_upid
+    sql_fragments:
+      - fragments/thread_role.sql
+      - fragments/sleep_wake_source.sql
+    sql: |
+      -- 按原始等待时长排序；窗口只用来筛选重叠行，不改写 ts/dur，
+      -- 否则跳转区间会与 trace 上的真实等待段不一致。
+      WITH target_threads AS (
+        SELECT tr.utid FROM thread_roles tr
+        JOIN process p ON p.upid = tr.upid
+        WHERE (${__process_scope.upid} IS NULL OR p.upid = ${__process_scope.upid})
+          AND (
+            ${__process_scope.upid} IS NOT NULL
+            OR '${package}' = ''
+            OR p.name = '${package}'
+            OR p.name GLOB '${package}:*'
+          )
+          AND (${upid} IS NULL OR p.upid = ${upid})
+          AND (${pid} IS NULL OR p.pid = ${pid})
+      ),
+      wake_source_scope AS (
+        SELECT utid FROM target_threads
+      )
+      SELECT
+        printf('%d', s.ts) AS wait_start_ts,
+        s.dur AS dur_ns,
+        ROUND(s.dur / 1e6, 2) AS wait_ms,
+        s.thread_name,
+        s.tid,
+        s.thread_role,
+        s.state,
+        s.wait_class,
+        s.wake_source,
+        s.waker_thread_name,
+        s.waker_process_name,
+        s.waker_role,
+        s.irq_context,
+        s.process_name
+      FROM sleep_wake_source s
+      WHERE s.state IN ('S', 'I')
+      ORDER BY s.dur DESC
+      LIMIT ${top_k|20}
+    save_as: top_waits
+
+  # ==========================================================================
+  # Step 5: rx 包数据可用性
+  # ==========================================================================
+  - id: packet_check
+    type: atomic
+    name: "检查网络包数据"
+    display: false
+    process_scope:
+      role: global_context
+    sql: |
+      SELECT
+        COUNT(*) AS rx_packet_rows,
+        CASE WHEN COUNT(*) > 0 THEN 'available' ELSE 'unavailable' END AS status
+      FROM android_network_packets
+      WHERE direction = 'Received'
+        AND ts < ${end_ts}
+        AND ts + MAX(dur, 0) > ${start_ts}
+    save_as: packet_check
+
+  # ==========================================================================
+  # Step 6: rx 包时间相关（把候选升级为直接证据）
+  # ==========================================================================
+  - id: network_packet_correlation
+    type: atomic
+    name: "收包时间相关"
+    display:
+      level: detail
+      layer: list
+      title: "网络收包与等待唤醒的时间相关"
+      columns:
+        - name: wait_start_ts
+          label: "等待开始"
+          type: timestamp
+          unit: ns
+          clickAction: navigate_range
+          durationColumn: dur_ns
+        - name: dur_ns
+          label: "等待(ns)"
+          type: duration
+          unit: ns
+          hidden: true
+        - name: wait_ms
+          label: "等待(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: thread_name
+          label: "等待线程"
+          type: string
+        - name: thread_role
+          label: "线程角色"
+          type: string
+        - name: wait_class
+          label: "等待类别"
+          type: string
+        - name: evidence_class
+          label: "证据类型"
+          type: string
+        - name: packet_ts
+          label: "rx 包时刻"
+          type: timestamp
+          unit: ns
+        - name: packet_gap_ms
+          label: "包到唤醒间隔(ms)"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: packet_length
+          label: "包字节数"
+          type: bytes
+        - name: packet_iface
+          label: "接口"
+          type: string
+    process_scope:
+      role: target
+      binding: native_upid
+      limitations:
+        - "android_network_packets 只带 package_name，无法按 upid 精确绑定收包行"
+    sql_fragments:
+      - fragments/thread_role.sql
+      - fragments/sleep_wake_source.sql
+    sql: |
+      -- 只有"网络角色线程 + irq 唤醒 + 唤醒前 2ms 内本进程有 rx 包"三者同时成立，
+      -- 才把候选升级为 trace_direct:packet_activity。时间相关仍然不是因果证明：
+      -- 它证明同一时刻有收包活动，不证明这次唤醒就是那个包引起的。
+      WITH target_threads AS (
+        SELECT tr.utid FROM thread_roles tr
+        JOIN process p ON p.upid = tr.upid
+        WHERE (${__process_scope.upid} IS NULL OR p.upid = ${__process_scope.upid})
+          AND (
+            ${__process_scope.upid} IS NOT NULL
+            OR '${package}' = ''
+            OR p.name = '${package}'
+            OR p.name GLOB '${package}:*'
+          )
+          AND (${upid} IS NULL OR p.upid = ${upid})
+          AND (${pid} IS NULL OR p.pid = ${pid})
+      ),
+      wake_source_scope AS (
+        SELECT utid FROM target_threads
+      ),
+      -- android_network_packets 只带 package_name：即使本次运行拿到了精确 upid，
+      -- 收包行也只能按包名筛，所以这一步的进程绑定弱于上面的线程绑定。
+      rx_packets AS (
+        SELECT ts, packet_length, iface
+        FROM android_network_packets
+        WHERE direction = 'Received'
+          AND (
+            '${package}' = ''
+            OR package_name = '${package}'
+            OR package_name GLOB '${package}:*'
+          )
+          AND ts < ${end_ts}
+          AND ts + MAX(dur, 0) > ${start_ts}
+      )
+      SELECT
+        printf('%d', s.ts) AS wait_start_ts,
+        s.dur AS dur_ns,
+        ROUND(s.dur / 1e6, 2) AS wait_ms,
+        s.thread_name,
+        s.thread_role,
+        'network_receive' AS wait_class,
+        'trace_direct:packet_activity' AS evidence_class,
+        printf('%d', pkt.ts) AS packet_ts,
+        ROUND((s.wake_ts - pkt.ts) / 1e6, 3) AS packet_gap_ms,
+        pkt.packet_length,
+        pkt.iface AS packet_iface
+      FROM sleep_wake_source s
+      JOIN rx_packets pkt
+        ON pkt.ts <= s.wake_ts
+        AND pkt.ts > s.wake_ts - 2000000
+      WHERE s.state IN ('S', 'I')
+        AND s.wait_class = 'network_receive_candidate'
+      ORDER BY s.dur DESC
+      LIMIT ${top_k|20}
+    save_as: network_packet_correlation
+    condition: packet_check.data[0]?.status === 'available'
+
+output:
+  format: layered
+  default_expanded: [wake_evidence_scope, role_state_summary, wait_class_summary, top_waits]

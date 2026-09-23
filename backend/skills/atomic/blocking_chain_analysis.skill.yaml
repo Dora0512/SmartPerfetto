@@ -6,6 +6,16 @@
 # 阻塞链分析（通用版）
 # =============================================================================
 # 分析指定时间范围内主线程的阻塞链：线程状态分布、唤醒链、阻塞函数分布。
+# 唤醒链额外给出 wake_source / wait_class：Android 内核只对 TASK_UNINTERRUPTIBLE
+# 发 sched_blocked_reason，S 态等待行的 blocked_function 恒为 NULL，所以 S 态只能
+# 靠"谁唤醒了它"来归因，且结论始终是候选而非根因。
+#
+# v1.3 起 waker_chain 的行粒度变了：一行 = 一个唤醒者线程 × 一种唤醒来源
+# （waker_role / wake_source / wait_class / blocked_function 都进了 GROUP BY）。
+# 同一个唤醒者线程若既有 irq 唤醒又有同进程交接，会拆成多行，每行的
+# total_sleep_dur_ms / wakeup_count 只统计该行那一种唤醒，不是该线程的合计。
+# LIMIT 15 也按新行数截断，所以 v1.2 的行与 v1.3 的行不是同口径，不能直接比较
+# 数值或条数。要看"某个唤醒者一共占了多少"，需要把它的各行自行相加。
 # 与 anr_main_thread_blocking 不同，此技能不依赖 ANR 时间戳，
 # 可用于任意时间范围的阻塞根因分析。
 #
@@ -15,7 +25,7 @@
 # - 任意用户选定时间范围的诊断
 
 name: blocking_chain_analysis
-version: "1.2"
+version: "1.3"
 type: composite
 category: diagnostics
 tier: A
@@ -185,6 +195,12 @@ steps:
   # ==========================================================================
   # Step 2: 唤醒链分析
   # ==========================================================================
+  # 行粒度：一行 = 一个唤醒者线程 × 一种唤醒来源（waker_role / wake_source /
+  # wait_class / blocked_function 同在 GROUP BY 内）。同一唤醒者线程若既被记为
+  # irq 唤醒又被记为同进程交接，会拆成多行；每行的 total_sleep_dur_ms、
+  # max_sleep_dur_ms、wakeup_count 只覆盖该行那一种唤醒，不是该线程的合计。
+  # LIMIT 15 按这个新行数截断，因此 v1.2 与 v1.3 的行不同口径，数值和条数都不能
+  # 直接对比。
   - id: waker_chain
     type: atomic
     name: "唤醒链分析"
@@ -204,6 +220,15 @@ steps:
         - name: waker_process_name
           label: "唤醒者进程"
           type: string
+        - name: waker_role
+          label: "唤醒者角色"
+          type: string
+        - name: wake_source
+          label: "唤醒来源"
+          type: string
+        - name: wait_class
+          label: "等待类别（候选）"
+          type: string
         - name: blocked_function
           label: "阻塞函数"
           type: string
@@ -221,10 +246,17 @@ steps:
           label: "唤醒次数"
           type: number
           format: compact
+    sql_fragments:
+      - fragments/thread_role.sql
+      - fragments/sleep_wake_source.sql
     sql: |
       -- Perfetto 只把 waker_utid 记录在唤醒后的第一个 R/R+ 行上；S/D 等待行自身的
-      -- waker_utid 为 NULL。因此把每个等待行回连到其结束时刻的后继行解析唤醒者；
-      -- 同一结束时刻被拆成多行（R → R+）时用 MAX 收敛为一段等待一行。
+      -- waker_utid 为 NULL。回连后继行解析唤醒者的逻辑现在由
+      -- fragments/sleep_wake_source.sql 统一提供，这里只做主线程取范围和聚合。
+      -- wake_source / wait_class 是候选标签：irq 唤醒既可能是 NET_RX 软中断，也
+      -- 可能是定时器到期，单独不足以判定原因。
+      -- GROUP BY 把这两个标签和 waker_role 一起计入分组键，所以一行是「某唤醒者
+      -- 的某一种唤醒」而不是「某唤醒者」；合计要自行把同一线程的各行相加。
       WITH main_thread AS (
         SELECT t.utid
         FROM thread t
@@ -237,39 +269,37 @@ steps:
           t.utid
         LIMIT 1
       ),
+      wake_source_scope AS (
+        SELECT utid FROM main_thread
+      ),
       waits AS (
         SELECT
-          t.id AS state_id,
-          t.ts + t.dur AS wakeup_ts,
-          t.dur AS sleep_dur,
-          t.blocked_function,
-          MAX(w.waker_utid) AS waker_utid
-        FROM thread_state t
-        CROSS JOIN main_thread mt
-        LEFT JOIN thread_state w
-          ON w.utid = t.utid
-          AND w.ts = t.ts + t.dur
-          AND w.state IN ('R', 'R+')
-          AND w.waker_utid IS NOT NULL
-        WHERE t.utid = mt.utid
-          AND t.state IN ('S', 'D')
-          AND t.dur > 0
-          AND t.ts + t.dur > ${start_ts}
-          AND t.ts < ${end_ts}
-        GROUP BY t.id
+          s.wake_ts AS wakeup_ts,
+          s.dur AS sleep_dur,
+          s.blocked_function,
+          s.waker_thread_name,
+          s.waker_process_name,
+          s.waker_role,
+          s.wake_source,
+          s.wait_class
+        FROM sleep_wake_source s
+        WHERE s.state IN ('S', 'D')
+          AND s.waker_utid IS NOT NULL
       )
       SELECT
         printf('%d', MIN(wakeup_ts)) as ts,
-        wt.name as waker_thread_name,
-        wp.name as waker_process_name,
+        waker_thread_name,
+        waker_process_name,
+        waker_role,
+        wake_source,
+        wait_class,
         blocked_function,
         ROUND(SUM(sleep_dur) / 1e6, 2) as total_sleep_dur_ms,
         ROUND(MAX(sleep_dur) / 1e6, 2) as max_sleep_dur_ms,
         COUNT(*) as wakeup_count
       FROM waits
-      JOIN thread wt ON wt.utid = waits.waker_utid
-      LEFT JOIN process wp ON wt.upid = wp.upid
-      GROUP BY wt.name, wp.name, blocked_function
+      GROUP BY waker_thread_name, waker_process_name, waker_role,
+        wake_source, wait_class, blocked_function
       ORDER BY SUM(sleep_dur) DESC
       LIMIT 15
     save_as: waker_chain

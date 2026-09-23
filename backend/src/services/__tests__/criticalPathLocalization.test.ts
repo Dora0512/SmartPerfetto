@@ -93,4 +93,56 @@ describe('criticalPathLocalization', () => {
     ]);
     expect(fixture).toEqual(raw);
   });
+  // The wake-source layer added two modules and two findings. An unmapped label
+  // falls through as Chinese into an English answer, which is silent: the
+  // projector returns the input rather than failing.
+  it('projects the wake-source modules, titles and details into English', () => {
+    const fixture: CriticalPathAnalysis = {
+      ...structuredClone(analysis),
+      wakeupChain: [{
+        ...structuredClone(analysis.wakeupChain[0]),
+        threadName: 'OkHttp Dispatch',
+        modules: ['网络收包等待候选', 'worker 交接等待'],
+        wakeSourceClass: 'network_receive_candidate',
+      }],
+      moduleBreakdown: [
+        {module: '网络收包等待候选', durationMs: 30, percentage: 60, segmentCount: 1, examples: ['stable.network']},
+        {module: 'worker 交接等待', durationMs: 12, percentage: 24, segmentCount: 1, examples: ['stable.worker']},
+      ],
+      anomalies: [{
+        severity: 'info',
+        title: '等待链涉及网络收包等待候选',
+        detail: 'critical path 中有 S 态等待由 irq 上下文唤醒，且等待线程是网络角色。Android 只对 D 态发 sched_blocked_reason，S 态没有 blocked_function，irq 唤醒同样可能是定时器到期；要确认为收包，需要 rx 包时间相关或网络库请求埋点。',
+        evidence: ['com.demo / OkHttp Dispatch', '30.00 ms'],
+      }, {
+        severity: 'info',
+        title: '等待链涉及 worker 交接等待',
+        detail: 'critical path 中有 S 态等待由同进程线程唤醒，属于线程间交接。交接本身不说明谁慢，需要看上游线程在这段等待里做了什么。',
+        evidence: ['com.demo / pool-1-thread-2', '12.00 ms'],
+      }],
+    };
+    const raw = structuredClone(fixture);
+    const projected = projectCriticalPathAnalysis(fixture, 'en');
+
+    expect(projected.moduleBreakdown.map(item => item.module)).toEqual([
+      'Network-receive wait candidate', 'Worker hand-off wait',
+    ]);
+    expect(projected.wakeupChain[0].modules).toEqual([
+      'Network-receive wait candidate', 'Worker hand-off wait',
+    ]);
+    expect(projected.anomalies.map(item => item.title)).toEqual([
+      'The wait chain contains a network-receive wait candidate',
+      'The wait chain contains a worker hand-off wait',
+    ]);
+    for (const anomaly of projected.anomalies) {
+      expect(anomaly.detail).not.toMatch(/\p{Script=Han}/u);
+    }
+    // The candidate caveat is the point of the finding; it must survive.
+    expect(projected.anomalies[0].detail).toContain('timer expiry');
+    expect(projected.anomalies[1].detail).toContain('hand-off');
+    // The classification itself is data, not presentation.
+    expect(projected.wakeupChain[0].wakeSourceClass).toBe('network_receive_candidate');
+    expect(projected.anomalies[0].evidence).toEqual(['com.demo / OkHttp Dispatch', '30.00 ms']);
+    expect(fixture).toEqual(raw);
+  });
 });

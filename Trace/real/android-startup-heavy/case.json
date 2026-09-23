@@ -36,9 +36,129 @@
     "logs": []
   },
   "coverage": {
-    "skills": [],
+    "skills": [
+      "blocking_chain_analysis",
+      "process_thread_wait_sources_in_range"
+    ],
     "strategies": [],
     "expectations": [
+      {
+        "id": "skill-process-thread-wait-sources-worker-handoff",
+        "type": "skill",
+        "target": "process_thread_wait_sources_in_range",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/process_thread_wait_sources_in_range.skill.yaml",
+        "parameters": {
+          "package": "com.example.launch.aosp.heavy",
+          "start_ts": "${trace_start}",
+          "end_ts": "${trace_end}"
+        },
+        "required_steps": [
+          "wake_evidence_scope",
+          "role_state_summary",
+          "wait_class_summary",
+          "top_waits",
+          "packet_check",
+          "network_packet_correlation"
+        ],
+        "required_sql_steps": [
+          "wake_evidence_scope",
+          "role_state_summary",
+          "wait_class_summary",
+          "top_waits",
+          "packet_check",
+          "network_packet_correlation"
+        ],
+        "forced_sql_steps": [
+          "network_packet_correlation"
+        ],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "wait_class_summary",
+        "required_columns": [
+          "thread_role",
+          "wait_class",
+          "wake_source",
+          "wait_count",
+          "thread_count",
+          "total_wait_ms",
+          "max_wait_ms"
+        ],
+        "assertions": [
+          {
+            "column": "wait_class",
+            "operator": "eq",
+            "value": "worker_handoff"
+          },
+          {
+            "column": "wake_source",
+            "operator": "eq",
+            "value": "same_process_thread"
+          },
+          {
+            "column": "total_wait_ms",
+            "operator": "gt",
+            "value": 0
+          }
+        ]
+      },
+      {
+        "id": "skill-blocking-chain-waker-wait-class",
+        "type": "skill",
+        "target": "blocking_chain_analysis",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/blocking_chain_analysis.skill.yaml",
+        "parameters": {
+          "process_name": "com.example.launch.aosp.heavy",
+          "start_ts": "${trace_start}",
+          "end_ts": "${trace_end}"
+        },
+        "required_steps": [
+          "thread_state_distribution",
+          "waker_chain",
+          "wakeup_chain_trace",
+          "blocked_function_summary"
+        ],
+        "required_sql_steps": [
+          "thread_state_distribution",
+          "waker_chain",
+          "wakeup_chain_trace",
+          "blocked_function_summary"
+        ],
+        "forced_sql_steps": [],
+        "isolated_sql_probes": [],
+        "expected_condition_skips": [],
+        "semantic_step": "waker_chain",
+        "required_columns": [
+          "ts",
+          "waker_thread_name",
+          "waker_process_name",
+          "waker_role",
+          "wake_source",
+          "wait_class",
+          "blocked_function",
+          "total_sleep_dur_ms",
+          "max_sleep_dur_ms",
+          "wakeup_count"
+        ],
+        "assertions": [
+          {
+            "column": "wait_class",
+            "operator": "eq",
+            "value": "worker_handoff"
+          },
+          {
+            "column": "wake_source",
+            "operator": "eq",
+            "value": "same_process_thread"
+          },
+          {
+            "column": "waker_process_name",
+            "operator": "eq",
+            "value": "com.example.launch.aosp.heavy"
+          }
+        ]
+      },
       {
         "id": "sql-smartperfetto-binder-victim-to-server-positive",
         "type": "sql",

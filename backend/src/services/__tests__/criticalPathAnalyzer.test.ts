@@ -371,4 +371,120 @@ describe('critical path analyzer', () => {
     expect(analysis.quantification?.counterfactual?.upperBoundMs).toBeCloseTo(8, 1);
     expect(analysis.quantification?.counterfactual?.note).toMatch(/UPPER BOUND/);
   });
+  // Android emits sched_blocked_reason only for D state, so every S-state wait
+  // on the critical path arrives with blocked_function NULL. The wake-source
+  // layer is the only kernel signal those waits have, and it is decided in
+  // TypeScript here and in SQL in fragments/sleep_wake_source.sql.
+  describe('wake-source attribution of S-state waits', () => {
+    const wakeColumns = [
+      'segment_idx',
+      'state',
+      'dur_ns',
+      'irq_context',
+      'waker_utid',
+      'thread_name',
+      'thread_tid',
+      'process_pid',
+      'sleeper_upid',
+      'waker_thread_name',
+      'waker_tid',
+      'waker_process_name',
+      'waker_process_pid',
+      'waker_upid',
+    ];
+
+    /**
+     * Three sleeping segments on one chain: a short hand-off, a long IRQ-woken
+     * receive candidate, and a longer hand-off. Recursion is off so the flat
+     * segment list is exactly these three and `segment_idx` stays stable.
+     */
+    function wakeChainService(wakeRows: unknown[][]): TraceProcessorService {
+      return patternMockedService([
+        {
+          match: /FROM thread_state AS target\s+LEFT JOIN thread USING\(utid\)/i,
+          responder: () =>
+            queryResult(taskColumns, [
+              [301, 7_000_000_000, 50_000_000, 1, 'S', null, 0, null, null, 0, 1001, 7, 'main', 'com.demo', null, null, null, null],
+            ]),
+        },
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            queryResult(stackColumns, [
+              [1, 7_000_000_000, 4_000_000, 5, 8, 'blocking thread_state: S', 'thread_state', 1, 'pool-1-thread-1', 'com.demo'],
+              [2, 7_005_000_000, 30_000_000, 6, 8, 'blocking thread_state: S', 'thread_state', 1, 'OkHttp Dispatch', 'com.demo'],
+              [3, 7_036_000_000, 12_000_000, 7, 8, 'blocking thread_state: S', 'thread_state', 1, 'pool-1-thread-2', 'com.demo'],
+            ]),
+        },
+        {
+          match: /FROM waits AS w/i,
+          responder: () => queryResult(wakeColumns, wakeRows),
+        },
+      ]);
+    }
+
+    // idx 0: same-process worker woke it — a hand-off, 4 ms.
+    const shortHandoff = [0, 'S', 4_000_000, 0, 60, 'pool-1-thread-1', 5100, 1001, 7, 'pool-2-thread-9', 5900, 'com.demo', 1001, 7];
+    // idx 1: IRQ context on a network-role thread in S — a receive candidate.
+    const networkWait = [1, 'S', 30_000_000, 1, 99, 'OkHttp Dispatch', 5200, 1001, 7, 'kworker/u16:3', 300, null, null, null];
+    // idx 2: the same hand-off shape, three times longer.
+    const longHandoff = [2, 'S', 12_000_000, 0, 61, 'pool-1-thread-2', 5300, 1001, 7, 'pool-2-thread-9', 5900, 'com.demo', 1001, 7];
+
+    it('labels an IRQ-woken S wait on a network thread as a receive candidate', async () => {
+      const analysis = await analyzeCriticalPath(wakeChainService([networkWait]), 'trace-1', {
+        threadStateId: 301,
+        recursionEnabled: false,
+      });
+
+      expect(analysis.semanticSources?.wakeSource).toBe('present');
+      const segment = analysis.wakeupChain.find(entry => entry.threadName === 'OkHttp Dispatch');
+      expect(segment?.wakeSourceClass).toBe('network_receive_candidate');
+      expect(segment?.modules).toContain('网络收包等待候选');
+      // The wake source itself stays IRQ; only the sleeper's role narrows it.
+      expect(segment?.semantics?.wakeSources[0]).toMatchObject({
+        wakeSource: 'irq_or_softirq', threadRole: 'network', irqContext: true,
+      });
+      const anomaly = analysis.anomalies.find(entry => entry.title === '等待链涉及网络收包等待候选');
+      expect(anomaly?.severity).toBe('info');
+      expect(anomaly?.evidence).toEqual(['com.demo / OkHttp Dispatch', '30.00 ms']);
+      // A candidate, never a cause: the detail has to say so.
+      expect(anomaly?.detail).toContain('定时器到期');
+    });
+
+    it('labels a same-process non-binder waker as a worker hand-off', async () => {
+      const analysis = await analyzeCriticalPath(wakeChainService([shortHandoff]), 'trace-1', {
+        threadStateId: 301,
+        recursionEnabled: false,
+      });
+
+      const segment = analysis.wakeupChain.find(entry => entry.threadName === 'pool-1-thread-1');
+      expect(segment?.wakeSourceClass).toBe('worker_handoff');
+      expect(segment?.modules).toContain('worker 交接等待');
+      expect(segment?.semantics?.wakeSources[0]).toMatchObject({
+        wakeSource: 'same_process_thread', wakerRole: 'worker', irqContext: false,
+      });
+      expect(analysis.anomalies.some(entry => entry.title === '等待链涉及网络收包等待候选')).toBe(false);
+    });
+
+    // Reporting the first segment of either class meant a 4 ms hand-off ahead of
+    // a 30 ms receive candidate hid the segment worth opening, and whichever
+    // class lost the race went unmentioned.
+    it('reports both wait classes, each naming its own longest segment', async () => {
+      const analysis = await analyzeCriticalPath(
+        wakeChainService([shortHandoff, networkWait, longHandoff]),
+        'trace-1',
+        {threadStateId: 301, recursionEnabled: false},
+      );
+
+      expect(analysis.wakeupChain.map(entry => entry.wakeSourceClass)).toEqual([
+        'worker_handoff', 'network_receive_candidate', 'worker_handoff',
+      ]);
+      const wakeAnomalies = analysis.anomalies.filter(entry =>
+        entry.title === '等待链涉及网络收包等待候选' || entry.title === '等待链涉及 worker 交接等待');
+      expect(wakeAnomalies.map(entry => ({title: entry.title, evidence: entry.evidence}))).toEqual([
+        {title: '等待链涉及网络收包等待候选', evidence: ['com.demo / OkHttp Dispatch', '30.00 ms']},
+        {title: '等待链涉及 worker 交接等待', evidence: ['com.demo / pool-1-thread-2', '12.00 ms']},
+      ]);
+    });
+  });
 });
