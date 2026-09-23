@@ -102,6 +102,39 @@ describe('formatToolResultNarration', () => {
     expect(text).toBe('识别为 STANDARD 渲染架构（置信度 0.37）');
   });
 
+  it('says nothing when the wait chain came back with waits to read', () => {
+    // The dispatch line already named the thread and window; the breakdown is
+    // in the data envelope, not in one more timeline line.
+    expect(formatToolResultNarration({
+      toolName: 'analyze_wait_chain',
+      result: mcpResult({success: true, available: true, waitingMs: 4.2, topWaits: [{durationMs: 4.2}]}),
+    })).toBe('');
+  });
+
+  it.each([
+    ['task_state_running', '该线程在这段区间一直在运行，没有等待链可追'],
+    ['no_critical_path_stack', '这段区间取不到等待链，trace 可能缺少 sched_waking'],
+  ])('reports an unavailable wait chain (%s), which sends the model elsewhere', (reason, expected) => {
+    expect(formatToolResultNarration({
+      toolName: 'analyze_wait_chain',
+      result: mcpResult({success: true, available: false, unavailableReason: reason}),
+    })).toBe(expected);
+  });
+
+  it('reports a window with no sleeping or uninterruptible time', () => {
+    expect(formatToolResultNarration({
+      toolName: 'analyze_wait_chain',
+      result: mcpResult({success: true, available: true, waitingMs: 0, topWaits: []}),
+    })).toBe('该线程在这段区间没有睡眠或不可中断等待');
+  });
+
+  it('stays silent when the wait chain result carries no state breakdown', () => {
+    expect(formatToolResultNarration({
+      toolName: 'analyze_wait_chain',
+      result: mcpResult({success: true, available: true}),
+    })).toBe('');
+  });
+
   it('reports hypothesis convergence', () => {
     const text = formatToolResultNarration({
       toolName: 'resolve_hypothesis',

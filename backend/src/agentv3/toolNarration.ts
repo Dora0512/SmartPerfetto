@@ -37,6 +37,13 @@ function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** A numeric selector a model may send as a number or a decimal string. */
+function readIdentifier(value: unknown, label: string): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return `${label} ${value}`;
+  const text = readString(value);
+  return text ? `${label} ${text}` : '';
+}
+
 function flatten(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -419,6 +426,25 @@ export function formatToolCallNarration(
       return localize(language, '查询可用 Skill 列表：选择合适的数据采集工具', 'List available Skills: choose an evidence collection tool');
     case 'detect_architecture':
       return localize(language, '检测渲染架构：判断后续该按哪条渲染链路分析', 'Detect rendering architecture: choose the rendering pipeline to analyze');
+    case 'analyze_wait_chain': {
+      const process = readString(args.process_name);
+      const thread = readString(args.thread_name)
+        || (args.main_thread === true ? localize(language, '主线程', 'the main thread') : '');
+      const target = [process, thread].filter(Boolean).join(' / ')
+        || readIdentifier(args.utid, 'utid')
+        || readIdentifier(args.thread_state_id, 'thread_state');
+      return shorten(target
+        ? localize(
+          language,
+          `分析等待链：${target} 在该区间在等什么、被谁唤醒`,
+          `Analyze wait chain: what ${target} waited on in the window and who woke it`,
+        )
+        : localize(
+          language,
+          '分析等待链：确认目标线程在该区间在等什么、被谁唤醒',
+          'Analyze wait chain: what the thread waited on in the window and who woke it',
+        ));
+    }
     case 'lookup_sql_schema': {
       const keyword = readString(args.keyword || args.table || args.query);
       return shorten(keyword
@@ -853,6 +879,24 @@ export function formatToolResultNarration(input: ToolResultNarrationInput): stri
         `识别为 ${type} 渲染架构${confidenceText}`,
         `Detected ${type} rendering architecture${confidenceText}`,
       ));
+    }
+    case 'analyze_wait_chain': {
+      // The dispatch line already named the thread and the window. Only two
+      // outcomes change what the model does next: there is no chain to follow,
+      // or the thread never waited — both send it somewhere else entirely.
+      if (body.available === false) {
+        return readString(body.unavailableReason) === 'task_state_running'
+          ? localize(language, '该线程在这段区间一直在运行，没有等待链可追',
+            'The thread ran throughout that window; there is no wait chain to follow')
+          : localize(language, '这段区间取不到等待链，trace 可能缺少 sched_waking',
+            'No wait chain was available for that window; the trace may lack sched_waking');
+      }
+      // Both, so a result that carried no state breakdown at all stays silent
+      // rather than claiming the thread never waited.
+      return readCount(body.waitingMs) === 0 && readCount(body.topWaits) === 0
+        ? localize(language, '该线程在这段区间没有睡眠或不可中断等待',
+          'The thread had no sleeping or uninterruptible wait in that window')
+        : '';
     }
     case 'resolve_hypothesis': {
       // The verdict is the outcome; the dispatch only proposed it.

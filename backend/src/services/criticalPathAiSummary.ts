@@ -10,29 +10,12 @@ import {
 } from '../agentv3/outputLanguage';
 import {redactObjectForLLM} from '../utils/llmPrivacy';
 import type {CriticalPathAnalysis} from './criticalPathAnalyzer';
+import {buildDeterministicCriticalPathSummary} from './criticalPathSummary';
 
-const ENGLISH_CRITICAL_PATH_MODULES = new Map<string, string>([
-  ['IO / 文件系统', 'I/O / File system'],
-  ['锁 / Monitor', 'Locks / Monitor'],
-  ['锁 / Futex', 'Locks / Futex'],
-  ['图形渲染 / Surface', 'Graphics / Surface'],
-  ['调度 / CPU 竞争', 'Scheduling / CPU contention'],
-]);
+// Re-exported so the critical-path route keeps its historical import site while
+// the pure summary itself no longer drags the Claude Agent SDK in with it.
+export {buildDeterministicCriticalPathSummary};
 
-const ENGLISH_CRITICAL_PATH_ANOMALIES = new Map<string, string>([
-  ['选中 task 本身耗时过长', 'The selected task is too long'],
-  ['选中 task 超过单帧预算', 'The selected task exceeds the frame budget'],
-  ['外部 critical path 占比过高', 'External critical-path share is high'],
-  ['存在长 critical path 段', 'A long critical-path segment exists'],
-  ['等待链涉及 IO/page-cache 候选', 'The wait chain contains an I/O or page-cache candidate'],
-  ['等待链涉及 Binder / IPC', 'The wait chain contains Binder / IPC'],
-  ['等待链涉及 Java 锁竞争', 'The wait chain contains Java lock contention'],
-  ['GC 与等待链重叠', 'GC overlaps the wait chain'],
-  ['存在调度或 CPU 竞争迹象', 'Scheduling or CPU contention is indicated'],
-  ['未发现明显异常', 'No clear anomaly was found'],
-  ['Running 状态：无等待链可分析', 'Running state: no wait chain to analyze'],
-  ['没有取到 critical path 等待链', 'No critical-path wait chain was found'],
-]);
 
 export interface CriticalPathAiSummary {
   generated: boolean;
@@ -117,96 +100,6 @@ function redactCriticalPathFields(value: unknown): unknown {
   return value;
 }
 
-export function buildDeterministicCriticalPathSummary(
-  analysis: CriticalPathAnalysis,
-  outputLanguage: OutputLanguage = 'zh-CN',
-): string {
-  if (outputLanguage === 'en') {
-    const lines = [
-      'Critical-path analysis for the selected task.',
-      '',
-      'Evidence source: Perfetto sched.thread_executing_span_with_slice / _critical_path_stack.',
-      `Selected task: ${analysis.task.processName ?? '-'} / ${analysis.task.threadName ?? '-'}, ${analysis.totalMs.toFixed(2)} ms.`,
-      `External critical path: ${analysis.blockingMs.toFixed(2)} ms (${analysis.externalBlockingPercentage.toFixed(2)}%).`,
-    ];
-
-    if (analysis.moduleBreakdown.length > 0) {
-      lines.push(
-        `Primary modules: ${analysis.moduleBreakdown
-          .slice(0, 4)
-          .map((item) =>
-            `${ENGLISH_CRITICAL_PATH_MODULES.get(item.module) || item.module} ` +
-            `${item.durationMs.toFixed(2)} ms`)
-          .join(', ')}.`,
-      );
-    }
-    if (analysis.directWaker?.kind && analysis.directWaker.kind !== 'unknown') {
-      lines.push(
-        `Direct waker: ${analysis.directWaker.kind}${
-          analysis.directWaker.threadName
-            ? ` (${analysis.directWaker.threadName})`
-            : ''
-        }${analysis.directWaker.irqContext ? ', IRQ context' : ''}.`,
-      );
-    }
-    if (analysis.quantification?.counterfactual) {
-      lines.push(
-        `Counterfactual upper bound: removing the longest external segment ` +
-        `(${analysis.quantification.counterfactual.longestSegmentDurMs.toFixed(2)} ms) ` +
-        `gives a task-duration upper bound of ` +
-        `${analysis.quantification.counterfactual.upperBoundMs.toFixed(2)} ms. ` +
-        'This is an upper bound, not a guaranteed prediction.',
-      );
-    }
-    if (analysis.anomalies.length > 0) {
-      lines.push(
-        `Rule findings: ${analysis.anomalies
-          .slice(0, 3)
-          .map((item) =>
-            ENGLISH_CRITICAL_PATH_ANOMALIES.get(item.title) || item.title)
-          .join('; ')}.`,
-      );
-    }
-    return lines.filter(line => line !== undefined).join('\n');
-  }
-
-  const lines = [
-    analysis.summary,
-    '',
-    '事实来源：Perfetto sched.thread_executing_span_with_slice / _critical_path_stack。',
-    `选中 task：${analysis.task.processName ?? '-'} / ${analysis.task.threadName ?? '-'}，${analysis.totalMs.toFixed(2)} ms。`,
-    `外部 critical path：${analysis.blockingMs.toFixed(2)} ms，占 ${analysis.externalBlockingPercentage.toFixed(2)}%。`,
-  ];
-
-  if (analysis.moduleBreakdown.length > 0) {
-    lines.push(
-      `主要模块：${analysis.moduleBreakdown
-        .slice(0, 4)
-        .map((item) => `${item.module} ${item.durationMs.toFixed(2)} ms`)
-        .join('、')}。`
-    );
-  }
-  if (analysis.directWaker?.kind && analysis.directWaker.kind !== 'unknown') {
-    lines.push(
-      `直接唤醒来源：${analysis.directWaker.kind}${
-        analysis.directWaker.threadName ? ` (${analysis.directWaker.threadName})` : ''
-      }${analysis.directWaker.irqContext ? '，IRQ 上下文' : ''}。`
-    );
-  }
-  if (analysis.quantification?.counterfactual) {
-    lines.push(
-      `反事实上界：消除最长外部段（${analysis.quantification.counterfactual.longestSegmentDurMs.toFixed(2)} ms）后任务时长上界 ${analysis.quantification.counterfactual.upperBoundMs.toFixed(2)} ms（仅上界估算，可能因次长段成为新瓶颈而无法达到）。`
-    );
-  }
-  if (analysis.anomalies.length > 0) {
-    lines.push(`规则判断：${analysis.anomalies.slice(0, 3).map((item) => item.title).join('；')}。`);
-  }
-  if (analysis.recommendations.length > 0) {
-    lines.push(`建议：${analysis.recommendations.slice(0, 2).join('；')}`);
-  }
-
-  return lines.filter((line) => line !== undefined).join('\n');
-}
 
 interface TrimmedSegment {
   startOffsetMs: number;

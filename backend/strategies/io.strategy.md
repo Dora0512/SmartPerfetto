@@ -164,13 +164,14 @@ invoke_skill("io_pressure")
 如果用户给出具体时间窗或主线程阻塞，需要补：
 
 ```
+analyze_wait_chain({ process_name: "<包名>", main_thread: true, start_ts, end_ts })
 invoke_skill("main_thread_file_io_in_range", { start_ts, end_ts, process_name: "<包名>" })
 invoke_skill("page_fault_in_range", { start_ts, end_ts, process_name: "<包名>" })
 ```
 
 输出时先写清楚证据属于哪一类：
 1. `block_io`: block 层请求排队、issue/complete 延迟、设备或文件系统压力。
-2. `thread_wait`: 主线程或关键线程 `D-state`、blocked_functions、waker/blocked chain。
+2. `thread_wait`: 主线程或关键线程 `D-state`、blocked_functions、waker/blocked chain。先用 `analyze_wait_chain` 看这段区间里线程到底在跑、在排队还是在睡，再决定是否值得用 `main_thread_file_io_in_range` 往文件 API 深钻——D 态 + io 相关 `blocked_function` 才是 I/O 证据，S 态只能按唤醒来源给候选。
 3. `file_api`: read/write/fsync/fdatasync、文件路径或路径类型。
 4. `page_fault`: 文件映射首次访问、page cache miss、reclaim 后重新读。
 5. `missing_evidence`: trace 没有路径、栈、block I/O 或 app API signal。

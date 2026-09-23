@@ -203,6 +203,26 @@ describe('toolNarration', () => {
     expect(text).toContain('四象限完整行');
   });
 
+  it('names the wait-chain target so two calls on different threads read differently', () => {
+    expect(formatToolCallNarration('analyze_wait_chain', {
+      process_name: 'com.example.app', thread_name: 'OkHttp Dispatch',
+      start_ts: 1000, end_ts: 2000,
+    })).toBe('分析等待链：com.example.app / OkHttp Dispatch 在该区间在等什么、被谁唤醒');
+
+    expect(formatToolCallNarration('mcp__smartperfetto__analyze_wait_chain', {
+      process_name: 'com.example.app', main_thread: true,
+    })).toContain('com.example.app / 主线程');
+  });
+
+  it('falls back to the numeric selector the caller actually used', () => {
+    expect(formatToolCallNarration('analyze_wait_chain', {utid: 42}))
+      .toContain('utid 42');
+    expect(formatToolCallNarration('analyze_wait_chain', {thread_state_id: '9182'}))
+      .toContain('thread_state 9182');
+    expect(formatToolCallNarration('analyze_wait_chain', {}))
+      .toBe('分析等待链：确认目标线程在该区间在等什么、被谁唤醒');
+  });
+
   it('identifies generic tool messages that should be replaced', () => {
     expect(looksLikeGenericToolMessage('调用工具: invoke_skill')).toBe(true);
     expect(looksLikeGenericToolMessage('Call tool: submit_plan')).toBe(true);

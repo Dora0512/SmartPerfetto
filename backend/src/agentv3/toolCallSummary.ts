@@ -65,6 +65,25 @@ export function summarizeToolCallInput(toolName: string, input: unknown): ToolCa
         : undefined;
       return { skillId, inputSummary, paramsHash };
     }
+    case 'analyze_wait_chain': {
+      // Two wait-chain calls on different threads or windows must not read as
+      // the same plan step, so this one keeps the selector, like fetch_artifact
+      // keeps its artifact id.
+      // `main_thread` is part of the selector, not a fallback for having no
+      // names: `{process_name, main_thread: true}` and `{process_name}` address
+      // different threads, and dropping it made them one plan step.
+      const selector = [obj.process_name, obj.thread_name]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+      if (obj.main_thread === true) selector.push('main_thread');
+      const target = selector.join('/')
+        || (obj.utid != null ? `utid:${obj.utid}` : '')
+        || (obj.thread_state_id != null ? `thread_state:${obj.thread_state_id}` : '')
+        || '?';
+      const window = obj.start_ts != null && obj.end_ts != null
+        ? ` @ ${obj.start_ts}..${obj.end_ts}`
+        : '';
+      return { inputSummary: `${target}${window}`, paramsHash };
+    }
     case 'fetch_artifact': {
       const id = obj.artifactId ?? obj.id ?? '?';
       const detail = obj.detail ?? obj.level ?? '?';

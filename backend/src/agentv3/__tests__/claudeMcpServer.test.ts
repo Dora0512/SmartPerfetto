@@ -43,6 +43,8 @@ import * as runtimeToolSpec from '../../agentRuntime/runtimeToolSpec';
 import {sanitizeSourceReference} from '../../services/codebase/sourceUseDecision';
 import {verifySourceClaimBindings} from '../../services/codebase/sourceClaimVerifier';
 import * as resolvedAnalysisContext from '../../services/resolvedAnalysisContext';
+import * as criticalPathAnalyzer from '../../services/criticalPathAnalyzer';
+import {isPolicyRefusalResult} from '../toolNarration';
 
 // ── Mock dependencies ────────────────────────────────────────────────────
 
@@ -704,7 +706,7 @@ describe('createClaudeMcpServer', () => {
       // *removes* a critical tool still fails loudly.
       const { tools } = createTestServer();
       expect(tools.size).toBeGreaterThanOrEqual(15);
-      expect(tools.size).toBeLessThanOrEqual(26);
+      expect(tools.size).toBeLessThanOrEqual(27);
       for (const required of ['execute_sql', 'invoke_skill', 'lookup_sql_schema', 'submit_plan', 'recall_similar_result']) {
         expect(tools.has(required)).toBe(true);
       }
@@ -901,6 +903,7 @@ describe('createClaudeMcpServer', () => {
       const { tools } = createTestServer();
       const expected = [
         'execute_sql', 'invoke_skill', 'list_skills', 'detect_architecture',
+        'analyze_wait_chain',
         'lookup_sql_schema', 'submit_plan', 'update_plan_phase', 'revise_plan',
         'submit_hypothesis', 'resolve_hypothesis', 'write_analysis_note',
         'fetch_artifact', 'query_perfetto_source', 'flag_uncertainty', 'recall_patterns',
@@ -1208,6 +1211,7 @@ describe('createClaudeMcpServer', () => {
       expect(tools.has('execute_sql')).toBe(false);
       expect(tools.has('invoke_skill')).toBe(false);
       expect(tools.has('detect_architecture')).toBe(false);
+      expect(tools.has('analyze_wait_chain')).toBe(false);
       expect(tools.has('lookup_sql_schema')).toBe(true);
     });
 
@@ -1311,7 +1315,7 @@ describe('createClaudeMcpServer', () => {
         expect(readRuntimeToolResultFacts(result)).toEqual({success: false});
         expect(server.mockTpService.query).not.toHaveBeenCalled();
         expect(server.mockSkillExecutor.execute).not.toHaveBeenCalled();
-        for (const name of ['execute_sql', 'invoke_skill', 'lookup_blog_knowledge', 'query_perfetto_source']) {
+        for (const name of ['execute_sql', 'invoke_skill', 'analyze_wait_chain', 'lookup_blog_knowledge', 'query_perfetto_source']) {
           expect(server.tools.has(name)).toBe(false);
         }
         const artifactId = server.artifactStore.store({
@@ -1373,7 +1377,10 @@ describe('createClaudeMcpServer', () => {
 
       expect(runtimeDescriptions.length).toBeGreaterThanOrEqual(25);
       expect(sdkDescriptions).toEqual(runtimeDescriptions);
-      expect(totalChars).toBeLessThanOrEqual(13_000);
+      // Every description is model context on every turn. The ceiling rose from
+      // 13_000 when `analyze_wait_chain` joined the set; raise it only for a new
+      // tool, never to make an existing description's growth pass.
+      expect(totalChars).toBeLessThanOrEqual(14_000);
       for (const description of runtimeDescriptions) {
         expect(description.length).toBeLessThanOrEqual(1000);
         expect(description).not.toMatch(/\n\nExamples:/);
@@ -9306,5 +9313,248 @@ describe('MCP synthesize capture with real execution', () => {
       loader.skillRegistry.getSkillOrigin.mockImplementation(previousOrigin);
       db.close();
     }
+  });
+});
+
+describe('analyze_wait_chain', () => {
+  // The `loadLearnedSqlFixPairs` suite spies on the already-mocked
+  // `fs.existsSync` and restores it to nothing, after which every prompt
+  // template reads as absent and `createClaudeMcpServer` throws. The
+  // real-execution suites above repair it the same way; reinstate the module
+  // factory's own behaviour rather than a looser one.
+  beforeAll(() => {
+    const realFs = jest.requireActual<typeof fs>('fs');
+    jest.mocked(fs.existsSync).mockImplementation(((target: unknown) =>
+      typeof target === 'string'
+        && (target.includes('perfettoSqlIndex') || target.includes('sql_learning'))
+        ? false
+        : realFs.existsSync(target as string)) as unknown as typeof fs.existsSync);
+  });
+
+  const THREAD_COLUMNS = ['utid', 'tid', 'thread_name', 'thread_upid', 'is_main_thread', 'pid', 'process_name'];
+
+  function threadResult(rows: unknown[][]) {
+    return {columns: THREAD_COLUMNS, rows, durationMs: 1} as any;
+  }
+
+  /** One sleeping segment woken from IRQ context, with a recursed waker task. */
+  function fakeAnalysis(overrides: Record<string, unknown> = {}): any {
+    const wakeSource = {
+      state: 'S', durMs: 4, threadName: 'OkHttp Dispatch', threadRole: 'network',
+      wakerThreadName: 'swapper/0', wakerProcessName: 'swapper', wakerRole: 'other',
+      irqContext: true, wakeSource: 'irq_or_softirq', waitClass: 'network_receive_candidate',
+    };
+    const child = {
+      startTs: 1_500, dur: 1_000_000, startOffsetMs: 0.5, durationMs: 1,
+      utid: 77, tid: 1500, upid: 9, processName: 'system_server', threadName: 'Binder:1500_2',
+      state: 'S', blockedFunction: null, ioWait: null, cpu: null,
+      slices: [], modules: ['Binder / IPC'], reasons: ['binder reply'],
+      wakeSourceClass: 'binder_reply', recursionDepth: 1,
+    };
+    return {
+      available: true,
+      task: {
+        utid: 42, tid: 1200, upid: 7, startTs: 1_000, dur: 10_000_000, durationMs: 10,
+        state: 'S', blockedFunction: null, ioWait: null, cpu: null,
+        threadName: 'com.example.app', processName: 'com.example.app',
+      },
+      totalMs: 10, blockingMs: 4, selfMs: 6, externalBlockingPercentage: 40,
+      wakeupChain: [{
+        startTs: 1_000, dur: 4_000_000, startOffsetMs: 0, durationMs: 4,
+        utid: 55, tid: 1301, upid: 7, processName: 'com.example.app', threadName: 'OkHttp Dispatch',
+        state: 'S', blockedFunction: null, ioWait: null, cpu: null,
+        slices: [], modules: ['网络收包等待候选'], reasons: ['waker irq_context=1', 'role=network', 'noise'],
+        wakeSourceClass: 'network_receive_candidate',
+        semantics: {
+          segmentKey: 's1', binderTxns: [], monitorContention: [], ioSignals: [], gcEvents: [],
+          cpuCompetition: [], wakeSources: [wakeSource], warnings: [],
+          sources: {binder: 'present', monitor: 'present', io: 'present', gc: 'present',
+            cpu: 'present', wakeSource: 'present'},
+        },
+        children: [child],
+      }],
+      moduleBreakdown: [], anomalies: [{severity: 'warning', title: '等待链涉及网络收包等待候选',
+        detail: '该段睡眠由 IRQ 上下文唤醒，且线程角色为 network。', evidence: []}],
+      summary: '选中 task 等待 4ms。', recommendations: [], warnings: ['critical path 结果较大'],
+      rawRows: 12, truncated: false,
+      slices: [
+        {threadStateId: 1, startTs: 1_000, endTs: 5_000_000, durationMs: 4, state: 'S',
+          kind: 'sleeping', cpu: null, blockedFunction: null, ioWait: null, segmentCount: 1},
+        {threadStateId: 2, startTs: 5_000_000, endTs: 11_000_000, durationMs: 6, state: 'Running',
+          kind: 'running', cpu: 3, blockedFunction: null, ioWait: null, segmentCount: 0},
+      ],
+      directWaker: {threadStateId: null, utid: null, tid: null, threadName: null, processName: null,
+        state: null, cpu: null, irqContext: true, kind: 'irq', hints: []},
+      quantification: {counterfactual: {longestSegmentKey: 's1', longestSegmentDurMs: 4,
+        upperBoundMs: 6, note: 'UPPER BOUND ONLY'}, frameImpacts: [], hypotheses: [], warnings: []},
+      semanticSources: {},
+      ...overrides,
+    };
+  }
+
+  const analyzeSpies: Array<{mockRestore: () => void}> = [];
+
+  function spyAnalyzer(analysis: any = fakeAnalysis()) {
+    const spy = jest.spyOn(criticalPathAnalyzer, 'analyzeCriticalPath')
+      .mockImplementation(async () => analysis);
+    analyzeSpies.push(spy);
+    return spy;
+  }
+
+  afterEach(() => {
+    // Restoring every mock would also drop the fs/template spies other suites
+    // in this file install once; only this block's own spy is ours to undo.
+    analyzeSpies.splice(0).forEach(spy => spy.mockRestore());
+  });
+
+  it('projects the wait shape, retains the segment table, and emits a data envelope', async () => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+    server.mockTpService.query.mockImplementation(async (_traceId: string, sql: string) =>
+      (/FROM thread\b/.test(sql)
+        ? threadResult([[42, 1200, 'com.example.app', 7, 1, 1200, 'com.example.app']])
+        : threadResult([])));
+    await callTool(server.tools, 'submit_plan', {
+      phases: [{id: 'p1', name: '等待归因', goal: '确认线程在等什么', expectedTools: ['analyze_wait_chain']}],
+      successCriteria: 'Identify what the main thread waited on',
+    });
+
+    const raw = await server.tools.get('analyze_wait_chain')!.handler({
+      process_name: 'com.example.app', main_thread: true,
+      start_ts: '1000', end_ts: '10001000', planPhaseId: 'p1',
+    }, undefined);
+    const payload = JSON.parse(raw.content[0].text);
+
+    // The engine is addressed by the resolved utid and the requested window.
+    expect(analyze).toHaveBeenCalledWith(server.mockTpService as any, 'test-trace-123', expect.objectContaining({
+      utid: 42, startTs: '1000', endTs: '10001000', maxSegments: 200, recursionDepth: 1, recursionEnabled: true,
+    }));
+
+    expect(payload.success).toBe(true);
+    expect(payload.available).toBe(true);
+    expect(payload.task).toMatchObject({
+      processName: 'com.example.app', threadName: 'com.example.app', tid: 1200, pid: 1200, utid: 42,
+      windowStartTs: 1_000, windowEndTs: 10_001_000, windowMs: 10,
+    });
+    expect(payload.stateBreakdown).toEqual({
+      sleeping: {ms: 4, percent: 40},
+      running: {ms: 6, percent: 60},
+    });
+    // The thread's own sleeping time, not the chain's: the recursed waker task's
+    // 1 ms belongs to another thread.
+    expect(payload.waitingMs).toBe(4);
+    expect(payload.chainWaitMs).toBe(5);
+    // Both the top-level segment and the recursed waker segment are waits.
+    expect(payload.waitClassSummary).toEqual({network_receive_candidate: 4, binder_reply: 1});
+    expect(payload.topWaits[0]).toMatchObject({
+      durationMs: 4, kind: 'sleeping', wakeSourceClass: 'network_receive_candidate',
+      waker: {kind: 'irq_or_softirq', threadName: 'swapper/0', irqContext: true},
+    });
+    expect(payload.topWaits[0].reasons).toHaveLength(3);
+    expect(payload.recursion).toEqual([expect.objectContaining({
+      processName: 'com.example.app', threadName: 'OkHttp Dispatch',
+      childSegments: 1, dominantWaitClass: 'binder_reply', dominantWaitMs: 1,
+    })]);
+    expect(payload.directWaker).toMatchObject({kind: 'irq', irqContext: true});
+    expect(payload.counterfactualUpperBoundMs).toBe(6);
+    expect(payload.deterministicSummary).toContain('4.00 ms');
+
+    // Facts survive the transport cap even though the payload is long.
+    expect(readRuntimeToolResultFacts(raw)).toEqual({success: true, planPhaseId: 'p1'});
+
+    const stored = server.artifactStore._artifacts.get(payload.artifactId);
+    expect(stored.skillId).toBe('analyze_wait_chain');
+    expect(stored.data.columns).toContain('wake_source_class');
+    expect(stored.data.rows).toHaveLength(2);
+    expect(stored.planPhaseId).toBe('p1');
+
+    const envelopes = server.emittedUpdates
+      .filter((update: any) => update.type === 'data')
+      .flatMap((update: any) => update.content);
+    const envelope = envelopes.find((item: any) => item.meta.source === 'analyze_wait_chain');
+    expect(envelope.meta.evidenceRefId).toBe(payload.evidenceRefId);
+    expect(envelope.meta.artifactId).toBe(payload.artifactId);
+    expect(envelope.display.layer).toBe('deep');
+    expect(envelope.display.columns.find((column: any) => column.name === 'start_ts'))
+      .toMatchObject({clickAction: 'navigate_range', durationColumn: 'dur_ns', unit: 'ns'});
+  });
+
+  it('names the unavailable reason instead of an empty wait chain', async () => {
+    spyAnalyzer(fakeAnalysis({
+      available: false, wakeupChain: [], blockingMs: 0, selfMs: 10,
+      task: {utid: 42, tid: 1200, upid: 7, startTs: 1_000, dur: 10_000_000, durationMs: 10,
+        state: 'Running', threadName: 'com.example.app', processName: 'com.example.app'},
+    }));
+    const server = createTestServer();
+
+    const payload = await callTool(server.tools, 'analyze_wait_chain', {utid: 42, start_ts: 1_000, end_ts: 10_001_000});
+
+    expect(payload).toMatchObject({success: true, available: false, unavailableReason: 'task_state_running'});
+    expect(payload.topWaits).toEqual([]);
+  });
+
+  it('asks the caller to narrow an ambiguous thread instead of answering about one of them', async () => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+    server.mockTpService.query.mockImplementation(async () => threadResult([
+      [61, 1401, 'pool-1-thread-1', 7, 0, 1200, 'com.example.app'],
+      [62, 1402, 'pool-1-thread-2', 7, 0, 1200, 'com.example.app'],
+    ]));
+
+    const raw = await server.tools.get('analyze_wait_chain')!.handler({
+      process_name: 'com.example.app', thread_name: 'pool-1-thread',
+      start_ts: 1_000, end_ts: 10_001_000,
+    }, undefined);
+    const payload = JSON.parse(raw.content[0].text);
+
+    expect(payload).toMatchObject({
+      success: false, error: 'ambiguous_thread_selection', action_required: 'narrow_thread_selection',
+      candidatesAtLeast: 2, candidatesTruncated: false,
+    });
+    expect(payload.candidates.map((candidate: any) => candidate.utid)).toEqual([61, 62]);
+    expect(readRuntimeToolResultFacts(raw)).toEqual({success: false});
+    // A selector the model can fix is not a broken tool: counting it toward the
+    // circuit breaker's failure rate would shrink the room it needs to fix it.
+    expect(isPolicyRefusalResult(raw)).toBe(true);
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it('asks for a thread when the selector matches nothing', async () => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+    server.mockTpService.query.mockImplementation(async () => threadResult([]));
+
+    const payload = await callTool(server.tools, 'analyze_wait_chain', {
+      process_name: 'com.absent', start_ts: 1_000, end_ts: 10_001_000,
+    });
+
+    expect(payload).toMatchObject({success: false, error: 'thread_not_found', action_required: 'specify_thread'});
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{utid: 42}, 'provide_start_and_end_ts'],
+    [{utid: 42, start_ts: 10_000, end_ts: 1_000}, 'provide_end_ts_after_start_ts'],
+  ])('refuses an unusable window (%j)', async (params, actionRequired) => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+
+    const payload = await callTool(server.tools, 'analyze_wait_chain', params);
+
+    expect(payload).toMatchObject({success: false, action_required: actionRequired});
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it('takes the window from thread_state_id without requiring start_ts/end_ts', async () => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+
+    const payload = await callTool(server.tools, 'analyze_wait_chain', {thread_state_id: '9182'});
+
+    expect(payload.success).toBe(true);
+    expect(analyze).toHaveBeenCalledWith(server.mockTpService as any, 'test-trace-123', expect.objectContaining({
+      threadStateId: '9182',
+    }));
+    expect(analyze.mock.calls[0][2]).not.toHaveProperty('utid');
   });
 });

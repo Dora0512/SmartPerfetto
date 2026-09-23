@@ -161,6 +161,11 @@ invoke_skill("network_analysis", { package: "<包名>" })
 
 重点看接口分布、方向、协议、socket tag、活跃周期。如果用户关心具体时间段，必须传入 `start_ts` / `end_ts`。
 
+如果问题是"请求期间 App 在等什么"，对发起请求的线程跑一次 `analyze_wait_chain({ process_name, thread_name, start_ts, end_ts })`，
+窗口取该请求区间。`wake_source_class = network_receive_candidate` 只是候选标签：它和 `timer_or_device_wake`
+共享同一个 IRQ 上下文唤醒信号，只靠睡眠线程的角色区分，必须再叠加 request-level telemetry 或 rx 包时间相关
+才能升级为网络结论。
+
 输出时把证据类型写清楚：
 1. `trace_direct`: packet/activity/traffic 证据，可用于流量、频繁活跃、功耗相关性。
 2. `missing_evidence`: 没有 request-stage telemetry 时，DNS/连接/TLS/TTFB 只能列为待补证方向。

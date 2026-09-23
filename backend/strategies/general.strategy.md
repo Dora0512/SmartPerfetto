@@ -92,6 +92,7 @@ keywords: []
 | **非标准/混合渲染架构卡顿** | 先 `detect_architecture`；始终保留 HWUI host 分析（`scrolling_analysis` / `jank_frame_detail`），再按候选链路补：Flutter → `flutter_scrolling_analysis`，TextureView → `textureview_producer_frame_timing`，WebView GL Functor → `webview_drawfunctor_jank_chain`，RN old/new → `rn_bridge_to_frame_jank` / `rn_fabric_render_jank`，GLSurfaceView/NativeActivity → `gl_standalone_swap_jank` | 混合出图要先分开看 host 与 producer，再合并看依赖；避免只看 FrameTimeline 漏掉生产端 jank |
 | **网络** | `invoke_skill("network_analysis")` | 只把 packet-level trace 当作包收发、接口、协议、远程端口、活跃周期和流量证据；DNS/连接/TLS/TTFB 需要 request-level telemetry 或接入层日志补证 |
 | **特定时间段** | `invoke_skill("system_load_in_range", { start_ts, end_ts })` | 任意时间段的系统负载 |
+| **某段区间 / 某个线程为什么在等** | `analyze_wait_chain({ process_name, thread_name|main_thread, start_ts, end_ts })` → 按 top `wake_source_class` / `blocked_function` 路由：`network_receive_candidate` → network、`binder_reply` → binder_analysis、D 态或 io 相关 `blocked_function` → block_io_analysis / io_pressure、`worker_handoff` → 交接线程所在链路、Monitor/futex → lock_contention_analysis | 先分清线程在跑、在排队等 CPU、还是在睡，再选深钻路径；`wake_source_class` 是候选标签不是根因，`timer_or_device_wake` 与 `network_receive_candidate` 共享同一个 IRQ 上下文信号 |
 | **不确定方向** | `invoke_skill("scene_reconstruction")` → 按场景路由 | 先做全局场景还原，再针对性深钻 |
 
 **场景专用快速路由**（如果用户的问题明确匹配以下场景，直接使用对应策略）：
