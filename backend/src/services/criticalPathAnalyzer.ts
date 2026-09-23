@@ -9,18 +9,19 @@
 //   L2 — direct waker annotation                          (criticalPathWakerChain.ts)
 //   L3 — semantic enrichment via Perfetto stdlib table joins (criticalPathSemantics.ts)
 //   L4 — recursive _critical_path_stack on long external segments (this file, depth=2)
-//   L5 — counterfactual upper-bound + frame impact + hypotheses  (criticalPathQuantify.ts)
+//   L5 — counterfactual best case + frame impact + hypotheses    (criticalPathQuantify.ts)
 //
 // Schema is backward-compatible: all old CriticalPathAnalysis top-level fields
 // are preserved, with new fields ADDED. Old consumers will keep working.
 
 import {
   enrichSegmentsWithSemantics,
+  segmentKeyOf,
   type SegmentInput as SemanticSegmentInput,
   type SegmentSemantics,
   type SemanticSourceStatus,
 } from './criticalPathSemantics';
-import {resolveDirectWaker, type WakerHop} from './criticalPathWakerChain';
+import {resolveDirectWaker, type WakerChainResult, type WakerHop} from './criticalPathWakerChain';
 import {
   quantifyCriticalPath,
   type CriticalPathQuantification,
@@ -28,6 +29,7 @@ import {
 } from './criticalPathQuantify';
 import {
   nsToMs,
+  assertQuerySucceeded,
   queryRows,
   toBool,
   toNullableNumber,
@@ -47,6 +49,24 @@ export interface CriticalPathAnalyzeOptions {
   recursionDepth?: number;
   recursionEnabled?: boolean;
   segmentBudget?: number;
+}
+
+export type CriticalPathInputErrorCode =
+  | 'invalid_thread_state_id'
+  | 'thread_state_not_found'
+  | 'missing_selector'
+  | 'non_positive_duration'
+  | 'invalid_integer';
+
+/** A caller-input failure; callers map `code` to a 4xx response. */
+export class CriticalPathInputError extends Error {
+  readonly code: CriticalPathInputErrorCode;
+
+  constructor(code: CriticalPathInputErrorCode, message: string) {
+    super(message);
+    this.name = 'CriticalPathInputError';
+    this.code = code;
+  }
 }
 
 // === Backward-compatible types (do NOT remove fields) ===
@@ -132,6 +152,15 @@ export interface SliceFinding {
   segmentCount: number;
 }
 
+/**
+ * Why `available` is false: the selected row is Running, the window holds no
+ * S/D/DK/R/R+ time, or Perfetto returned no critical-path stack.
+ */
+export type CriticalPathUnavailableReason =
+  | 'task_state_running'
+  | 'no_critical_path_stack'
+  | 'no_waiting_time';
+
 export interface CriticalPathAnalysis {
   available: boolean;
   task: CriticalPathTaskInfo;
@@ -152,6 +181,7 @@ export interface CriticalPathAnalysis {
   directWaker?: WakerHop | null;
   quantification?: CriticalPathQuantification;
   semanticSources?: Record<string, SemanticSourceStatus>;
+  unavailableReason?: CriticalPathUnavailableReason;
 }
 
 // === Helpers ===
@@ -160,8 +190,6 @@ interface CriticalPathStackRow {
   ts: number;
   dur: number;
   utid: number;
-  rootUtid: number;
-  stackDepth: number;
   name: string;
   tableName?: string | null;
   threadName?: string | null;
@@ -172,7 +200,6 @@ interface SegmentAccumulator {
   startTs: number;
   dur: number;
   utid: number;
-  rootUtid: number;
   processName?: string | null;
   threadName?: string | null;
   state?: string | null;
@@ -184,11 +211,15 @@ interface SegmentAccumulator {
   reasons: Set<string>;
 }
 
-function normalizeIntegerSql(value: unknown, fieldName: string): string | undefined {
+function normalizeIntegerSql(
+  value: unknown,
+  fieldName: string,
+  code: CriticalPathInputErrorCode = 'invalid_integer'
+): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const raw = String(value).trim();
   if (!/^-?\d+$/.test(raw)) {
-    throw new Error(`${fieldName} must be an integer`);
+    throw new CriticalPathInputError(code, `${fieldName} must be an integer`);
   }
   return raw;
 }
@@ -234,43 +265,100 @@ function classifySlice(state: string | null): SliceKind {
   return 'unknown';
 }
 
+/** The non-empty strings among `items`. */
+function present(items: Array<string | null | undefined>): string[] {
+  return items.filter((item): item is string => typeof item === 'string' && item.length > 0);
+}
+
 function stripPrefix(value: string, prefix: string): string | null {
   if (!value.startsWith(prefix)) return null;
   const stripped = value.slice(prefix.length).trim();
   return stripped.length > 0 ? stripped : null;
 }
 
-// Fallback module classifier — only used when stdlib tables yielded no signal.
-function classifyModulesFromText(texts: string[]): string[] {
-  const joined = texts.join(' ').toLowerCase();
-  const modules: string[] = [];
+// Keyword fallback: applies only while a segment has no stdlib signal —
+// applySemanticsToSegments replaces these labels when L3 finds one.
+// Wait-type classes (locks, IO, scheduling) read only wait evidence (state,
+// blocked_function, slices, reasons) on word boundaries: a thread or process
+// name ("RenderThread", "pool-1-thread-1") says what a thread is, not what it
+// waited on. Role classes may also read names. Order is priority: the first
+// label is the segment's primary module.
+const TEXT_MODULES: Array<{label: string; waitOnly: boolean; pattern: RegExp}> = [
+  {label: 'Binder / IPC', waitOnly: false, pattern: /\bbinder|hwbinder|ipc(threadstate|transaction)|transact/},
+  {
+    label: '锁 / Futex',
+    waitOnly: true,
+    pattern: /\b_*(?:futex|rt_mutex|mutex|rwsem|percpu_rwsem)\w*|\bsem_wait\b|\bmonitor\b|\block\b|\bcontention\b|\bcondition\b/,
+  },
+  {
+    label: 'IO / 页缓存 / 文件系统候选',
+    waitOnly: true,
+    pattern:
+      /\bio_wait\b|\bi\/o\b|\bfsync\b|\bfdatasync\b|\bread\b|\bwrite\b|\bpread64\b|\bpwrite64\b|\bsqlite\w*|\bwal\b|\bjournal\b|\b_*(?:io_schedule|wait_on_page|folio_wait|wait_on_buffer|submit_bio|filemap|do_page_fault|page_fault|ext4|f2fs|erofs|jbd2|blk|mmc|ufshcd)\w*/,
+  },
+  {label: '调度 / CPU 竞争', waitOnly: true, pattern: /\brunnable\b|\bpreempt\w*/},
+  {
+    label: '图形渲染 / Surface',
+    waitOnly: false,
+    pattern: /renderthread|surfaceflinger|blast|bufferqueue|queuebuffer|dequeuebuffer|doframe|drawframe|traversal|hwui|skia|egl|vulkan|opengl/,
+  },
+  {label: '输入链路', waitOnly: false, pattern: /inputdispatcher|inputreader|motionevent|touch|gesture/},
+  {label: 'ART / GC', waitOnly: false, pattern: /\bgc\b|garbage|art::|dalvik|jit|dex2oat/},
+  {label: 'Kernel / IRQ / Workqueue', waitOnly: false, pattern: /\birq\/|kworker|softirq|workqueue|rcu|kernel|interrupt/},
+  {label: '电源 / 唤醒', waitOnly: false, pattern: /wakeup|wakelock|suspend|cpuidle|power/},
+];
 
-  const add = (label: string, pattern: RegExp) => {
-    if (pattern.test(joined)) modules.push(label);
-  };
-
-  add('Binder / IPC', /\bbinder\b|hwbinder|ipc(threadstate|transaction)|transact/);
-  add('锁 / Futex', /futex|mutex|monitor|lock|rwsem|sem_wait|condition/);
-  add('IO / 页缓存 / 文件系统候选', /io_wait|i\/o|fsync|filemap|page_fault|wait_on_page|read|write|ext4|f2fs|erofs|block|blk_|mmc|ufs|sqlite|wal|journal/);
-  add('调度 / CPU 竞争', /runnable|preempt|__schedule|schedule_timeout|cpu:\s*\d+|sched/);
-  add('图形渲染 / Surface', /renderthread|surfaceflinger|blast|bufferqueue|queuebuffer|dequeuebuffer|doframe|drawframe|traversal|hwui|skia|egl|vulkan|opengl/);
-  add('输入链路', /inputdispatcher|inputreader|motionevent|touch|gesture/);
-  add('ART / GC', /\bgc\b|garbage|art::|dalvik|jit|dex2oat/);
-  add('Kernel / IRQ / Workqueue', /\birq\/|kworker|softirq|workqueue|rcu|kernel|interrupt/);
-  add('电源 / 唤醒', /wakeup|wakelock|suspend|cpuidle|power/);
-
-  return modules;
+function classifyModulesFromText(waitTexts: string[], roleTexts: string[]): string[] {
+  const waitJoined = waitTexts.join('\n').toLowerCase();
+  const allJoined = [...waitTexts, ...roleTexts].join('\n').toLowerCase();
+  return TEXT_MODULES.filter(({waitOnly, pattern}) => pattern.test(waitOnly ? waitJoined : allJoined)).map(
+    ({label}) => label
+  );
 }
 
-function modulesFromSemantics(semantics?: SegmentSemantics): string[] {
+/** Attributable ms of each stdlib signal on one segment, capped at the segment's duration. */
+interface SegmentSignalMs {
+  binder: number;
+  monitor: number;
+  io: number;
+  gc: number;
+  cpu: number;
+}
+
+function segmentSignalMs(segment: CriticalPathSegment): SegmentSignalMs {
+  const sem = segment.semantics;
+  const sum = <T>(items: T[] | undefined, durMs: (item: T) => number): number =>
+    Math.min(segment.durationMs, (items ?? []).reduce((total, item) => total + durMs(item), 0));
+  return {
+    binder: sum(sem?.binderTxns, (txn) => txn.durMs),
+    monitor: sum(sem?.monitorContention, (mc) => mc.durMs),
+    io: sum(sem?.ioSignals, (io) => io.durMs),
+    gc: sum(sem?.gcEvents, (gc) => gc.durMs),
+    cpu: sum(sem?.cpuCompetition, (cpu) => cpu.competingDurMs),
+  };
+}
+
+// Stdlib-derived modules, longest attributable signal first so the first
+// label is the segment's primary module.
+function modulesFromSemantics(segment: CriticalPathSegment): string[] {
+  const semantics = segment.semantics;
   if (!semantics) return [];
-  const modules: string[] = [];
-  if (semantics.binderTxns.length > 0) modules.push('Binder / IPC');
-  if (semantics.monitorContention.length > 0) modules.push('锁 / Monitor');
-  if (semantics.ioSignals.length > 0) modules.push('IO / 文件系统');
-  if (semantics.gcEvents.length > 0) modules.push('ART / GC');
-  if (semantics.cpuCompetition.length > 0) modules.push('调度 / CPU 竞争');
-  return modules;
+  const ms = segmentSignalMs(segment);
+  const signals: Array<[string, boolean, number]> = [
+    ['Binder / IPC', semantics.binderTxns.length > 0, ms.binder],
+    ['锁 / Monitor', semantics.monitorContention.length > 0, ms.monitor],
+    ['IO / 文件系统', semantics.ioSignals.length > 0, ms.io],
+    ['ART / GC', semantics.gcEvents.length > 0, ms.gc],
+    ['调度 / CPU 竞争', semantics.cpuCompetition.length > 0, ms.cpu],
+  ];
+  // GC is matched per process, so a concurrent background collection can
+  // overlap a segment that was really waiting on a lock or a file. Thread-level
+  // signals therefore rank ahead of GC; GC leads only when it stands alone.
+  const processLevel = (label: string): number => (label === 'ART / GC' ? 1 : 0);
+  return signals
+    .filter(([, isPresent]) => isPresent)
+    .sort((a, b) => processLevel(a[0]) - processLevel(b[0]) || b[2] - a[2])
+    .map(([label]) => label);
 }
 
 function addReason(segment: SegmentAccumulator, reason: string | null | undefined): void {
@@ -290,7 +378,6 @@ function getSegment(
       startTs: row.ts,
       dur: row.dur,
       utid: row.utid,
-      rootUtid: row.rootUtid,
       processName: row.processName,
       threadName: row.threadName,
       slices: new Set<string>(),
@@ -304,20 +391,20 @@ function getSegment(
   return segment;
 }
 
+// The stack query already drops the root thread's own rows, so every row
+// here describes an external segment.
 function normalizeStackRows(rows: QueryRow[]): CriticalPathStackRow[] {
   return rows
     .map((row) => ({
       ts: toNumber(row.ts),
       dur: toNumber(row.dur),
       utid: toNumber(row.utid),
-      rootUtid: toNumber(row.root_utid),
-      stackDepth: toNumber(row.stack_depth),
       name: String(row.name ?? ''),
       tableName: toOptionalString(row.table_name),
       threadName: toOptionalString(row.thread_name),
       processName: toOptionalString(row.process_name),
     }))
-    .filter((row) => row.dur > 0 && row.name.length > 0 && row.utid !== row.rootUtid);
+    .filter((row) => row.dur > 0 && row.name.length > 0);
 }
 
 function buildSegments(
@@ -368,17 +455,16 @@ function buildSegments(
 
   return Array.from(segments.values())
     .map((segment) => {
-      const evidence = [
-        segment.processName,
-        segment.threadName,
+      const waitTexts = present([
         segment.state,
         segment.blockedFunction,
         ...Array.from(segment.slices).slice(0, 6),
         ...Array.from(segment.reasons).slice(0, 6),
-      ].filter((item): item is string => typeof item === 'string' && item.length > 0);
-      // Initial pass uses text-based modules only; modulesFromSemantics() will
-      // overwrite this once L3 enrichment runs.
-      const modules = classifyModulesFromText(evidence);
+      ]);
+      const roleTexts = present([segment.processName, segment.threadName]);
+      // Text-based fallback; applySemanticsToSegments() replaces it when L3
+      // finds a stdlib signal for this segment.
+      const modules = classifyModulesFromText(waitTexts, roleTexts);
       modules.forEach((module) => segment.modules.add(module));
       return {
         startTs: segment.startTs,
@@ -434,23 +520,17 @@ function buildModuleBreakdown(
     string,
     {durationMs: number; segmentCount: number; examples: Set<string>}
   >();
+  // Each segment counts once, under its primary module, so shares of the
+  // non-overlapping top-level chain sum to at most 100%.
   for (const segment of segments) {
-    const modules = segment.modules.length > 0 ? segment.modules : ['未归类'];
-    for (const module of modules) {
-      const current =
-        stats.get(module) ?? {durationMs: 0, segmentCount: 0, examples: new Set<string>()};
-      current.durationMs += segment.durationMs;
-      current.segmentCount += 1;
-      const example = [
-        segment.processName,
-        segment.threadName,
-        segment.blockedFunction ?? segment.slices[0],
-      ]
-        .filter(Boolean)
-        .join(' / ');
-      if (example) current.examples.add(example);
-      stats.set(module, current);
-    }
+    const module = segment.modules[0] ?? '未归类';
+    const current =
+      stats.get(module) ?? {durationMs: 0, segmentCount: 0, examples: new Set<string>()};
+    current.durationMs += segment.durationMs;
+    current.segmentCount += 1;
+    const example = segmentExample(segment);
+    if (example) current.examples.add(example);
+    stats.set(module, current);
   }
 
   return Array.from(stats.entries())
@@ -464,16 +544,90 @@ function buildModuleBreakdown(
     .sort((a, b) => b.durationMs - a.durationMs || a.module.localeCompare(b.module));
 }
 
+/** The longest segment of the chain (the earliest wins a tie). */
+function longestSegment(segments: CriticalPathSegment[]): CriticalPathSegment | undefined {
+  return segments.reduce<CriticalPathSegment | undefined>(
+    (best, segment) => (!best || segment.durationMs > best.durationMs ? segment : best),
+    undefined
+  );
+}
+
+function segmentExample(segment: CriticalPathSegment): string {
+  return present([segment.processName, segment.threadName, segment.blockedFunction ?? segment.slices[0]]).join(' / ');
+}
+
+// Signals below this many attributable ms raise neither an anomaly nor a
+// recommendation.
+const MIN_SIGNAL_MS = 2;
+
+interface ChainSignal {
+  ms: number;
+  evidence: string[];
+}
+
+/**
+ * Typed L3 evidence summed over the top-level chain. Anomalies and
+ * recommendations read these sums, never module labels, so a keyword label
+ * cannot raise a finding on its own.
+ */
+interface ChainSignals {
+  binder: ChainSignal;
+  monitor: ChainSignal;
+  gc: ChainSignal;
+  cpu: ChainSignal;
+  /** First segment with an io_wait flag or an IO signal. */
+  ioSegment: CriticalPathSegment | undefined;
+}
+
+/** One evidence label and the ms that rank it. */
+interface WeightedEvidence {
+  label: string;
+  ms: number;
+}
+
+function collectChainSignals(segments: CriticalPathSegment[]): ChainSignals {
+  const sums = segments.map(segmentSignalMs);
+  // `evidenceOf` lists a segment's evidence; the three heaviest distinct
+  // labels across the chain are kept.
+  const signal = (
+    key: keyof SegmentSignalMs,
+    evidenceOf: (segment: CriticalPathSegment, ms: number) => WeightedEvidence[]
+  ): ChainSignal => {
+    const evidence = segments
+      .flatMap((segment, index) => evidenceOf(segment, sums[index][key]))
+      .sort((a, b) => b.ms - a.ms);
+    return {
+      ms: Math.round(sums.reduce((total, ms) => total + ms[key], 0) * 100) / 100,
+      evidence: Array.from(new Set(present(evidence.map(({label}) => label)))).slice(0, 3),
+    };
+  };
+  // A segment that carries the signal is its own evidence.
+  const carrier = (segment: CriticalPathSegment, ms: number): WeightedEvidence[] =>
+    ms > 0 ? [{label: segmentExample(segment), ms}] : [];
+  return {
+    binder: signal('binder', carrier),
+    monitor: signal('monitor', carrier),
+    gc: signal('gc', carrier),
+    // Each competitor is evidence, ranked by its own running time.
+    cpu: signal('cpu', (segment) =>
+      (segment.semantics?.cpuCompetition ?? []).map((competitor) => ({
+        label: `CPU ${competitor.cpu}: ${competitor.competingProcess ?? '-'} / ${competitor.competingThread ?? '-'}`,
+        ms: competitor.competingDurMs,
+      }))
+    ),
+    ioSegment: segments.find((segment) => segment.ioWait || (segment.semantics?.ioSignals.length ?? 0) > 0),
+  };
+}
+
 function buildAnomalies(
   task: CriticalPathTaskInfo,
-  segments: CriticalPathSegment[],
-  moduleBreakdown: CriticalPathModuleStat[],
+  longest: CriticalPathSegment | undefined,
+  signals: ChainSignals,
   blockingMs: number
 ): CriticalPathAnomaly[] {
   const anomalies: CriticalPathAnomaly[] = [];
   const totalMs = task.durationMs;
   const blockingPct = pct(blockingMs, totalMs);
-  const longest = segments[0] ? [...segments].sort((a, b) => b.durationMs - a.durationMs)[0] : undefined;
 
   if (totalMs >= 50) {
     anomalies.push({
@@ -511,61 +665,56 @@ function buildAnomalies(
     });
   }
 
-  const ioSegment = segments.find(
-    (segment) => segment.ioWait || segment.modules.includes('IO / 页缓存 / 文件系统候选')
-  );
+  const ioSegment = signals.ioSegment;
   if (ioSegment) {
     anomalies.push({
       severity: 'warning',
       title: '等待链涉及 IO/page-cache 候选',
       detail:
         'critical path 中出现 io_wait 或 kernel blocked_function 的 IO/page-cache 函数族；blocked_function 是单帧 wchan，需要结合同步读写、fsync、SQLite/WAL、page fault 或 block 层证据确认。',
-      evidence: [ioSegment.blockedFunction, ...ioSegment.slices, `${ioSegment.durationMs.toFixed(2)} ms`].filter(
-        (item): item is string => typeof item === 'string' && item.length > 0
-      ),
+      evidence: present([
+        ioSegment.blockedFunction ?? ioSegment.semantics?.ioSignals[0]?.blockedFunction,
+        ...ioSegment.slices,
+        `${ioSegment.durationMs.toFixed(2)} ms`,
+      ]),
     });
   }
 
-  const binder = moduleBreakdown.find((item) => item.module === 'Binder / IPC');
-  if (binder && binder.durationMs >= 2) {
+  if (signals.binder.ms >= MIN_SIGNAL_MS) {
     anomalies.push({
-      severity: binder.durationMs >= 8 ? 'warning' : 'info',
+      severity: signals.binder.ms >= 8 ? 'warning' : 'info',
       title: '等待链涉及 Binder / IPC',
-      detail: `Binder / IPC 在 critical path 中累计 ${binder.durationMs.toFixed(2)} ms，可能是跨进程服务调用、系统服务或回调链路导致。`,
-      evidence: binder.examples,
+      detail: `Binder / IPC 在 critical path 中累计 ${signals.binder.ms.toFixed(2)} ms，可能是跨进程服务调用、系统服务或回调链路导致。`,
+      evidence: signals.binder.evidence,
     });
   }
 
-  const monitor = moduleBreakdown.find((item) => item.module === '锁 / Monitor');
-  if (monitor && monitor.durationMs >= 2) {
+  if (signals.monitor.ms >= MIN_SIGNAL_MS) {
     anomalies.push({
-      severity: monitor.durationMs >= 8 ? 'warning' : 'info',
+      severity: signals.monitor.ms >= 8 ? 'warning' : 'info',
       title: '等待链涉及 Java 锁竞争',
-      detail: `Java monitor 锁在 critical path 中累计 ${monitor.durationMs.toFixed(2)} ms。`,
-      evidence: monitor.examples,
+      detail: `Java monitor 锁在 critical path 中累计 ${signals.monitor.ms.toFixed(2)} ms。`,
+      evidence: signals.monitor.evidence,
     });
   }
 
-  const gc = moduleBreakdown.find((item) => item.module === 'ART / GC');
-  if (gc && gc.durationMs >= 2) {
+  if (signals.gc.ms >= MIN_SIGNAL_MS) {
     anomalies.push({
-      severity: gc.durationMs >= 8 ? 'warning' : 'info',
+      severity: signals.gc.ms >= 8 ? 'warning' : 'info',
       title: 'GC 与等待链重叠',
-      detail: `ART / GC 在 critical path 中累计 ${gc.durationMs.toFixed(2)} ms，可能阻塞 mutator。`,
-      evidence: gc.examples,
+      detail: `ART / GC 在 critical path 中累计 ${signals.gc.ms.toFixed(2)} ms，可能阻塞 mutator。`,
+      evidence: signals.gc.evidence,
     });
   }
 
-  const runnable = segments.find(
-    (segment) => /R|\+|Runnable|Running/.test(segment.state ?? '') || segment.modules.includes('调度 / CPU 竞争')
-  );
-  if (runnable && blockingMs >= 4) {
+  // Only typed competition counts: a Running blocker is the thread doing the
+  // work, not evidence that the chain waited for a CPU.
+  if (signals.cpu.evidence.length > 0 && blockingMs >= 4) {
     anomalies.push({
       severity: 'info',
       title: '存在调度或 CPU 竞争迹象',
-      detail:
-        'critical path 中出现 Runnable/Running/CPU 相关段，建议结合 CPU 轨道看同一时间是否有高优先级线程、RT 线程或大核竞争。',
-      evidence: [`${runnable.processName ?? '-'} / ${runnable.threadName ?? '-'}`, ...runnable.reasons].slice(0, 5),
+      detail: `可运行段等待 CPU 期间，同一 CPU 上其他线程累计运行 ${signals.cpu.ms.toFixed(2)} ms；建议结合 CPU 轨道确认是否有高优先级线程、RT 线程或大核竞争。`,
+      evidence: signals.cpu.evidence,
     });
   }
 
@@ -584,18 +733,22 @@ function buildAnomalies(
 
 function buildRecommendations(
   anomalies: CriticalPathAnomaly[],
-  moduleBreakdown: CriticalPathModuleStat[]
+  moduleBreakdown: CriticalPathModuleStat[],
+  signals: ChainSignals
 ): string[] {
   const recommendations: string[] = [];
   const modules = new Set(moduleBreakdown.slice(0, 4).map((item) => item.module));
 
-  if (modules.has('Binder / IPC')) {
+  // Binder / IO / Monitor / GC follow the same typed signals as their
+  // anomalies; the remaining classes have no typed source and use the
+  // primary-module breakdown.
+  if (signals.binder.ms >= MIN_SIGNAL_MS) {
     recommendations.push('沿 Binder / IPC 相关线程继续看调用方与被调服务，确认是否同步跨进程调用阻塞了目标线程。');
   }
-  if (modules.has('IO / 文件系统')) {
+  if (signals.ioSegment) {
     recommendations.push('排查选中区间附近的同步 IO、fsync、SQLite/WAL、资源加载或 block 层等待，必要时补充 ftrace block/ext4/f2fs 事件。');
   }
-  if (modules.has('锁 / Monitor') || modules.has('锁 / Futex')) {
+  if (signals.monitor.ms >= MIN_SIGNAL_MS || modules.has('锁 / Futex')) {
     recommendations.push('结合 monitor_contention_chain / futex 相关 slice 和调用栈采样，定位持锁线程以及锁竞争入口。');
   }
   if (modules.has('图形渲染 / Surface')) {
@@ -604,7 +757,7 @@ function buildRecommendations(
   if (modules.has('调度 / CPU 竞争')) {
     recommendations.push('查看同一时间 CPU 轨道和线程优先级，确认是否被高优先级线程、RT 线程或频率/大小核调度影响。');
   }
-  if (modules.has('ART / GC')) {
+  if (signals.gc.ms >= MIN_SIGNAL_MS) {
     recommendations.push('查 GC 类型与频率，关注 mark-compact GC 是否阻塞 mutator；考虑触发条件（堆压力、显式 System.gc）。');
   }
 
@@ -617,7 +770,7 @@ function buildRecommendations(
 
 function buildSummary(
   task: CriticalPathTaskInfo,
-  segments: CriticalPathSegment[],
+  topSegment: CriticalPathSegment | undefined,
   moduleBreakdown: CriticalPathModuleStat[],
   anomalies: CriticalPathAnomaly[],
   blockingMs: number
@@ -626,7 +779,6 @@ function buildSummary(
     .slice(0, 3)
     .map((item) => `${item.module} ${item.durationMs.toFixed(2)} ms`)
     .join('、');
-  const topSegment = segments.length > 0 ? [...segments].sort((a, b) => b.durationMs - a.durationMs)[0] : undefined;
   const highestSeverity =
     anomalies.find((item) => item.severity === 'critical') ??
     anomalies.find((item) => item.severity === 'warning');
@@ -656,19 +808,42 @@ function buildSummary(
   return lines.join('\n');
 }
 
+const EMPTY_ANALYSIS_TEXT: Record<
+  CriticalPathUnavailableReason,
+  {title: string; detail: string; recommendation: string}
+> = {
+  task_state_running: {
+    title: 'Running 状态：无等待链可分析',
+    detail:
+      '选中 task 的 thread_state 是 Running —— 没有等待链可分析。建议查 callstack samples、slice 树或同时段 CPU 占用。',
+    recommendation: '对于 Running 状态的选区，推荐查 perf/简单采样的 callstack、CPU 占用与频率，而非 critical path。',
+  },
+  no_waiting_time: {
+    title: '选区内没有等待时间',
+    detail:
+      '选中区间内该线程没有 Sleeping / Uninterruptible / Runnable 等待状态，没有等待链可分析。建议查 callstack samples、slice 树或同时段 CPU 占用。',
+    recommendation: '选区内没有等待状态；推荐查采样 callstack、CPU 占用与频率，而非 critical path。',
+  },
+  no_critical_path_stack: {
+    title: '没有取到 critical path 等待链',
+    detail:
+      'Perfetto 没有返回 selected task 范围内的 critical path 等待链。常见原因是 trace 缺少 sched_wakeup / thread_state 数据，或选中区间没有可追踪的等待链。',
+    recommendation:
+      '确认录制配置包含 sched/sched_switch、sched/sched_wakeup、sched/sched_blocked_reason；如果只是想看整体线程链路，可改用区域选择后再分析。',
+  },
+};
+
 function buildEmptyAnalysis(
   task: CriticalPathTaskInfo,
   warnings: string[],
-  reason?: 'task_state_running' | 'no_critical_path_stack'
+  reason: CriticalPathUnavailableReason
 ): CriticalPathAnalysis {
-  const isRunning = reason === 'task_state_running';
+  const text = EMPTY_ANALYSIS_TEXT[reason];
   const anomalies = [
     {
       severity: 'info' as const,
-      title: isRunning ? 'Running 状态：无等待链可分析' : '没有取到 critical path 等待链',
-      detail: isRunning
-        ? '选中 task 的 thread_state 是 Running —— 没有等待链可分析。建议查 callstack samples、slice 树或同时段 CPU 占用。'
-        : 'Perfetto 没有返回 selected task 范围内的 critical path 等待链。常见原因是 trace 缺少 sched_wakeup / thread_state 数据，或选中区间没有可追踪的等待链。',
+      title: text.title,
+      detail: text.detail,
       evidence: [`task=${task.durationMs.toFixed(2)} ms`, `utid=${task.utid}`],
     },
   ];
@@ -682,13 +857,12 @@ function buildEmptyAnalysis(
     wakeupChain: [],
     moduleBreakdown: [],
     anomalies,
-    summary: buildSummary(task, [], [], anomalies, 0),
-    recommendations: isRunning
-      ? ['对于 Running 状态的选区，推荐查 perf/简单采样的 callstack、CPU 占用与频率，而非 critical path。']
-      : ['确认录制配置包含 sched/sched_switch、sched/sched_wakeup、sched/sched_blocked_reason；如果只是想看整体线程链路，可改用区域选择后再分析。'],
-    warnings,
+    summary: buildSummary(task, undefined, [], anomalies, 0),
+    recommendations: [text.recommendation],
+    warnings: Array.from(new Set(warnings)),
     rawRows: 0,
     truncated: false,
+    unavailableReason: reason,
   };
 }
 
@@ -700,7 +874,14 @@ async function loadTask(
   traceId: string,
   options: CriticalPathAnalyzeOptions
 ): Promise<{primary: CriticalPathTaskInfo; slices: SliceFinding[]}> {
-  const threadStateId = normalizeIntegerSql(options.threadStateId, 'threadStateId');
+  const threadStateId = normalizeIntegerSql(
+    options.threadStateId,
+    'threadStateId',
+    'invalid_thread_state_id'
+  );
+  if (threadStateId?.startsWith('-')) {
+    throw new CriticalPathInputError('invalid_thread_state_id', 'threadStateId must be a non-negative integer');
+  }
   if (threadStateId) {
     const rows = await queryRows(
       tp,
@@ -715,29 +896,20 @@ async function loadTask(
         target.blocked_function,
         target.io_wait,
         target.cpu,
-        target.waker_id,
-        target.irq_context,
         thread.tid,
         thread.upid AS thread_upid,
         thread.name AS thread_name,
-        process.name AS process_name,
-        waker_state.utid AS waker_utid,
-        waker_state.state AS waker_state,
-        waker_thread.name AS waker_thread_name,
-        waker_process.name AS waker_process_name
+        process.name AS process_name
       FROM thread_state AS target
       LEFT JOIN thread USING(utid)
       LEFT JOIN process USING(upid)
-      LEFT JOIN thread_state AS waker_state ON target.waker_id = waker_state.id
-      LEFT JOIN thread AS waker_thread ON waker_state.utid = waker_thread.utid
-      LEFT JOIN process AS waker_process ON waker_thread.upid = waker_process.upid
       WHERE target.id = ${threadStateId}
       LIMIT 1
     `
     );
     const row = rows[0];
     if (!row) {
-      throw new Error(`thread_state ${threadStateId} not found`);
+      throw new CriticalPathInputError('thread_state_not_found', `thread_state ${threadStateId} not found`);
     }
     const dur = toNumber(row.dur);
     const startTs = toNumber(row.ts);
@@ -756,14 +928,6 @@ async function loadTask(
       cpu: toNullableNumber(row.cpu),
       threadName: toOptionalString(row.thread_name),
       processName: toOptionalString(row.process_name),
-      waker: {
-        threadStateId: toNullableNumber(row.waker_id),
-        utid: toNullableNumber(row.waker_utid),
-        threadName: toOptionalString(row.waker_thread_name),
-        processName: toOptionalString(row.waker_process_name),
-        state: toOptionalString(row.waker_state),
-        interruptContext: toBool(row.irq_context),
-      },
     };
     const slice: SliceFinding = {
       threadStateId: primary.threadStateId ?? null,
@@ -791,12 +955,15 @@ async function loadTask(
     'dur'
   );
   if (!utid || !startTsRaw || !durRaw) {
-    throw new Error('threadStateId or utid/startTs/dur is required');
+    throw new CriticalPathInputError('missing_selector', 'threadStateId or utid/startTs/dur is required');
   }
 
   const taskStart = toNumber(startTsRaw);
   const taskDur = toNumber(durRaw);
   const taskEnd = taskStart + taskDur;
+  if (taskDur <= 0) {
+    throw new CriticalPathInputError('non_positive_duration', 'Selected task duration must be positive');
+  }
 
   const threadRows = await queryRows(
     tp,
@@ -817,6 +984,8 @@ async function loadTask(
   const threadRow = threadRows[0] ?? {};
 
   // Pull all overlapping thread_state slices to drive multi-slice splitting.
+  // Half-open: a row that ends exactly at the window start (or starts exactly
+  // at its end) contributes no time and is not part of the selection.
   const sliceRows = await queryRows(
     tp,
     traceId,
@@ -824,8 +993,8 @@ async function loadTask(
     SELECT id, ts, dur, state, blocked_function, io_wait, cpu
     FROM thread_state
     WHERE utid = ${utid}
-      AND ts <= ${taskEnd}
-      AND ts + dur >= ${taskStart}
+      AND ts < ${taskEnd}
+      AND ts + dur > ${taskStart}
     ORDER BY ts ASC
   `
   );
@@ -849,12 +1018,10 @@ async function loadTask(
     };
   });
 
-  // Pick a representative state for the primary task summary — the one that
-  // covers the largest fraction of the selected window.
-  const dominant = slices.reduce<SliceFinding | null>((best, slice) => {
-    if (!best || slice.durationMs > best.durationMs) return slice;
-    return best;
-  }, null);
+  // The task summary describes the longest waiting slice: that is what the
+  // wait chain explains. A window without waiting time falls back to its
+  // longest slice so the unavailable result still names the state it saw.
+  const dominant = longestWaitingSlice(slices) ?? longestSlice(slices);
 
   const primary: CriticalPathTaskInfo = {
     utid: toNumber(utid),
@@ -874,6 +1041,59 @@ async function loadTask(
   return {primary, slices};
 }
 
+const WAITING_KINDS: ReadonlySet<SliceKind> = new Set<SliceKind>(['sleeping', 'uninterruptible', 'runnable']);
+
+/** The longest slice `keep` accepts (the earliest wins a tie), or null. */
+function longestSlice(
+  slices: SliceFinding[],
+  keep: (slice: SliceFinding) => boolean = () => true
+): SliceFinding | null {
+  const length = (slice: SliceFinding): number => slice.endTs - slice.startTs;
+  return slices.reduce<SliceFinding | null>(
+    (best, slice) => (keep(slice) && (!best || length(slice) > length(best)) ? slice : best),
+    null
+  );
+}
+
+/** The longest S/D/DK/R/R+ slice, or null when the slices hold no waiting time. */
+function longestWaitingSlice(slices: SliceFinding[]): SliceFinding | null {
+  return longestSlice(slices, (slice) => WAITING_KINDS.has(slice.kind) && slice.endTs > slice.startTs);
+}
+
+const RANGE_WAKER_HINT = 'resolved for the longest waiting slice in the window';
+
+// L2 — the one waker resolution. Thread-state-id mode resolves the selected
+// row; range mode resolves the longest waiting slice. Returns null when there
+// is no row to resolve.
+async function resolveTaskWaker(
+  tp: TraceProcessorService,
+  traceId: string,
+  task: CriticalPathTaskInfo,
+  slices: SliceFinding[]
+): Promise<WakerChainResult | null> {
+  if (typeof task.threadStateId === 'number') {
+    return resolveDirectWaker(tp, traceId, {threadStateId: task.threadStateId});
+  }
+  const dominantWait = longestWaitingSlice(slices);
+  if (dominantWait?.threadStateId === null || dominantWait?.threadStateId === undefined) return null;
+  const result = await resolveDirectWaker(tp, traceId, {threadStateId: dominantWait.threadStateId});
+  if (result.hop) result.hop.hints.push(RANGE_WAKER_HINT);
+  return result;
+}
+
+// `task.waker` predates `directWaker`; it is derived from the same hop so the
+// two can never disagree.
+function taskWakerOf(hop: WakerHop | null): NonNullable<CriticalPathTaskInfo['waker']> {
+  return {
+    threadStateId: hop?.threadStateId ?? null,
+    utid: hop?.utid ?? null,
+    threadName: hop?.threadName ?? null,
+    processName: hop?.processName ?? null,
+    state: hop?.state ?? null,
+    interruptContext: hop ? hop.irqContext : null,
+  };
+}
+
 // Shared budget counter — passed by reference so parallel sibling fetches
 // at the same recursion level see each other's increments.
 interface BudgetRef {
@@ -884,7 +1104,12 @@ interface RecursionContext {
   visited: Set<string>;
   depthLimit: number;
   segmentBudget: number;
+  // Counts child segments produced by recursion only; the top-level chain is
+  // not charged, so a long chain still recurses.
   budget: BudgetRef;
+  // The analysis' own warning list, shared across levels; skipped or failed
+  // expansions are reported, never silent.
+  warnings: string[];
 }
 
 async function fetchCriticalPathStack(
@@ -900,20 +1125,18 @@ async function fetchCriticalPathStack(
     traceId,
     `
     SELECT
-      cr.id,
       cr.ts,
       cr.dur,
       cr.utid,
-      cr.stack_depth,
       cr.name,
       cr.table_name,
-      cr.root_utid,
       thread.name AS thread_name,
       process.name AS process_name
-    FROM _critical_path_stack(${Math.trunc(utid)}, ${Math.trunc(startTs)}, ${Math.trunc(dur)}, 1, 1, 1, 1) AS cr
+    FROM _critical_path_stack(${Math.trunc(utid)}, ${Math.trunc(startTs)}, ${Math.trunc(dur)}, 1, 1, 0, 1) AS cr
     LEFT JOIN thread USING(utid)
     LEFT JOIN process USING(upid)
     WHERE cr.name IS NOT NULL
+      AND cr.utid != cr.root_utid
     ORDER BY cr.ts ASC, cr.stack_depth ASC, cr.utid ASC
     LIMIT ${Math.trunc(maxRows) + 1}
   `
@@ -937,7 +1160,12 @@ function pickRecursionTargets(
     if (segment.durationMs < 4) break;
     const key = `${segment.utid}|${segment.startTs}|${segment.dur}`;
     if (ctx.visited.has(key)) continue;
-    if (ctx.budget.consumed >= ctx.segmentBudget) break;
+    if (ctx.budget.consumed >= ctx.segmentBudget) {
+      ctx.warnings.push(
+        `critical path recursion stopped at the segment budget (${ctx.segmentBudget}); some long segments were not expanded`
+      );
+      break;
+    }
     picks.push(segment);
   }
   return picks;
@@ -946,7 +1174,6 @@ function pickRecursionTargets(
 async function recurseCriticalPath(
   tp: TraceProcessorService,
   traceId: string,
-  task: CriticalPathTaskInfo,
   segments: CriticalPathSegment[],
   ctx: RecursionContext,
   maxRowsPerCall: number
@@ -964,7 +1191,11 @@ async function recurseCriticalPath(
     targets.map((target) =>
       fetchCriticalPathStack(tp, traceId, target.utid, target.startTs, target.dur, maxRowsPerCall).then(
         (stack) => ({target, stack}),
-        () => ({target, stack: null})
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
+          ctx.warnings.push(`critical path recursion failed for utid ${target.utid}: ${message}`);
+          return {target, stack: null};
+        }
       )
     )
   );
@@ -990,20 +1221,19 @@ async function recurseCriticalPath(
     target.recursionDepth = (target.recursionDepth ?? 0) + 1;
     ctx.budget.consumed += children.length;
 
-    if (ctx.budget.consumed < ctx.segmentBudget) {
-      const subCtx: RecursionContext = {
-        visited: ctx.visited,
-        depthLimit: ctx.depthLimit - 1,
-        segmentBudget: ctx.segmentBudget,
-        budget: ctx.budget,
-      };
-      recursionFollowups.push(
-        recurseCriticalPath(tp, traceId, childTask, children, subCtx, maxRowsPerCall)
-      );
-    }
+    // The next level checks the budget itself, so an exhausted budget is
+    // reported there rather than silently skipped here.
+    recursionFollowups.push(
+      recurseCriticalPath(tp, traceId, children, {...ctx, depthLimit: ctx.depthLimit - 1}, maxRowsPerCall)
+    );
   }
 
   await Promise.all(recursionFollowups);
+}
+
+/** The segment's entity + window, in the shape `segmentKeyOf` and L3 inputs use. */
+function segmentWindow(segment: CriticalPathSegment): {utid: number; startTs: number; endTs: number} {
+  return {utid: segment.utid, startTs: segment.startTs, endTs: segment.startTs + segment.dur};
 }
 
 function applySemanticsToSegments(
@@ -1011,15 +1241,13 @@ function applySemanticsToSegments(
   semantics: Map<string, SegmentSemantics>
 ): void {
   for (const segment of segments) {
-    const key = `${segment.utid}|${segment.startTs}|${segment.startTs + segment.dur}`;
-    const sem = semantics.get(key);
+    const sem = semantics.get(segmentKeyOf(segmentWindow(segment)));
     if (!sem) continue;
     segment.semantics = sem;
-    const semModules = modulesFromSemantics(sem);
+    const semModules = modulesFromSemantics(segment);
     if (semModules.length > 0) {
-      // Replace text-based modules with stdlib-derived ones; merge text as
-      // a secondary signal.
-      segment.modules = Array.from(new Set([...semModules, ...segment.modules]));
+      // A stdlib signal replaces the keyword fallback outright.
+      segment.modules = semModules;
     }
     // Push concrete reasons from semantics.
     for (const txn of sem.binderTxns.slice(0, 2)) {
@@ -1052,76 +1280,89 @@ export async function analyzeCriticalPath(
   const warnings: string[] = [];
 
   if (task.dur <= 0) {
-    throw new Error('Selected task duration must be positive');
+    throw new CriticalPathInputError('non_positive_duration', 'Selected task duration must be positive');
   }
 
-  // L1 dispatch: Running state has no wait chain.
-  if (task.state === 'Running' || (slices.length === 1 && slices[0].kind === 'running')) {
-    return {
-      ...buildEmptyAnalysis(task, warnings, 'task_state_running'),
-      slices,
-    };
+  // L1 dispatch on waiting time, not on the longest slice: a window whose
+  // longest slice is Running can still spend most of its time waiting.
+  if (typeof task.threadStateId === 'number') {
+    if (slices.every((slice) => slice.kind === 'running')) {
+      return {...buildEmptyAnalysis(task, warnings, 'task_state_running'), slices};
+    }
+  } else if (longestWaitingSlice(slices) === null) {
+    return {...buildEmptyAnalysis(task, warnings, 'no_waiting_time'), slices};
   }
 
-  await traceProcessorService.query(
-    traceId,
-    'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;'
+  // L2 — direct waker, resolved before the stack so an empty chain still
+  // reports who woke the task.
+  const wakerResult = await resolveTaskWaker(traceProcessorService, traceId, task, slices);
+  const directWaker = wakerResult?.hop ?? null;
+  if (wakerResult) {
+    task.waker = taskWakerOf(wakerResult.hop);
+    warnings.push(...wakerResult.warnings);
+  }
+
+  assertQuerySucceeded(
+    await traceProcessorService.query(
+      traceId,
+      'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;'
+    )
   );
 
+  // Self rows are excluded in SQL (enable_self_slice = 0 and the root filter),
+  // so the row limit counts only rows that describe external segments.
+  const maxRows = maxSegments * 20;
   const stack = await fetchCriticalPathStack(
     traceProcessorService,
     traceId,
     task.utid,
     task.startTs,
     task.dur,
-    maxSegments * 20
+    maxRows
   );
+
+  // `chain` is the whole merged chain: totals, breakdown, anomalies and the
+  // counterfactual are computed on it. `segments` is the displayed prefix.
+  const chain = mergeAdjacentSegments(buildSegments(stack.rows, task));
+  const segments = chain.slice(0, maxSegments);
+  const truncated = stack.truncated || chain.length > maxSegments;
   if (stack.truncated) {
-    warnings.push(`critical path 结果较大，已按前 ${maxSegments} 个链路段截断展示。`);
+    warnings.push(
+      `critical path 结果超过 ${maxRows} 行上限，已截断为前 ${chain.length} 个链路段（展示前 ${segments.length} 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。`
+    );
+  } else if (chain.length > maxSegments) {
+    warnings.push(
+      `critical path 共 ${chain.length} 个链路段，仅展示前 ${segments.length} 个；阻塞时长、模块占比与反事实估计按完整链路计算。`
+    );
   }
 
-  const segments = mergeAdjacentSegments(buildSegments(stack.rows, task)).slice(0, maxSegments);
   if (segments.length === 0) {
     return {
       ...buildEmptyAnalysis(task, warnings, 'no_critical_path_stack'),
       slices,
+      directWaker,
     };
   }
 
-  // L2 + L4 run in parallel — neither depends on the other's result. The
-  // waker query reads `target.waker_id` from a single thread_state row, while
-  // recursion fans out into _critical_path_stack calls on external segments.
-  const wakerPromise =
-    typeof task.threadStateId === 'number'
-      ? resolveDirectWaker(traceProcessorService, traceId, {threadStateId: task.threadStateId})
-      : Promise.resolve(null);
-
-  const recursionPromise =
-    recursionEnabled && recursionDepth > 0
-      ? recurseCriticalPath(
-          traceProcessorService,
-          traceId,
-          task,
-          segments,
-          {
-            visited: new Set([`${task.utid}|${task.startTs}|${task.dur}`]),
-            depthLimit: recursionDepth,
-            segmentBudget,
-            budget: {consumed: segments.length},
-          },
-          maxSegments * 5
-        )
-      : Promise.resolve();
-
-  const [wakerResult] = await Promise.all([wakerPromise, recursionPromise]);
-
-  let directWaker: WakerHop | null = null;
-  if (wakerResult) {
-    directWaker = wakerResult.hop;
-    warnings.push(...wakerResult.warnings);
+  // L4 — recursion fans out into _critical_path_stack calls on external segments.
+  if (recursionEnabled && recursionDepth > 0) {
+    await recurseCriticalPath(
+      traceProcessorService,
+      traceId,
+      segments,
+      {
+        visited: new Set([`${task.utid}|${task.startTs}|${task.dur}`]),
+        depthLimit: recursionDepth,
+        segmentBudget,
+        budget: {consumed: 0},
+        warnings,
+      },
+      maxSegments * 5
+    );
   }
 
-  // L3 — Semantic enrichment for ALL segments (top-level + recursed children).
+  // L3 — Semantic enrichment for ALL segments (whole top-level chain +
+  // recursed children of the displayed prefix).
   const flatSegments: CriticalPathSegment[] = [];
   const collectFlat = (list: CriticalPathSegment[]): void => {
     for (const segment of list) {
@@ -1129,13 +1370,14 @@ export async function analyzeCriticalPath(
       if (segment.children) collectFlat(segment.children);
     }
   };
-  collectFlat(segments);
+  collectFlat(chain);
 
   // Batch the tid/upid lookup into a single SQL query (replaces the previous
   // per-segment N+1 SELECT). All segments needing resolution share one round trip.
   const segmentsNeedingThreadInfo = flatSegments.filter(
     (segment) => segment.tid === null || segment.tid === undefined || segment.upid === null || segment.upid === undefined
   );
+  let threadLookupFailed = false;
   if (segmentsNeedingThreadInfo.length > 0) {
     const utidSet = new Set(segmentsNeedingThreadInfo.map((segment) => segment.utid));
     const utidList = Array.from(utidSet).join(', ');
@@ -1162,61 +1404,55 @@ export async function analyzeCriticalPath(
         }
       }
     } catch {
-      // best-effort: leave tid/upid null and let downstream tolerate it
+      // tid/upid stay null. Without upids an empty GC result would read as
+      // "no GC", so L3 reports the GC source as not checked instead.
+      threadLookupFailed = true;
+      warnings.push('thread tid/upid lookup failed; GC evidence not checked');
     }
   }
 
   const semanticInputs: SemanticSegmentInput[] = flatSegments.map((segment) => ({
-    utid: segment.utid,
+    ...segmentWindow(segment),
     tid: segment.tid ?? null,
     upid: segment.upid ?? null,
-    startTs: segment.startTs,
-    endTs: segment.startTs + segment.dur,
     state: segment.state ?? null,
   }));
 
-  const semantics = await enrichSegmentsWithSemantics(
+  const enrichment = await enrichSegmentsWithSemantics(
     traceProcessorService,
     traceId,
-    semanticInputs
+    semanticInputs,
+    {threadLookupFailed}
   );
-  applySemanticsToSegments(flatSegments, semantics);
+  applySemanticsToSegments(flatSegments, enrichment.segments);
+  warnings.push(...enrichment.warnings);
 
   const blockingMs =
-    Math.round(segments.reduce((sum, segment) => sum + segment.durationMs, 0) * 100) / 100;
+    Math.round(chain.reduce((sum, segment) => sum + segment.durationMs, 0) * 100) / 100;
   const selfMs = Math.max(0, Math.round((task.durationMs - blockingMs) * 100) / 100);
-  const moduleBreakdown = buildModuleBreakdown(segments, task.durationMs);
-  const anomalies = buildAnomalies(task, segments, moduleBreakdown, blockingMs);
-  const recommendations = buildRecommendations(anomalies, moduleBreakdown);
+  const moduleBreakdown = buildModuleBreakdown(chain, task.durationMs);
+  const signals = collectChainSignals(chain);
+  const longest = longestSegment(chain);
+  const anomalies = buildAnomalies(task, longest, signals, blockingMs);
+  const recommendations = buildRecommendations(anomalies, moduleBreakdown, signals);
 
   // L5 — Quantification.
   const quantification = await quantifyCriticalPath(
     traceProcessorService,
     traceId,
     {
-      utid: task.utid,
       upid: task.upid ?? null,
       startTs: task.startTs,
       endTs: task.startTs + task.dur,
       durMs: task.durationMs,
     },
-    segments.map((segment): QuantifySegmentInput => ({
-      segmentKey: `${segment.utid}|${segment.startTs}|${segment.startTs + segment.dur}`,
+    chain.map((segment): QuantifySegmentInput => ({
+      segmentKey: segmentKeyOf(segmentWindow(segment)),
       durMs: segment.durationMs,
     })),
     flatSegments.map((segment) => segment.semantics).filter((sem): sem is SegmentSemantics => sem !== undefined)
   );
   warnings.push(...quantification.warnings);
-
-  // Per-source status is identical across every segment (set once globally
-  // by enrichSegmentsWithSemantics), so a single read suffices.
-  const semanticSources: Record<string, SemanticSourceStatus> = {};
-  const firstSemantic = semantics.values().next().value;
-  if (firstSemantic) {
-    for (const [source, status] of Object.entries(firstSemantic.sources)) {
-      semanticSources[source] = status;
-    }
-  }
 
   return {
     available: true,
@@ -1228,14 +1464,14 @@ export async function analyzeCriticalPath(
     wakeupChain: segments,
     moduleBreakdown,
     anomalies,
-    summary: buildSummary(task, segments, moduleBreakdown, anomalies, blockingMs),
+    summary: buildSummary(task, longest, moduleBreakdown, anomalies, blockingMs),
     recommendations,
-    warnings,
+    warnings: Array.from(new Set(warnings)),
     rawRows: stack.raw,
-    truncated: stack.truncated,
+    truncated,
     slices,
     directWaker,
     quantification,
-    semanticSources,
+    semanticSources: enrichment.sources,
   };
 }

@@ -4,9 +4,9 @@
 
 // Shared coercion helpers for trace_processor query result handling.
 // Multiple services (criticalPathSemantics, criticalPathWakerChain,
-// criticalPathQuantify, criticalPathAnalyzer, perfettoSqlSkill,
-// flamegraphAnalyzer, ...) had hand-rolled byte-identical clones — this
-// module centralizes them.
+// criticalPathQuantify, criticalPathAnalyzer, perfettoSqlSkill, ...) had
+// hand-rolled byte-identical clones — this module centralizes them.
+// flamegraphAnalyzer still carries a private, non-throwing copy.
 
 import type {QueryResult, TraceProcessorService} from '../services/traceProcessorService';
 
@@ -24,13 +24,23 @@ export function rowsToObjects(result: QueryResult): QueryRow[] {
   return result.rows.map((row) => rowObject(result.columns, row));
 }
 
+/**
+ * `TraceProcessorService.query` reports a failed statement in `result.error`
+ * instead of throwing. A caller whose status, warnings or gates depend on
+ * seeing that failure must pass the result through here, or a broken query
+ * reads as an empty result.
+ */
+export function assertQuerySucceeded(result: QueryResult): QueryResult {
+  if (result.error) throw new Error(result.error);
+  return result;
+}
+
 export async function queryRows(
   tp: TraceProcessorService,
   traceId: string,
   sql: string
 ): Promise<QueryRow[]> {
-  const result = await tp.query(traceId, sql);
-  return rowsToObjects(result);
+  return rowsToObjects(assertQuerySucceeded(await tp.query(traceId, sql)));
 }
 
 export function toNumber(value: unknown, fallback = 0): number {

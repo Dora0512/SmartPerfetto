@@ -496,7 +496,10 @@ list/edit/activate/runtime switching, and deterministic Skills that do not call
 an LLM. Blocked: agent analyze/resume, cold scene reconstruction start,
 Provider connection tests, `smp provider test`, `smp capture android --analyze`,
 and LLM Skill steps. Blocked responses include `code: "AI_DISABLED"` and
-`retryable: false`.
+`retryable: false`. Degraded rather than blocked: the Critical path wait-chain
+analysis still returns, and its AI summary (feature `critical_path_ai_summary`)
+falls back to the deterministic rule summary, reported through
+`aiSummary.fallbackReason: "ai_disabled"` and `aiSummary.warnings`.
 
 ## Budgets and Timeouts
 

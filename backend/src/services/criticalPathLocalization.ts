@@ -36,6 +36,7 @@ const TITLE_EN = new Map<string, string>([
   ['存在调度或 CPU 竞争迹象', 'Scheduling or CPU contention is indicated'],
   ['未发现明显异常', 'No clear anomaly was found'],
   ['Running 状态：无等待链可分析', 'Running state: no wait chain to analyze'],
+  ['选区内没有等待时间', 'The selection contains no waiting time'],
   ['没有取到 critical path 等待链', 'No critical-path wait chain was found'],
 ]);
 
@@ -73,6 +74,10 @@ const RECOMMENDATION_EN = new Map<string, string>([
     'For a Running selection, inspect sampled call stacks, CPU utilization, and frequency instead of a critical path.',
   ],
   [
+    '选区内没有等待状态；推荐查采样 callstack、CPU 占用与频率，而非 critical path。',
+    'The selection has no waiting state; inspect sampled call stacks, CPU utilization, and frequency instead of a critical path.',
+  ],
+  [
     '确认录制配置包含 sched/sched_switch、sched/sched_wakeup、sched/sched_blocked_reason；如果只是想看整体线程链路，可改用区域选择后再分析。',
     'Ensure the trace includes sched/sched_switch, sched/sched_wakeup, and sched/sched_blocked_reason; use a range selection to inspect an overall thread chain.',
   ],
@@ -99,29 +104,48 @@ function projectReason(
   return REASON_ZH.get(value) ?? value;
 }
 
+// The analyzer writes its own truncation warnings in Chinese; English output
+// rewrites them.
+const WARNING_EN: Array<[RegExp, string]> = [
+  [
+    /^critical path 结果超过 (\d+) 行上限，已截断为前 (\d+) 个链路段（展示前 (\d+) 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。$/u,
+    'The critical-path result exceeded the $1-row limit and was cut to the first $2 chain segments ($3 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
+  ],
+  [
+    /^critical path 共 (\d+) 个链路段，仅展示前 (\d+) 个；阻塞时长、模块占比与反事实估计按完整链路计算。$/u,
+    'The critical path has $1 chain segments; only the first $2 are shown. Blocking time, module shares and the counterfactual cover the full chain.',
+  ],
+];
+
+// Technical warnings and waker hints are written in English; Chinese output
+// rewrites them.
+const WARNING_ZH: Array<[RegExp, string]> = [
+  [/^invalid threadStateId$/u, '无效的 threadStateId'],
+  [/^waker query failed:/u, 'waker 查询失败：'],
+  [/^thread_state (.+) not found$/u, '未找到 thread_state $1'],
+  [/^no recorded waker on the wakeup row \(waker_utid is NULL\)$/u, '唤醒行上没有记录 waker（waker_utid 为 NULL）'],
+  [/^frames\.timeline include failed:/u, '加载 frames.timeline 失败：'],
+  [/^frame timeline query failed:/u, 'frame timeline 查询失败：'],
+  [/^stdlib table missing:/u, '缺少 stdlib 表：'],
+  [/^schema mismatch:/u, 'schema 不匹配：'],
+  [/^query failed:/u, '查询失败：'],
+  [/^INCLUDE (.+) failed$/u, '加载模块 $1 失败'],
+  [
+    /^critical path recursion stopped at the segment budget \((\d+)\); some long segments were not expanded$/u,
+    'critical path 递归已达到段预算（$1），部分长链路段未展开',
+  ],
+  [/^critical path recursion failed for utid (\d+):/u, 'critical path 递归查询 utid $1 失败：'],
+  [/^thread tid\/upid lookup failed; GC evidence not checked$/u, '线程 tid/upid 查询失败；未检查 GC 证据'],
+  [/^woken in IRQ context \(irq_context=1 on the wakeup row\)$/u, '在 IRQ 上下文中被唤醒（唤醒行 irq_context=1）'],
+  [/^woken by idle\/swapper — no upstream wait chain to chase$/u, '由 idle/swapper 唤醒——没有更上游的等待链可追'],
+  [/^resolved for the longest waiting slice in the window$/u, '按选区内最长的等待 slice 解析'],
+];
+
 function projectWarning(
   value: string,
   outputLanguage: OutputLanguage,
 ): string {
-  if (outputLanguage === 'en') {
-    return value.replace(
-      /^critical path 结果较大，已按前 (\d+) 个链路段截断展示。$/,
-      'The critical-path result is large and was truncated to the first $1 chain segments.',
-    );
-  }
-
-  const rules: Array<[RegExp, string]> = [
-    [/^invalid threadStateId$/u, '无效的 threadStateId'],
-    [/^waker query failed:/u, 'waker 查询失败：'],
-    [/^thread_state (.+) not found$/u, '未找到 thread_state $1'],
-    [/^no recorded waker \(waker_id is NULL\)$/u, '没有记录 waker（waker_id 为 NULL）'],
-    [/^frames\.timeline include failed:/u, '加载 frames.timeline 失败：'],
-    [/^frame timeline query failed:/u, 'frame timeline 查询失败：'],
-    [/^stdlib table missing:/u, '缺少 stdlib 表：'],
-    [/^schema mismatch:/u, 'schema 不匹配：'],
-    [/^query failed:/u, '查询失败：'],
-    [/^INCLUDE (.+) failed$/u, '加载模块 $1 失败'],
-  ];
+  const rules = outputLanguage === 'en' ? WARNING_EN : WARNING_ZH;
   for (const [pattern, replacement] of rules) {
     if (pattern.test(value)) return value.replace(pattern, replacement);
   }
@@ -156,11 +180,14 @@ function translateDetail(value: string): string {
   if (value.startsWith('ART / GC 在 critical path 中累计')) {
     return `ART / GC contributes ${number(0)} ms on the critical path and may block mutators.`;
   }
-  if (value.startsWith('critical path 中出现 Runnable/Running/CPU')) {
-    return 'The critical path contains Runnable, Running, or CPU-related segments. Inspect CPU tracks for high-priority threads, RT threads, or big-core contention at the same time.';
+  if (value.startsWith('可运行段等待 CPU 期间')) {
+    return `While runnable segments waited for a CPU, other threads ran on the same CPU for ${number(0)} ms. Check CPU tracks for high-priority threads, RT threads, or big-core contention.`;
   }
   if (value.startsWith('从 critical path 结果看')) {
     return 'The critical path shows no long external wait, I/O wait, long Binder wait, or clear CPU-contention signal.';
+  }
+  if (value.startsWith('选中区间内该线程没有')) {
+    return 'The thread has no Sleeping, Uninterruptible, or Runnable time in the selected range, so there is no wait chain to analyze. Inspect sampled call stacks, the slice tree, or CPU utilization at the same time.';
   }
   if (value.startsWith('选中 task 的 thread_state 是 Running')) {
     return 'The selected task is Running, so there is no wait chain to analyze. Inspect sampled call stacks, the slice tree, or CPU utilization at the same time.';
@@ -233,6 +260,17 @@ function englishSummary(analysis: CriticalPathAnalysis): string {
   return lines.join('\n');
 }
 
+function projectDirectWaker(
+  directWaker: CriticalPathAnalysis['directWaker'],
+  outputLanguage: OutputLanguage,
+): CriticalPathAnalysis['directWaker'] {
+  if (!directWaker) return directWaker;
+  return {
+    ...directWaker,
+    hints: directWaker.hints.map(hint => projectWarning(hint, outputLanguage)),
+  };
+}
+
 export function projectCriticalPathAnalysis(
   analysis: CriticalPathAnalysis,
   outputLanguage: OutputLanguage,
@@ -246,6 +284,7 @@ export function projectCriticalPathAnalysis(
       warnings: analysis.warnings.map(value =>
         projectWarning(value, outputLanguage),
       ),
+      directWaker: projectDirectWaker(analysis.directWaker, outputLanguage),
     };
   }
   return {

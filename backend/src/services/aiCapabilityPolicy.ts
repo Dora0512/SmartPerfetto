@@ -21,7 +21,8 @@ export type AiCapabilityFeature =
   | 'cli_provider_test'
   | 'capture_analyze'
   | 'llm_skill_step'
-  | 'background_review_agent';
+  | 'background_review_agent'
+  | 'critical_path_ai_summary';
 
 export interface AiCapabilityPolicyV1 {
   schemaVersion: 1;
@@ -63,6 +64,7 @@ export const AI_CAPABILITY_BLOCKED_FEATURES: readonly AiCapabilityFeature[] = [
   'capture_analyze',
   'llm_skill_step',
   'background_review_agent',
+  'critical_path_ai_summary',
 ] as const;
 
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on', 'enabled']);

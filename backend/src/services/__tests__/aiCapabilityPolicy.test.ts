@@ -21,6 +21,7 @@ describe('aiCapabilityPolicy', () => {
     });
     expect(policy.blockedFeatures).toEqual([]);
     expect(isAiFeatureEnabled('agent_analyze', policy)).toBe(true);
+    expect(isAiFeatureEnabled('critical_path_ai_summary', policy)).toBe(true);
   });
 
   test.each(['1', 'true', 'yes', 'on', 'enabled', ' TRUE '])(
@@ -55,6 +56,7 @@ describe('aiCapabilityPolicy', () => {
       expect(isAiFeatureEnabled('invoke_deterministic_skill', policy)).toBe(true);
       expect(isAiFeatureEnabled('agent_analyze', policy)).toBe(false);
       expect(isAiFeatureEnabled('llm_skill_step', policy)).toBe(false);
+      expect(isAiFeatureEnabled('critical_path_ai_summary', policy)).toBe(false);
     },
   );
 

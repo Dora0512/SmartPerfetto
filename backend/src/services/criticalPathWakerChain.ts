@@ -13,6 +13,7 @@
 // single-hop annotator.
 
 import {
+  assertQuerySucceeded,
   rowObject,
   toBool,
   toNullableNumber,
@@ -59,13 +60,21 @@ export interface ResolveWakerOptions {
   threadStateId: number;
 }
 
+const IRQ_WAKEUP_HINT = 'woken in IRQ context (irq_context=1 on the wakeup row)';
+
 /**
  * Resolve the direct waker for a given thread_state row id. Returns a single
  * hop (NOT a recursive chain) annotated with IRQ/swapper context.
  *
+ * Perfetto records `waker_utid`, `waker_id` and `irq_context` on the first
+ * R/R+ row after a sleep, never on the S/D row itself. A waiting row is
+ * therefore resolved through its successor at `ts + dur` (same join and MAX
+ * collapse as blocking_chain_analysis.skill.yaml); a selected R/R+ row is the
+ * wakeup row and is read directly.
+ *
  * Failure modes:
  *  - thread_state row missing → available=false, warning
- *  - waker_id is NULL (no recorded waker) → available=true, hop=null
+ *  - wakeup row carries no waker_utid (no recorded waker) → available=true, hop=null
  *  - SQL error → available=false, warning
  */
 export async function resolveDirectWaker(
@@ -79,30 +88,48 @@ export async function resolveDirectWaker(
   }
 
   const sql = `
+    WITH target AS (
+      SELECT id, ts, dur, utid, state, waker_utid, waker_id, irq_context
+      FROM thread_state
+      WHERE id = ${Math.trunc(threadStateId)}
+    ),
+    wake AS (
+      SELECT
+        target.id AS target_id,
+        target.ts AS target_ts,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_utid ELSE MAX(nxt.waker_utid) END AS waker_utid,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_id ELSE MAX(nxt.waker_id) END AS waker_id,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.irq_context ELSE MAX(nxt.irq_context) END AS irq_context
+      FROM target
+      LEFT JOIN thread_state AS nxt
+        ON target.state NOT IN ('R', 'R+')
+       AND nxt.utid = target.utid
+       AND nxt.ts = target.ts + target.dur
+       AND nxt.state IN ('R', 'R+')
+       AND nxt.waker_utid IS NOT NULL
+      GROUP BY target.id
+    )
     SELECT
-      target.id AS target_id,
-      target.ts AS target_ts,
-      target.waker_id,
-      target.irq_context AS target_irq_context,
-      waker.id AS waker_id_resolved,
-      waker.utid AS waker_utid,
+      wake.target_id,
+      wake.target_ts,
+      wake.waker_utid,
+      wake.waker_id,
+      wake.irq_context,
       waker.state AS waker_state,
       waker.cpu AS waker_cpu,
-      waker.irq_context AS waker_irq_context,
       thread.tid AS waker_tid,
       thread.name AS waker_thread_name,
       process.name AS waker_process_name
-    FROM thread_state AS target
-    LEFT JOIN thread_state AS waker ON target.waker_id = waker.id
-    LEFT JOIN thread ON waker.utid = thread.utid
-    LEFT JOIN process ON thread.upid = process.upid
-    WHERE target.id = ${Math.trunc(threadStateId)}
+    FROM wake
+    LEFT JOIN thread_state AS waker ON waker.id = wake.waker_id
+    LEFT JOIN thread ON thread.utid = wake.waker_utid
+    LEFT JOIN process ON process.upid = thread.upid
     LIMIT 1
   `;
 
   let result;
   try {
-    result = await tp.query(traceId, sql);
+    result = assertQuerySucceeded(await tp.query(traceId, sql));
   } catch (error: unknown) {
     return {
       available: false,
@@ -120,13 +147,15 @@ export async function resolveDirectWaker(
   }
 
   const row = rowObject(result.columns, result.rows[0]);
-  const wakerIdRaw = toNullableNumber(row.waker_id);
-  const targetIrq = toBool(row.target_irq_context) === true;
+  const wakerUtid = toNullableNumber(row.waker_utid);
+  // IRQ context is a property of the wakeup event, so it is read from the
+  // wakeup row only — never from the waker's own thread_state row.
+  const irqContext = toBool(row.irq_context) === true;
 
   // No waker recorded — common when thread_state was scheduled by self-yield
-  // or when waker_id wasn't captured.
-  if (wakerIdRaw === null || row.waker_id_resolved === null || row.waker_id_resolved === undefined) {
-    if (targetIrq) {
+  // or when the wakeup wasn't captured.
+  if (wakerUtid === null) {
+    if (irqContext) {
       return {
         available: true,
         hop: {
@@ -139,7 +168,7 @@ export async function resolveDirectWaker(
           cpu: null,
           irqContext: true,
           kind: 'irq',
-          hints: ['target slice was scheduled in IRQ context (target.irq_context=1)'],
+          hints: [IRQ_WAKEUP_HINT],
         },
         warnings: [],
       };
@@ -147,31 +176,29 @@ export async function resolveDirectWaker(
     return {
       available: true,
       hop: null,
-      warnings: ['no recorded waker (waker_id is NULL)'],
+      warnings: ['no recorded waker on the wakeup row (waker_utid is NULL)'],
     };
   }
 
   const wakerThreadName = toOptionalString(row.waker_thread_name);
   const wakerTid = toNullableNumber(row.waker_tid);
-  const wakerIrq = toBool(row.waker_irq_context) === true;
-  const kind = classifyWaker(wakerThreadName, wakerTid, wakerIrq || targetIrq);
+  const kind = classifyWaker(wakerThreadName, wakerTid, irqContext);
 
   const hints: string[] = [];
-  if (targetIrq) hints.push('target was woken in IRQ context');
-  if (wakerIrq) hints.push('waker itself was running in IRQ context');
+  if (irqContext) hints.push(IRQ_WAKEUP_HINT);
   if (kind === 'swapper') hints.push('woken by idle/swapper — no upstream wait chain to chase');
 
   return {
     available: true,
     hop: {
-      threadStateId: toNullableNumber(row.waker_id_resolved),
-      utid: toNullableNumber(row.waker_utid),
+      threadStateId: toNullableNumber(row.waker_id),
+      utid: wakerUtid,
       tid: wakerTid,
       threadName: wakerThreadName,
       processName: toOptionalString(row.waker_process_name),
       state: toOptionalString(row.waker_state),
       cpu: toNullableNumber(row.waker_cpu),
-      irqContext: wakerIrq || targetIrq,
+      irqContext,
       kind,
       hints,
     },

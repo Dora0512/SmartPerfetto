@@ -4,14 +4,22 @@
 
 import express from 'express';
 import {z} from 'zod';
-import {localize, parseOutputLanguage} from '../agentv3/outputLanguage';
+import {requireRequestContext} from '../middleware/auth';
+import {localize, type OutputLanguage, parseOutputLanguage} from '../agentv3/outputLanguage';
 import {summarizeCriticalPathWithAi} from '../services/criticalPathAiSummary';
-import {analyzeCriticalPath, type CriticalPathAnalyzeOptions} from '../services/criticalPathAnalyzer';
+import {
+  analyzeCriticalPath,
+  CriticalPathInputError,
+  type CriticalPathAnalyzeOptions,
+  type CriticalPathInputErrorCode,
+} from '../services/criticalPathAnalyzer';
 import {projectCriticalPathAnalysis} from '../services/criticalPathLocalization';
+import {sendResourceNotFound} from '../services/resourceOwnership';
+import {isSafeTraceId, readTraceMetadataForContext} from '../services/traceMetadataStore';
 import {getTraceProcessorService} from '../services/traceProcessorService';
+import {clientDisconnectSignal} from './clientDisconnect';
 
 const router = express.Router();
-const traceProcessorService = getTraceProcessorService();
 
 // Codex P1-5: this route does NOT pass through agentRoutes' explicit whitelist,
 // so input validation has to live here. zod gives us a clamped, schema-checked
@@ -36,13 +44,48 @@ const AnalyzeBodySchema = z.object({
   outputLanguage: z.enum(['zh-CN', 'en']).optional(),
 });
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
+/**
+ * Caller-input failures the engine reports. They become 4xx bodies carrying
+ * the code; every other failure stays an opaque 500.
+ */
+// `satisfies` makes a code the engine adds without a status here a type error.
+const CRITICAL_PATH_INPUT_ERROR_STATUS = {
+  invalid_thread_state_id: 400,
+  thread_state_not_found: 404,
+  missing_selector: 400,
+  non_positive_duration: 400,
+  invalid_integer: 400,
+} satisfies Record<CriticalPathInputErrorCode, 400 | 404>;
+
+function inputErrorMessage(code: CriticalPathInputErrorCode, language: OutputLanguage): string {
+  switch (code) {
+    case 'invalid_thread_state_id':
+      return localize(language, 'threadStateId 无效', 'threadStateId is invalid');
+    case 'thread_state_not_found':
+      return localize(
+        language,
+        '该 Trace 中找不到选中的 thread_state',
+        'The selected thread_state was not found in this trace',
+      );
+    case 'missing_selector':
+      return localize(
+        language,
+        '必须提供 threadStateId，或同时提供 utid、startTs 和 dur',
+        'Provide threadStateId, or utid together with startTs and dur',
+      );
+    case 'non_positive_duration':
+      return localize(language, '选中 task 的时长必须大于 0', 'The selected task duration must be positive');
+    case 'invalid_integer':
+      return localize(language, '数值参数必须是整数', 'Numeric parameters must be integers');
+  }
 }
 
-async function ensureTrace(traceId: string): Promise<boolean> {
-  const trace = await traceProcessorService.getOrLoadTrace(traceId);
-  return !!trace;
+function traceNotFound(res: express.Response, language: OutputLanguage, traceId: string) {
+  return sendResourceNotFound(
+    res,
+    localize(language, `未找到 Trace ${traceId}`, `Trace ${traceId} not found`),
+    'trace_not_found',
+  );
 }
 
 router.post('/:traceId/analyze', async (req, res) => {
@@ -51,38 +94,47 @@ router.post('/:traceId/analyze', async (req, res) => {
     req.header('accept-language') ||
     process.env.SMARTPERFETTO_OUTPUT_LANGUAGE,
   );
+  // Attach before the first await: a disconnect during trace load or the
+  // engine run must still cancel the model call that follows.
+  const clientGone = clientDisconnectSignal(res);
+
+  const {traceId} = req.params;
+  if (!traceId || !isSafeTraceId(traceId)) {
+    return res.status(400).json({
+      success: false,
+      code: 'invalid_trace_id',
+      error: localize(outputLanguage, 'traceId 无效', 'traceId is invalid'),
+    });
+  }
+
+  // Validate before touching the trace: a bad request must not load a trace
+  // processor.
+  const parsed = AnalyzeBodySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      code: 'invalid_request_body',
+      error: localize(outputLanguage, '请求体无效', 'Invalid request body'),
+      issues: parsed.error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    });
+  }
+  const body = parsed.data;
+
   try {
-    const {traceId} = req.params;
-    if (!traceId) {
-      return res.status(400).json({
-        success: false,
-        error: localize(outputLanguage, '必须提供 traceId', 'traceId is required'),
-      });
+    const requestContext = requireRequestContext(req);
+    // Same ownership check as the Agent routes: the trace must belong to the
+    // caller's workspace and the caller needs trace:read.
+    if (!(await readTraceMetadataForContext(traceId, requestContext))) {
+      return traceNotFound(res, outputLanguage, traceId);
     }
-    if (!(await ensureTrace(traceId))) {
-      return res.status(404).json({
-        success: false,
-        error: localize(
-          outputLanguage,
-          `未找到 Trace ${traceId}`,
-          `Trace ${traceId} not found`,
-        ),
-      });
+    const traceProcessorService = getTraceProcessorService();
+    if (!(await traceProcessorService.getOrLoadTrace(traceId))) {
+      return traceNotFound(res, outputLanguage, traceId);
     }
 
-    const parsed = AnalyzeBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      return res.status(400).json({
-        success: false,
-        error: localize(outputLanguage, '请求体无效', 'Invalid request body'),
-        issues: parsed.error.issues.map((issue) => ({
-          path: issue.path.join('.'),
-          message: issue.message,
-        })),
-      });
-    }
-
-    const body = parsed.data;
     const analyzeOptions: CriticalPathAnalyzeOptions = {
       threadStateId: body.threadStateId,
       utid: body.utid,
@@ -98,11 +150,14 @@ router.post('/:traceId/analyze', async (req, res) => {
     const aiSummary =
       body.includeAi === false
         ? undefined
-        : await summarizeCriticalPathWithAi(
-            rawAnalysis,
-            body.question,
-            outputLanguage,
-          );
+        : await summarizeCriticalPathWithAi(rawAnalysis, body.question, outputLanguage, {
+            signal: clientGone,
+            providerScope: {
+              tenantId: requestContext.tenantId,
+              workspaceId: requestContext.workspaceId,
+              userId: requestContext.userId,
+            },
+          });
     return res.json({
       success: true,
       analysis: rawAnalysis,
@@ -113,16 +168,21 @@ router.post('/:traceId/analyze', async (req, res) => {
       aiSummary,
     });
   } catch (error: unknown) {
+    if (error instanceof CriticalPathInputError) {
+      return res.status(CRITICAL_PATH_INPUT_ERROR_STATUS[error.code]).json({
+        success: false,
+        code: error.code,
+        error: inputErrorMessage(error.code, outputLanguage),
+      });
+    }
     console.error('[CriticalPath] Analyze error:', error);
     return res.status(500).json({
       success: false,
-      error: errorMessage(
-        error,
-        localize(
-          outputLanguage,
-          '关键路径分析失败',
-          'Critical path analysis failed',
-        ),
+      code: 'critical_path_failed',
+      error: localize(
+        outputLanguage,
+        '关键路径分析失败',
+        'Critical path analysis failed',
       ),
     });
   }

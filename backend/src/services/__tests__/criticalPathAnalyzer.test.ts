@@ -2,201 +2,120 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import {describe, expect, it, jest} from '@jest/globals';
-import {analyzeCriticalPath} from '../criticalPathAnalyzer';
-import type {QueryResult, TraceProcessorService} from '../traceProcessorService';
+import {describe, expect, it} from '@jest/globals';
+import {analyzeCriticalPath, CriticalPathInputError} from '../criticalPathAnalyzer';
+import {resolveDirectWaker} from '../criticalPathWakerChain';
+import type {QueryResult} from '../traceProcessorService';
+import {queryResult, sqliteTraceProcessor, type SqlRule} from '../../../tests/helpers/criticalPathTraceProcessorFixture';
 
-function queryResult(columns: string[], rows: unknown[][]): QueryResult {
-  return {columns, rows, durationMs: 1};
+const MS = 1_000_000;
+
+// The columns the analyzer's stack query selects.
+const STACK_COLUMNS = ['ts', 'dur', 'utid', 'name', 'table_name', 'thread_name', 'process_name'];
+
+interface StackSegment {
+  ts: number;
+  dur: number;
+  utid: number;
+  state: string;
+  thread: string;
+  process: string;
+  blockedFunction?: string;
+  slices?: string[];
 }
 
-const EMPTY = queryResult([], []);
-
-interface SqlRule {
-  match: RegExp;
-  responder: (sql: string) => QueryResult;
+/** The rows the stack query returns for external segments (the root's own rows are filtered in SQL). */
+function stackResult(segments: StackSegment[]): QueryResult {
+  const rows: unknown[][] = [];
+  for (const segment of segments) {
+    const row = (name: string, table: string): unknown[] => [
+      segment.ts,
+      segment.dur,
+      segment.utid,
+      name,
+      table,
+      segment.thread,
+      segment.process,
+    ];
+    rows.push(row(`blocking thread_state: ${segment.state}`, 'thread_state'));
+    if (segment.blockedFunction) {
+      rows.push(row(`blocking kernel_function: ${segment.blockedFunction}`, 'thread_state'));
+    }
+    for (const slice of segment.slices ?? []) rows.push(row(slice, 'slice'));
+  }
+  return queryResult(STACK_COLUMNS, rows);
 }
 
-function patternMockedService(rules: SqlRule[]): TraceProcessorService {
-  const query = jest.fn<TraceProcessorService['query']>().mockImplementation(async (_traceId, sql) => {
-    for (const rule of rules) {
-      if (rule.match.test(sql)) {
-        return rule.responder(sql);
-      }
-    }
-    // INCLUDE PERFETTO MODULE always succeeds with an empty result by default.
-    if (/^\s*INCLUDE\s+PERFETTO\s+MODULE/i.test(sql)) {
-      return EMPTY;
-    }
-    // Schema lookups for tid/upid via thread table.
-    if (/SELECT tid, upid FROM thread/i.test(sql)) {
-      return EMPTY;
-    }
-    return EMPTY;
-  });
-  return {query} as unknown as TraceProcessorService;
+/** The root utid a `_critical_path_stack` call was made for. */
+function stackRoot(sql: string): number {
+  const match = /_critical_path_stack\((\d+), (\d+), (\d+),/.exec(sql);
+  if (!match) throw new Error('not a critical path stack query');
+  return Number(match[1]);
 }
+
+const stackCalls = (sqls: string[]): string[] => sqls.filter((sql) => /FROM _critical_path_stack/.test(sql));
+
+// Thread 1 (com.demo main) waits; thread 2 (system_server binder:system) serves it.
+const BASE_THREADS = `
+  INSERT INTO process VALUES (7, 'com.demo'), (8, 'system_server');
+  INSERT INTO thread VALUES
+    (1, 1001, 7, 'main'),
+    (2, 3001, 8, 'binder:system'),
+    (3, 1003, 7, 'RenderThread'),
+    (5, 0, NULL, 'kworker/0');
+`;
 
 describe('critical path analyzer', () => {
-  const taskColumns = [
-    'thread_state_id',
-    'ts',
-    'dur',
-    'utid',
-    'state',
-    'blocked_function',
-    'io_wait',
-    'cpu',
-    'waker_id',
-    'irq_context',
-    'tid',
-    'thread_upid',
-    'thread_name',
-    'process_name',
-    'waker_utid',
-    'waker_state',
-    'waker_thread_name',
-    'waker_process_name',
-  ];
+  it('resolves the waker from the wakeup row and replaces keyword modules with the stdlib binder signal', async () => {
+    // Thread 1 sleeps [1000, 1020) ms; its wakeup row at 1020 ms names thread 2.
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, waker_id, irq_context) VALUES
+        (101, 1, ${1000 * MS}, ${20 * MS}, 'S', NULL, NULL, NULL),
+        (102, 1, ${1020 * MS}, ${1 * MS}, 'R', 2, 55, 0),
+        (55, 2, ${1015 * MS}, ${6 * MS}, 'Running', NULL, NULL, 0);
+      INSERT INTO android_binder_txns VALUES
+        (42, 43, 'IDemo', 'doSomething', 1, 1, 'com.demo', 'main', 'system_server', 'binder:system',
+         1, 2, 1001, 3001, ${999 * MS}, ${14 * MS}, ${1000 * MS}, ${12 * MS});
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([
+              {ts: 1000 * MS, dur: 12 * MS, utid: 2, state: 'D', thread: 'binder:system', process: 'system_server'},
+              {ts: 1012 * MS, dur: 5 * MS, utid: 3, state: 'R+', thread: 'RenderThread', process: 'com.demo'},
+            ]),
+        },
+      ]}
+    );
 
-  const stackColumns = [
-    'id',
-    'ts',
-    'dur',
-    'utid',
-    'stack_depth',
-    'name',
-    'table_name',
-    'root_utid',
-    'thread_name',
-    'process_name',
-  ];
-
-  const wakerColumns = [
-    'target_id',
-    'target_ts',
-    'waker_id',
-    'target_irq_context',
-    'waker_id_resolved',
-    'waker_utid',
-    'waker_state',
-    'waker_cpu',
-    'waker_irq_context',
-    'waker_tid',
-    'waker_thread_name',
-    'waker_process_name',
-  ];
-
-  it('summarizes wakeup chain and surfaces stdlib-derived modules when L3 reports binder/monitor signals', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread USING\(utid\)/i,
-        responder: () =>
-          queryResult(taskColumns, [
-            [
-              101,
-              1_000_000_000,
-              20_000_000,
-              1,
-              'S',
-              null,
-              0,
-              null,
-              55,
-              0,
-              1001,
-              7,
-              'main',
-              'com.demo',
-              2,
-              'D',
-              'binder:system',
-              'system_server',
-            ],
-          ]),
-      },
-      {
-        match: /FROM _critical_path_stack/i,
-        responder: () =>
-          queryResult(stackColumns, [
-            [1, 1_000_000_000, 12_000_000, 2, 8, 'blocking thread_state: D', 'thread_state', 1, 'binder:system', 'system_server'],
-            [1, 1_000_000_000, 12_000_000, 2, 9, 'blocking process_name: system_server', 'thread_state', 1, 'binder:system', 'system_server'],
-            [1, 1_000_000_000, 12_000_000, 2, 10, 'blocking thread_name: binder:system', 'thread_state', 1, 'binder:system', 'system_server'],
-            [3, 1_012_000_000, 5_000_000, 3, 8, 'blocking thread_state: R+', 'thread_state', 1, 'RenderThread', 'com.demo'],
-            [3, 1_012_000_000, 5_000_000, 3, 10, 'blocking thread_name: RenderThread', 'thread_state', 1, 'RenderThread', 'com.demo'],
-          ]),
-      },
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread_state AS waker/i,
-        responder: () =>
-          queryResult(wakerColumns, [
-            [101, 1_000_000_000, 55, 0, 55, 2, 'D', 0, 0, 3001, 'binder:system', 'system_server'],
-          ]),
-      },
-      {
-        match: /FROM segs\s+JOIN android_binder_txns/i,
-        responder: () =>
-          queryResult(
-            [
-              'segment_idx',
-              'binder_txn_id',
-              'binder_reply_id',
-              'side',
-              'interface',
-              'method_name',
-              'is_sync',
-              'is_main_thread',
-              'client_process',
-              'client_thread',
-              'server_process',
-              'server_thread',
-              'client_utid',
-              'server_utid',
-              'client_tid',
-              'server_tid',
-              'dur_ns',
-            ],
-            [
-              [
-                0,
-                42,
-                7,
-                'client',
-                'IBinder',
-                'doSomething',
-                1,
-                1,
-                'com.demo',
-                'main',
-                'system_server',
-                'binder:system',
-                1,
-                2,
-                1001,
-                3001,
-                12_000_000,
-              ],
-            ]
-          ),
-      },
-      // monitor + io + gc + cpu + frames all empty
-    ]);
-
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {threadStateId: 101});
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 101});
 
     expect(analysis.available).toBe(true);
     expect(analysis.task.threadName).toBe('main');
     expect(analysis.task.processName).toBe('com.demo');
     expect(analysis.task.upid).toBe(7);
     expect(analysis.wakeupChain).toHaveLength(2);
-    // The first segment should now carry stdlib-derived 'Binder / IPC' module
-    // — proof that L3 enrichment overrode the regex fallback.
-    expect(analysis.wakeupChain[0].modules).toContain('Binder / IPC');
-    expect(analysis.wakeupChain[0].semantics?.binderTxns).toHaveLength(1);
-    expect(analysis.directWaker).not.toBeNull();
-    expect(analysis.directWaker?.kind).toBe('thread');
-    expect(analysis.quantification).toBeDefined();
+    // The stdlib signal replaces the keyword labels outright.
+    expect(analysis.wakeupChain[0].modules).toEqual(['Binder / IPC']);
+    expect(analysis.wakeupChain[0].semantics?.binderTxns).toEqual([
+      expect.objectContaining({binderTxnId: 42, side: 'server', durMs: 12}),
+    ]);
+    expect(analysis.directWaker).toMatchObject({kind: 'thread', utid: 2, threadName: 'binder:system', threadStateId: 55});
+    // task.waker is the same hop, not a second lookup.
+    expect(analysis.task.waker).toEqual({
+      threadStateId: 55,
+      utid: 2,
+      threadName: 'binder:system',
+      processName: 'system_server',
+      state: 'Running',
+      interruptContext: false,
+    });
+    expect(analysis.summary).toContain('直接唤醒来源：system_server / binder:system');
     expect(analysis.semanticSources?.binder).toBe('present');
+    expect(analysis.anomalies.map((a) => a.title)).toContain('等待链涉及 Binder / IPC');
+    expect(analysis.quantification).toBeDefined();
     // Hypothesis SQL must contain only numeric IDs, never raw method names
     // — verify by ensuring no apostrophes (which would indicate a string literal).
     for (const hypothesis of analysis.quantification?.hypotheses ?? []) {
@@ -204,171 +123,593 @@ describe('critical path analyzer', () => {
     }
   });
 
-  it('short-circuits to a "Running 状态：无等待链可分析" finding when the task is Running', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread_state AS target/i,
-        responder: () =>
-          queryResult(taskColumns, [
-            [102, 2_000_000_000, 4_000_000, 1, 'Running', null, 0, 3, null, null, 1001, 7, 'main', 'com.demo', null, null, null, null],
-          ]),
-      },
-    ]);
+  it('short-circuits a selected Running row with unavailableReason task_state_running', async () => {
+    const {tp, sqls} = sqliteTraceProcessor(`${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, cpu) VALUES (102, 1, ${2000 * MS}, ${4 * MS}, 'Running', 3);
+    `);
 
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {threadStateId: 102});
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 102});
 
     expect(analysis.available).toBe(false);
+    expect(analysis.unavailableReason).toBe('task_state_running');
     expect(analysis.wakeupChain).toEqual([]);
     expect(analysis.anomalies[0].title).toBe('Running 状态：无等待链可分析');
     expect(analysis.recommendations[0]).toContain('callstack');
+    expect(stackCalls(sqls)).toHaveLength(0);
   });
 
-  it('returns no critical path chain when stack query yields zero rows for a non-Running task', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread USING\(utid\)/i,
-        responder: () =>
-          queryResult(taskColumns, [
-            [103, 3_000_000_000, 6_000_000, 1, 'S', null, 0, null, null, 0, 1001, 7, 'main', 'com.demo', null, null, null, null],
-          ]),
-      },
-      {
-        match: /FROM _critical_path_stack/i,
-        responder: () => queryResult(stackColumns, []),
-      },
-    ]);
+  it('reports no_critical_path_stack and still reports the waker lookup when the stack is empty', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (103, 1, ${3000 * MS}, ${6 * MS}, 'S');
+      `,
+      {rules: [{match: /FROM _critical_path_stack/i, responder: () => queryResult(STACK_COLUMNS, [])}]}
+    );
 
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {threadStateId: 103});
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 103});
 
     expect(analysis.available).toBe(false);
+    expect(analysis.unavailableReason).toBe('no_critical_path_stack');
     expect(analysis.anomalies[0].title).toBe('没有取到 critical path 等待链');
+    expect(analysis.directWaker).toBeNull();
+    expect(analysis.warnings).toContain('no recorded waker on the wakeup row (waker_utid is NULL)');
   });
 
-  it('annotates IRQ-context waker as kind="irq" with no upstream chain', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread USING\(utid\)/i,
-        responder: () =>
-          queryResult(taskColumns, [
-            [104, 4_000_000_000, 10_000_000, 1, 'S', null, 0, null, 7, 1, 1001, 7, 'main', 'com.demo', null, null, null, null],
-          ]),
-      },
-      {
-        match: /FROM _critical_path_stack/i,
-        responder: () =>
-          queryResult(stackColumns, [
-            [1, 4_000_000_000, 5_000_000, 2, 8, 'blocking thread_state: R', 'thread_state', 1, 'kworker/0', 'kworker'],
-          ]),
-      },
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread_state AS waker/i,
-        responder: () =>
-          queryResult(wakerColumns, [
-            // target_irq_context=1, waker resolved as kworker but irq_context flag wins
-            [104, 4_000_000_000, 7, 1, 7, 2, 'R', 0, 0, 0, 'kworker/0', null],
-          ]),
-      },
-    ]);
-
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {threadStateId: 104});
-
-    expect(analysis.directWaker).not.toBeNull();
-    expect(analysis.directWaker?.irqContext).toBe(true);
-    expect(analysis.directWaker?.kind).toBe('irq');
-  });
-
-  it('range mode (utid+startTs+dur) splits a multi-state selection into per-slice findings', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread\s+LEFT JOIN process USING\(upid\)\s+WHERE thread\.utid =/i,
-        responder: () =>
-          queryResult(['utid', 'tid', 'thread_upid', 'thread_name', 'process_name'], [[1, 1001, 7, 'main', 'com.demo']]),
-      },
-      {
-        match: /FROM thread_state\s+WHERE utid =/i,
-        responder: () =>
-          queryResult(['id', 'ts', 'dur', 'state', 'blocked_function', 'io_wait', 'cpu'], [
-            [201, 5_000_000_000, 8_000_000, 'S', null, 0, null],
-            [202, 5_008_000_000, 6_000_000, 'D', 'io_schedule', 1, null],
-            [203, 5_014_000_000, 2_000_000, 'Running', null, 0, 4],
-          ]),
-      },
-      {
-        match: /FROM _critical_path_stack/i,
-        responder: () =>
-          queryResult(stackColumns, [
-            [1, 5_000_000_000, 7_000_000, 2, 8, 'blocking thread_state: D', 'thread_state', 1, 'binder:system', 'system_server'],
-          ]),
-      },
-    ]);
-
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {
-      utid: 1,
-      startTs: 5_000_000_000,
-      dur: 16_000_000,
-    });
-
-    expect(analysis.slices).toBeDefined();
-    expect(analysis.slices?.map((s) => s.kind)).toEqual(
-      expect.arrayContaining(['sleeping', 'uninterruptible', 'running'])
+  it('takes IRQ context from the wakeup row only', async () => {
+    const stack: SqlRule = {
+      match: /FROM _critical_path_stack/i,
+      responder: () =>
+        stackResult([{ts: 4000 * MS, dur: 5 * MS, utid: 5, state: 'R', thread: 'kworker/0', process: 'kworker'}]),
+    };
+    // The wakeup row is in IRQ context; the waker's own row is not.
+    const irq = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, waker_id, irq_context) VALUES
+        (104, 1, ${4000 * MS}, ${10 * MS}, 'S', NULL, NULL, NULL),
+        (105, 1, ${4010 * MS}, ${1 * MS}, 'R', 5, 7, 1),
+        (7, 5, ${4008 * MS}, ${2 * MS}, 'Running', NULL, NULL, 0);
+      `,
+      {rules: [stack]}
     );
-    // Dominant state should pick the longest slice (sleeping, 8ms).
+    const irqAnalysis = await analyzeCriticalPath(irq.tp, 'trace-1', {threadStateId: 104});
+    expect(irqAnalysis.directWaker).toMatchObject({irqContext: true, kind: 'irq', utid: 5});
+    expect(irqAnalysis.directWaker?.hints).toContain('woken in IRQ context (irq_context=1 on the wakeup row)');
+    expect(irqAnalysis.task.waker?.interruptContext).toBe(true);
+
+    // The waker's own row carries irq_context=1; the wakeup itself was not in IRQ context.
+    const notIrq = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, waker_id, irq_context) VALUES
+        (104, 1, ${4000 * MS}, ${10 * MS}, 'S', NULL, NULL, NULL),
+        (105, 1, ${4010 * MS}, ${1 * MS}, 'R', 2, 7, 0),
+        (7, 2, ${4008 * MS}, ${2 * MS}, 'Running', NULL, NULL, 1);
+      `,
+      {rules: [stack]}
+    );
+    const notIrqAnalysis = await analyzeCriticalPath(notIrq.tp, 'trace-1', {threadStateId: 104});
+    expect(notIrqAnalysis.directWaker).toMatchObject({irqContext: false, kind: 'thread', utid: 2});
+  });
+
+  it('range mode splits a multi-state selection on half-open slice bounds', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, blocked_function, io_wait, cpu) VALUES
+        (200, 1, ${4990 * MS}, ${10 * MS}, 'Running', NULL, 0, 2),
+        (201, 1, ${5000 * MS}, ${8 * MS}, 'S', NULL, 0, NULL),
+        (202, 1, ${5008 * MS}, ${6 * MS}, 'D', 'io_schedule', 1, NULL),
+        (203, 1, ${5014 * MS}, ${2 * MS}, 'Running', NULL, 0, 4),
+        (204, 1, ${5016 * MS}, ${3 * MS}, 'S', NULL, 0, NULL);
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 5000 * MS, dur: 7 * MS, utid: 2, state: 'D', thread: 'binder:system', process: 'system_server'}]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {utid: 1, startTs: 5000 * MS, dur: 16 * MS});
+
+    // Rows ending exactly at the window start or starting exactly at its end are not part of it.
+    expect(analysis.slices?.map((s) => s.threadStateId)).toEqual([201, 202, 203]);
+    expect(analysis.slices?.map((s) => s.kind)).toEqual(['sleeping', 'uninterruptible', 'running']);
+    // Dominant state is the longest waiting slice (sleeping, 8ms).
     expect(analysis.task.state).toBe('S');
   });
 
-  it('exposes semanticSources status when stdlib include succeeds but table is empty', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread USING\(utid\)/i,
-        responder: () =>
-          queryResult(taskColumns, [
-            [105, 6_000_000_000, 18_000_000, 1, 'S', null, 0, null, 99, 0, 1001, 7, 'main', 'com.demo', null, null, null, null],
-          ]),
-      },
+  it('analyses a range whose longest slice is Running when waiting time dominates, resolving the longest wait', async () => {
+    // Running 20 ms, then S 9 ms woken by thread 2, R 7 ms, D 8 ms: 24 ms of waiting.
+    const {tp, sqls} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, waker_id, irq_context) VALUES
+        (300, 1, ${6000 * MS}, ${20 * MS}, 'Running', NULL, NULL, NULL),
+        (301, 1, ${6020 * MS}, ${9 * MS}, 'S', NULL, NULL, NULL),
+        (302, 1, ${6029 * MS}, ${7 * MS}, 'R', 2, NULL, 0),
+        (303, 1, ${6036 * MS}, ${8 * MS}, 'D', NULL, NULL, NULL);
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 6020 * MS, dur: 9 * MS, utid: 2, state: 'Running', thread: 'binder:system', process: 'system_server'}]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {utid: 1, startTs: 6000 * MS, dur: 44 * MS});
+
+    expect(analysis.available).toBe(true);
+    expect(analysis.unavailableReason).toBeUndefined();
+    expect(analysis.task.state).toBe('S');
+    expect(analysis.blockingMs).toBeCloseTo(9, 2);
+    expect(stackCalls(sqls)[0]).toContain('_critical_path_stack(1, 6000000000, 44000000, 1, 1, 0, 1)');
+    // waker_id is NULL on the wakeup row; the waker is still named through waker_utid.
+    expect(analysis.directWaker).toMatchObject({utid: 2, threadName: 'binder:system', kind: 'thread'});
+    expect(analysis.directWaker?.hints).toContain('resolved for the longest waiting slice in the window');
+    expect(analysis.task.waker?.threadName).toBe('binder:system');
+  });
+
+  it('returns no_waiting_time for a range without S/D/R time and never queries the stack', async () => {
+    const {tp, sqls} = sqliteTraceProcessor(`${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, cpu) VALUES
+        (400, 1, ${7000 * MS}, ${10 * MS}, 'Running', 1),
+        (401, 1, ${7010 * MS}, ${10 * MS}, 'Running', 2);
+    `);
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {utid: 1, startTs: 7000 * MS, dur: 20 * MS});
+
+    expect(analysis.available).toBe(false);
+    expect(analysis.unavailableReason).toBe('no_waiting_time');
+    expect(analysis.anomalies[0].title).toBe('选区内没有等待时间');
+    expect(analysis.task.state).toBe('Running');
+    expect(stackCalls(sqls)).toHaveLength(0);
+  });
+
+  it('exposes semanticSources from the enrichment when every stdlib table is empty', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (105, 1, ${6000 * MS}, ${18 * MS}, 'S');
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 6000 * MS, dur: 12 * MS, utid: 2, state: 'S', thread: 'binder:system', process: 'system_server'}]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 105});
+
+    expect(analysis.semanticSources).toEqual({
+      binder: 'empty',
+      monitor: 'empty',
+      io: 'empty',
+      gc: 'empty',
+      cpu: 'skipped',
+    });
+  });
+
+  it('counterfactual best case is task.dur - longest external segment, never below zero', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (106, 1, ${7000 * MS}, ${30 * MS}, 'S');
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 7000 * MS, dur: 22 * MS, utid: 2, state: 'S', thread: 'svc', process: 'svc_proc'}]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 106});
+
+    const counterfactual = analysis.quantification?.counterfactual;
+    expect(counterfactual?.longestSegmentKey).toBe(`2|${7000 * MS}|${7022 * MS}`);
+    expect(counterfactual?.longestSegmentDurMs).toBeCloseTo(22, 1);
+    expect(counterfactual?.bestCaseDurationMs).toBeCloseTo(8, 1);
+    expect(counterfactual?.maxSavingMs).toBeCloseTo(22, 1);
+    expect(counterfactual?.upperBoundMs).toBeCloseTo(8, 1);
+    expect(counterfactual?.note).toMatch(/BEST CASE/);
+  });
+});
+
+describe('critical path analyzer module classification', () => {
+  const IO_LABEL = 'IO / 页缓存 / 文件系统候选';
+  const IO_ANOMALY = '等待链涉及 IO/page-cache 候选';
+
+  it('never derives IO or lock labels from thread names', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `INSERT INTO process VALUES (7, 'com.demo');
+      INSERT INTO thread VALUES (1, 1001, 7, 'main'), (3, 1003, 7, 'RenderThread'),
+        (4, 1004, 7, 'pool-1-thread-1'), (6, 1006, 7, 'Thread-3');
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (110, 1, ${8000 * MS}, ${40 * MS}, 'S');
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([
+              {ts: 8000 * MS, dur: 10 * MS, utid: 3, state: 'S', thread: 'RenderThread', process: 'com.demo'},
+              {ts: 8010 * MS, dur: 10 * MS, utid: 4, state: 'S', thread: 'pool-1-thread-1', process: 'com.demo'},
+              {ts: 8020 * MS, dur: 10 * MS, utid: 6, state: 'S', thread: 'Thread-3', process: 'com.demo'},
+            ]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 110, recursionEnabled: false});
+
+    const labels = analysis.wakeupChain.flatMap((segment) => segment.modules);
+    expect(labels).not.toContain(IO_LABEL);
+    expect(labels).not.toContain('锁 / Futex');
+    // A role label may still come from a name.
+    expect(analysis.wakeupChain[0].modules).toEqual(['图形渲染 / Surface']);
+    expect(analysis.anomalies.map((a) => a.title)).not.toContain(IO_ANOMALY);
+    expect(analysis.recommendations.join('\n')).not.toContain('同步 IO');
+  });
+
+  it('keeps the IO fallback label from wait evidence but raises no IO finding from the label alone', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (111, 1, ${9000 * MS}, ${20 * MS}, 'S');
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([
+              {
+                ts: 9000 * MS,
+                dur: 10 * MS,
+                utid: 2,
+                state: 'D',
+                thread: 'binder:system',
+                process: 'system_server',
+                blockedFunction: 'filemap_fault',
+              },
+            ]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 111, recursionEnabled: false});
+
+    // No stdlib IO row exists (the D row is a stack fixture), so the fallback label stays…
+    expect(analysis.wakeupChain[0].modules).toContain(IO_LABEL);
+    // …but a label alone raises no anomaly: that needs io_wait or a typed IO signal.
+    expect(analysis.anomalies.map((a) => a.title)).not.toContain(IO_ANOMALY);
+    expect(analysis.recommendations.join('\n')).not.toContain('同步 IO');
+  });
+
+  it('raises the IO anomaly and recommendation from a typed IO signal', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, blocked_function, io_wait) VALUES
+        (112, 1, ${9100 * MS}, ${20 * MS}, 'S', NULL, 0),
+        (113, 2, ${9100 * MS}, ${10 * MS}, 'D', 'filemap_fault', 1);
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 9100 * MS, dur: 10 * MS, utid: 2, state: 'D', thread: 'binder:system', process: 'system_server'}]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 112, recursionEnabled: false});
+
+    expect(analysis.wakeupChain[0].modules).toEqual(['IO / 文件系统']);
+    expect(analysis.anomalies.map((a) => a.title)).toContain(IO_ANOMALY);
+    expect(analysis.recommendations.join('\n')).toContain('同步 IO');
+  });
+
+  it('keeps both Binder and Monitor anomalies when one segment carries both signals, counting it once in the breakdown', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (120, 1, ${10000 * MS}, ${30 * MS}, 'S');
+      INSERT INTO android_binder_txns VALUES
+        (42, 43, 'IDemo', 'doSomething', 1, 1, 'com.demo', 'main', 'system_server', 'binder:system',
+         1, 2, 1001, 3001, ${9999 * MS}, ${16 * MS}, ${10000 * MS}, ${14 * MS});
+      INSERT INTO android_monitor_contention VALUES
+        (9, ${10002 * MS}, ${6 * MS}, 2, 3, 3001, 1003, 'binder:system', 'RenderThread', 'a()', 'b()', 0);
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([
+              {ts: 10000 * MS, dur: 20 * MS, utid: 2, state: 'S', thread: 'binder:system', process: 'system_server'},
+              {ts: 10020 * MS, dur: 5 * MS, utid: 3, state: 'S', thread: 'RenderThread', process: 'com.demo'},
+            ]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 120, recursionEnabled: false});
+
+    const titles = analysis.anomalies.map((a) => a.title);
+    expect(titles).toContain('等待链涉及 Binder / IPC');
+    expect(titles).toContain('等待链涉及 Java 锁竞争');
+    expect(analysis.anomalies.find((a) => a.title === '等待链涉及 Binder / IPC')?.detail).toContain('14.00 ms');
+    expect(analysis.anomalies.find((a) => a.title === '等待链涉及 Java 锁竞争')?.detail).toContain('6.00 ms');
+    const recommendations = analysis.recommendations.join('\n');
+    expect(recommendations).toContain('Binder / IPC');
+    expect(recommendations).toContain('monitor_contention_chain');
+    // The primary module is the longer signal; the segment is counted once.
+    expect(analysis.wakeupChain[0].modules).toEqual(['Binder / IPC', '锁 / Monitor']);
+    expect(analysis.moduleBreakdown.map((item) => item.module)).not.toContain('锁 / Monitor');
+    const shares = analysis.moduleBreakdown.reduce((sum, item) => sum + item.percentage, 0);
+    expect(shares).toBeLessThanOrEqual(100);
+    expect(analysis.moduleBreakdown.reduce((sum, item) => sum + item.segmentCount, 0)).toBe(2);
+  });
+
+  it('raises the CPU-contention anomaly only from typed competition, not from a Running blocker', async () => {
+    const running = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (130, 1, ${11000 * MS}, ${20 * MS}, 'S');
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 11000 * MS, dur: 10 * MS, utid: 2, state: 'Running', thread: 'binder:system', process: 'system_server'}]),
+        },
+      ]}
+    );
+    const runningAnalysis = await analyzeCriticalPath(running.tp, 'trace-1', {threadStateId: 130, recursionEnabled: false});
+    expect(runningAnalysis.anomalies.map((a) => a.title)).not.toContain('存在调度或 CPU 竞争迹象');
+
+    // Thread 2 is runnable [12000, 12010) and then runs on CPU 3; thread 3 holds CPU 3 meanwhile.
+    const contended = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, cpu) VALUES
+        (131, 1, ${12000 * MS}, ${20 * MS}, 'S', NULL),
+        (132, 2, ${12000 * MS}, ${10 * MS}, 'R', NULL),
+        (133, 2, ${12010 * MS}, ${5 * MS}, 'Running', 3),
+        (134, 3, ${12002 * MS}, ${7 * MS}, 'Running', 3);
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([{ts: 12000 * MS, dur: 10 * MS, utid: 2, state: 'R', thread: 'binder:system', process: 'system_server'}]),
+        },
+      ]}
+    );
+    const contendedAnalysis = await analyzeCriticalPath(contended.tp, 'trace-1', {threadStateId: 131, recursionEnabled: false});
+    const cpu = contendedAnalysis.anomalies.find((a) => a.title === '存在调度或 CPU 竞争迹象');
+    expect(cpu?.detail).toContain('7.00 ms');
+    expect(cpu?.evidence).toEqual(['CPU 3: com.demo / RenderThread']);
+  });
+});
+
+describe('critical path analyzer truncation and recursion', () => {
+  const chainOf = (count: number, startMs: number, durMs: number): StackSegment[] =>
+    Array.from({length: count}, (_, index) => ({
+      ts: (startMs + index * durMs) * MS,
+      dur: durMs * MS,
+      utid: 100 + index,
+      state: 'S',
+      thread: `worker-${index}`,
+      process: 'com.demo',
+    }));
+
+  const taskSetup = (id: number, startMs: number, durMs: number): string => `${BASE_THREADS}
+    INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (${id}, 1, ${startMs * MS}, ${durMs * MS}, 'S');
+  `;
+
+  it('excludes self rows in SQL and computes totals over the whole chain when only the display is cut', async () => {
+    const chain = chainOf(25, 20000, 2);
+    const {tp, sqls} = sqliteTraceProcessor(taskSetup(140, 20000, 60), {rules: [
+      {match: /FROM _critical_path_stack/i, responder: () => stackResult(chain)},
+    ]});
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 140, maxSegments: 20, recursionEnabled: false});
+
+    const stackSql = stackCalls(sqls)[0];
+    expect(stackSql).toContain('_critical_path_stack(1, 20000000000, 60000000, 1, 1, 0, 1)');
+    expect(stackSql).toMatch(/cr\.utid != cr\.root_utid/);
+    expect(analysis.truncated).toBe(true);
+    expect(analysis.wakeupChain).toHaveLength(20);
+    expect(analysis.blockingMs).toBeCloseTo(50, 2);
+    expect(analysis.selfMs).toBeCloseTo(10, 2);
+    expect(analysis.moduleBreakdown.reduce((sum, item) => sum + item.segmentCount, 0)).toBe(25);
+    expect(analysis.warnings).toContain(
+      'critical path 共 25 个链路段，仅展示前 20 个；阻塞时长、模块占比与反事实估计按完整链路计算。'
+    );
+  });
+
+  it('flags totals as partial when the stack itself was cut', async () => {
+    // maxSegments 20 → 400-row limit; 101 segments × 4 rows exceed it.
+    const chain = chainOf(101, 30000, 1).map((segment) => ({...segment, slices: ['a', 'b', 'c']}));
+    const {tp} = sqliteTraceProcessor(taskSetup(141, 30000, 120), {rules: [
+      {match: /FROM _critical_path_stack/i, responder: () => stackResult(chain)},
+    ]});
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 141, maxSegments: 20, recursionEnabled: false});
+
+    expect(analysis.truncated).toBe(true);
+    expect(analysis.wakeupChain).toHaveLength(20);
+    // The 400 rows kept describe the first 100 segments; totals cover exactly those.
+    expect(analysis.blockingMs).toBeCloseTo(100, 2);
+    expect(analysis.warnings).toContain(
+      'critical path 结果超过 400 行上限，已截断为前 100 个链路段（展示前 20 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。'
+    );
+  });
+
+  it('still recurses into a chain of 16+ segments', async () => {
+    const chain = chainOf(18, 40000, 2);
+    chain[5] = {...chain[5], dur: 8 * MS};
+    for (let index = 6; index < chain.length; index += 1) chain[index] = {...chain[index], ts: chain[index].ts + 6 * MS};
+    const {tp, sqls} = sqliteTraceProcessor(taskSetup(150, 40000, 60), {rules: [
       {
         match: /FROM _critical_path_stack/i,
-        responder: () =>
-          queryResult(stackColumns, [
-            [1, 6_000_000_000, 12_000_000, 2, 8, 'blocking thread_state: S', 'thread_state', 1, 'other', 'svc'],
-          ]),
+        responder: (sql) =>
+          stackRoot(sql) === 1
+            ? stackResult(chain)
+            : stackResult([
+                {ts: chain[5].ts, dur: 3 * MS, utid: 900, state: 'S', thread: 'upstream', process: 'svc'},
+              ]),
       },
+    ]});
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 150});
+
+    expect(stackCalls(sqls).map(stackRoot)).toEqual([1, 105]);
+    expect(analysis.wakeupChain[5].children).toEqual([expect.objectContaining({utid: 900, threadName: 'upstream'})]);
+    expect(analysis.warnings.some((warning) => warning.startsWith('critical path recursion'))).toBe(false);
+  });
+
+  it('warns when the recursion budget stops an expansion and when a recursion stack query fails', async () => {
+    const chain = chainOf(3, 50000, 10);
+    const budget = sqliteTraceProcessor(taskSetup(160, 50000, 40), {rules: [
       {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread_state AS waker/i,
-        responder: () => queryResult(wakerColumns, []),
+        match: /FROM _critical_path_stack/i,
+        responder: (sql) => {
+          const root = stackRoot(sql);
+          if (root === 1) return stackResult(chain);
+          // Every expansion yields five 5 ms segments: enough to exhaust a budget of 4.
+          return stackResult(
+            Array.from({length: 5}, (_, index) => ({
+              ts: (50000 + index * 5) * MS,
+              dur: 5 * MS,
+              utid: root * 10 + index,
+              state: 'S',
+              thread: `up-${root}-${index}`,
+              process: 'svc',
+            }))
+          );
+        },
       },
-    ]);
+    ]});
 
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {threadStateId: 105});
+    const budgetAnalysis = await analyzeCriticalPath(budget.tp, 'trace-1', {threadStateId: 160, segmentBudget: 4});
 
-    expect(analysis.semanticSources).toBeDefined();
-    // All semantic sources came back empty (no rules matched) — must not be 'present'.
-    for (const status of Object.values(analysis.semanticSources ?? {})) {
-      expect(['empty', 'skipped', 'stdlib_missing', 'sql_error']).toContain(status);
+    expect(budgetAnalysis.warnings).toContain(
+      'critical path recursion stopped at the segment budget (4); some long segments were not expanded'
+    );
+
+    const failing = sqliteTraceProcessor(taskSetup(161, 50000, 40), {rules: [
+      {
+        match: /FROM _critical_path_stack/i,
+        responder: (sql) => {
+          if (stackRoot(sql) === 1) return stackResult(chain);
+          throw new Error('stack exploded\nsecond line');
+        },
+      },
+    ]});
+
+    const failingAnalysis = await analyzeCriticalPath(failing.tp, 'trace-1', {threadStateId: 161});
+
+    expect(failingAnalysis.available).toBe(true);
+    expect(failingAnalysis.warnings).toContain('critical path recursion failed for utid 100: stack exploded');
+  });
+});
+
+describe('critical path analyzer warnings and input errors', () => {
+  it('marks GC as not checked when the thread lookup fails and hoists L3 warnings once', async () => {
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (170, 1, ${60000 * MS}, ${20 * MS}, 'S');
+      `,
+      {rules: [
+        {match: /SELECT utid, tid, upid FROM thread WHERE utid IN/, responder: () => { throw new Error('lookup boom'); }},
+        {match: /android_monitor_contention/, responder: () => { throw new Error('no such column: mc.bogus'); }},
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([
+              {ts: 60000 * MS, dur: 5 * MS, utid: 2, state: 'S', thread: 'binder:system', process: 'system_server'},
+              {ts: 60005 * MS, dur: 5 * MS, utid: 3, state: 'S', thread: 'RenderThread', process: 'com.demo'},
+            ]),
+        },
+      ]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 170, recursionEnabled: false});
+
+    expect(analysis.semanticSources?.gc).toBe('not_checked');
+    expect(analysis.semanticSources?.monitor).toBe('sql_error');
+    expect(analysis.warnings).toContain('thread tid/upid lookup failed; GC evidence not checked');
+    expect(analysis.warnings.filter((warning) => warning === 'schema mismatch: no such column: mc.bogus')).toHaveLength(1);
+  });
+
+  it('throws CriticalPathInputError with a code for each caller-input failure', async () => {
+    const {tp} = sqliteTraceProcessor(BASE_THREADS);
+    const codeOf = async (options: Parameters<typeof analyzeCriticalPath>[2]): Promise<string | undefined> => {
+      try {
+        await analyzeCriticalPath(tp, 'trace-1', options);
+        return undefined;
+      } catch (error: unknown) {
+        expect(error).toBeInstanceOf(CriticalPathInputError);
+        return (error as CriticalPathInputError).code;
+      }
+    };
+
+    expect(await codeOf({threadStateId: 'abc'})).toBe('invalid_thread_state_id');
+    expect(await codeOf({threadStateId: -3})).toBe('invalid_thread_state_id');
+    expect(await codeOf({threadStateId: 999})).toBe('thread_state_not_found');
+    expect(await codeOf({})).toBe('missing_selector');
+    expect(await codeOf({utid: 'x', startTs: 1, dur: 1})).toBe('invalid_integer');
+    expect(await codeOf({utid: 1, startTs: 5, dur: 0})).toBe('non_positive_duration');
+  });
+});
+
+describe('resolveDirectWaker', () => {
+  const service = (rows: string) =>
+    sqliteTraceProcessor(`${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, waker_id, irq_context) VALUES ${rows};
+    `).tp;
+
+  it('reads the waker from the successor R row when the selected S row has none', async () => {
+    const tp = service(`
+      (1, 1, 100, 50, 'S', NULL, NULL, NULL),
+      (2, 1, 150, 10, 'R', 2, 9, 0),
+      (9, 2, 140, 20, 'Running', NULL, NULL, 0)
+    `);
+
+    const result = await resolveDirectWaker(tp, 'trace-1', {threadStateId: 1});
+
+    expect(result.hop).toMatchObject({utid: 2, threadStateId: 9, threadName: 'binder:system', processName: 'system_server', state: 'Running', kind: 'thread', irqContext: false});
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('reads a selected R row directly', async () => {
+    const tp = service(`
+      (1, 1, 100, 50, 'S', NULL, NULL, NULL),
+      (2, 1, 150, 10, 'R', 2, NULL, 0)
+    `);
+
+    const result = await resolveDirectWaker(tp, 'trace-1', {threadStateId: 2});
+
+    expect(result.hop).toMatchObject({utid: 2, threadStateId: null, threadName: 'binder:system'});
+  });
+
+  it('ignores a successor that is not R/R+ or carries no waker, and a row that is not adjacent', async () => {
+    const tp = service(`
+      (1, 1, 100, 50, 'S', NULL, NULL, NULL),
+      (2, 1, 150, 10, 'D', 2, NULL, 0),
+      (3, 1, 200, 10, 'S', NULL, NULL, NULL),
+      (4, 1, 210, 10, 'R', NULL, NULL, 0),
+      (5, 1, 300, 10, 'S', NULL, NULL, NULL),
+      (6, 1, 311, 10, 'R', 2, NULL, 0)
+    `);
+
+    for (const threadStateId of [1, 3, 5]) {
+      const result = await resolveDirectWaker(tp, 'trace-1', {threadStateId});
+      expect(result.hop).toBeNull();
+      expect(result.warnings).toEqual(['no recorded waker on the wakeup row (waker_utid is NULL)']);
     }
   });
 
-  it('counterfactual upper bound is task.dur - longest external segment, never below zero', async () => {
-    const service = patternMockedService([
-      {
-        match: /FROM thread_state AS target\s+LEFT JOIN thread USING\(utid\)/i,
-        responder: () =>
-          queryResult(taskColumns, [
-            [106, 7_000_000_000, 30_000_000, 1, 'S', null, 0, null, null, 0, 1001, 7, 'main', 'com.demo', null, null, null, null],
-          ]),
-      },
-      {
-        match: /FROM _critical_path_stack/i,
-        responder: () =>
-          queryResult(stackColumns, [
-            [1, 7_000_000_000, 22_000_000, 2, 8, 'blocking thread_state: S', 'thread_state', 1, 'svc', 'svc_proc'],
-          ]),
-      },
-    ]);
+  it('reports a missing row as unavailable', async () => {
+    const result = await resolveDirectWaker(service(`(1, 1, 100, 50, 'S', NULL, NULL, NULL)`), 'trace-1', {threadStateId: 42});
 
-    const analysis = await analyzeCriticalPath(service, 'trace-1', {threadStateId: 106});
-
-    expect(analysis.quantification?.counterfactual?.longestSegmentDurMs).toBeCloseTo(22, 1);
-    expect(analysis.quantification?.counterfactual?.upperBoundMs).toBeCloseTo(8, 1);
-    expect(analysis.quantification?.counterfactual?.note).toMatch(/UPPER BOUND/);
+    expect(result).toEqual({available: false, hop: null, warnings: ['thread_state 42 not found']});
   });
 });

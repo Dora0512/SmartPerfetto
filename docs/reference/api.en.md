@@ -753,3 +753,35 @@ specific product or admin surfaces; confirm the relevant feature/auth state
 before integrating against them.
 
 The legacy agent API base is rejected by `rejectLegacyAgentApi` to avoid new external use of deprecated paths. Legacy direct AI routes such as `/api/advanced-ai/*`, `/api/auto-analysis/*`, and `/api/agent/v1/llm/*` have been removed; use `/api/agent/v1/analyze`.
+
+### Critical-path wait chain
+
+`POST /api/critical-path/:traceId/analyze` backs the AI Assistant Critical path
+button for a selected `thread_state`. It is a global, non-workspace route: in
+enterprise / OIDC deployments it always returns 410
+`ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`, and there is no workspace-scoped
+replacement yet. The trace must belong to the caller's workspace, and the caller
+needs `trace:read`.
+
+The body takes `threadStateId`, or `utid` + `startTs` + `dur` (optional
+`endTs`), plus optional `maxSegments`, `recursionDepth`, `recursionEnabled`,
+`segmentBudget`, `includeAi`, `question`, and `outputLanguage`.
+
+Success returns `{success: true, analysis, presentationAnalysis, aiSummary}`.
+`aiSummary` falls back to the deterministic rule summary (`generated: false`)
+with a `fallbackReason` and localized `warnings` when AI is disabled (feature
+`critical_path_ai_summary`), the active provider is not on the Claude Agent SDK
+runtime, credentials are missing, the call times out, or the client disconnects.
+Disabling AI never turns this route into a 403. A client disconnect cancels the
+in-flight model call.
+
+Failures return `{success: false, code, error}` with a localized `error`:
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 400 | `invalid_trace_id` | The traceId contains characters outside the safe set |
+| 400 | `invalid_request_body` | The body failed validation; `issues` lists the fields |
+| 400 | `invalid_thread_state_id`, `missing_selector`, `non_positive_duration`, `invalid_integer` | The task selector is unusable |
+| 404 | `trace_not_found` | The trace does not exist or is not the caller's |
+| 404 | `thread_state_not_found` | The trace has no such thread_state |
+| 500 | `critical_path_failed` | Any other failure; the raw error goes only to the server log |

@@ -682,3 +682,22 @@ trace 的诊断证据或 root-cause 证明。接口复用当前 workspace scope�
 仍在维护的辅助 API 包括 `/api/flamegraph/*`、`/api/critical-path/*`、`/api/baselines/*`、`/api/memory/*`、`/api/cases/*`、`/api/ci/*`、`/api/tp/*`、`/api/auth/*`、`/api/tenant/*` 和 `/api/admin/runtime/*`。这些接口面向特定产品面或管理面，调用前应先确认当前部署是否启用了对应 feature / auth。
 
 legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续接入废弃路径。`/api/advanced-ai/*`、`/api/auto-analysis/*` 和 `/api/agent/v1/llm/*` 这类旧 direct AI route 已移除；统一使用 `/api/agent/v1/analyze`。
+
+### Critical path 等待链
+
+`POST /api/critical-path/:traceId/analyze` 服务于 AI Assistant 中选中 `thread_state` 后的 Critical path 按钮。它是全局非 workspace 接口，enterprise / OIDC 部署下固定返回 410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`，目前没有 workspace 版本。Trace 必须属于调用方 workspace，且调用方需要 `trace:read`。
+
+请求体为 `threadStateId`，或 `utid` + `startTs` + `dur`（可选 `endTs`），另可带 `maxSegments`、`recursionDepth`、`recursionEnabled`、`segmentBudget`、`includeAi`、`question`、`outputLanguage`。
+
+成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用。
+
+失败返回 `{success: false, code, error}`，`error` 已本地化：
+
+| 状态 | `code` | 含义 |
+|---|---|---|
+| 400 | `invalid_trace_id` | traceId 含有安全字符集以外的字符 |
+| 400 | `invalid_request_body` | 请求体未通过校验，附 `issues` |
+| 400 | `invalid_thread_state_id`、`missing_selector`、`non_positive_duration`、`invalid_integer` | 选择参数不可用 |
+| 404 | `trace_not_found` | Trace 不存在，或不属于调用方 |
+| 404 | `thread_state_not_found` | Trace 中没有该 thread_state |
+| 500 | `critical_path_failed` | 其他失败；原始错误只写入服务端日志 |

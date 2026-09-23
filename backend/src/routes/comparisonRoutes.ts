@@ -19,6 +19,7 @@ import {
   renderComparisonHtmlReport,
 } from '../services/comparisonHtmlReportService';
 import { reportStore } from './reportRoutes';
+import { clientDisconnectSignal } from './clientDisconnect';
 import { backfillStandardMetrics } from '../services/standardMetricBackfillService';
 import { getTraceProcessorService } from '../services/traceProcessorService';
 import type { TraceProcessorService } from '../services/traceProcessorService';
@@ -200,26 +201,6 @@ async function backfillSnapshotMetrics(
       }
     }
   }
-}
-
-/**
- * Abort signal that fires when the HTTP client disconnects. The AI comparison
- * conclusion can run for minutes, so an abandoned request must stop rather than
- * hold a database connection and keep spending provider budget.
- *
- * Watches the *response*, not the request: `IncomingMessage` 'close' also fires
- * on a normally consumed body, which would abort healthy requests. A response
- * that closes without `writableEnded` is a real disconnect.
- */
-function clientDisconnectSignal(res: {
-  writableEnded: boolean;
-  on(event: 'close', listener: () => void): unknown;
-}): AbortSignal {
-  const controller = new AbortController();
-  res.on('close', () => {
-    if (!res.writableEnded) controller.abort();
-  });
-  return controller.signal;
 }
 
 async function completeComparisonRun(

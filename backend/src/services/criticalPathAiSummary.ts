@@ -3,36 +3,39 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import {type SDKMessage, type SDKResultSuccess, query as sdkQuery} from '@anthropic-ai/claude-agent-sdk';
-import {createSdkEnv, getSdkBinaryOption, hasClaudeCredentials, loadClaudeConfig} from '../agentv3/claudeConfig';
+import {isolatedSceneModelCallOptions} from '../agent/scene/isolatedSceneModelCall';
+import {resolveAgentRuntimeSelection} from '../agentRuntime/runtimeSelection';
+import {
+  createSdkEnv,
+  hasClaudeCredentials,
+  loadClaudeConfig,
+  resolveRuntimeConfig,
+} from '../agentv3/claudeConfig';
 import {
   localize,
   type OutputLanguage,
 } from '../agentv3/outputLanguage';
 import {redactObjectForLLM} from '../utils/llmPrivacy';
+import {
+  AI_CAPABILITY_ENV_KEY,
+  type AiCapabilityPolicyV1,
+  getAiCapabilityPolicy,
+  isAiFeatureEnabled,
+} from './aiCapabilityPolicy';
 import type {CriticalPathAnalysis} from './criticalPathAnalyzer';
+import {projectCriticalPathAnalysis} from './criticalPathLocalization';
+import type {ProviderScope} from './providerManager';
 
-const ENGLISH_CRITICAL_PATH_MODULES = new Map<string, string>([
-  ['IO / 文件系统', 'I/O / File system'],
-  ['锁 / Monitor', 'Locks / Monitor'],
-  ['锁 / Futex', 'Locks / Futex'],
-  ['图形渲染 / Surface', 'Graphics / Surface'],
-  ['调度 / CPU 竞争', 'Scheduling / CPU contention'],
-]);
-
-const ENGLISH_CRITICAL_PATH_ANOMALIES = new Map<string, string>([
-  ['选中 task 本身耗时过长', 'The selected task is too long'],
-  ['选中 task 超过单帧预算', 'The selected task exceeds the frame budget'],
-  ['外部 critical path 占比过高', 'External critical-path share is high'],
-  ['存在长 critical path 段', 'A long critical-path segment exists'],
-  ['等待链涉及 IO/page-cache 候选', 'The wait chain contains an I/O or page-cache candidate'],
-  ['等待链涉及 Binder / IPC', 'The wait chain contains Binder / IPC'],
-  ['等待链涉及 Java 锁竞争', 'The wait chain contains Java lock contention'],
-  ['GC 与等待链重叠', 'GC overlaps the wait chain'],
-  ['存在调度或 CPU 竞争迹象', 'Scheduling or CPU contention is indicated'],
-  ['未发现明显异常', 'No clear anomaly was found'],
-  ['Running 状态：无等待链可分析', 'Running state: no wait chain to analyze'],
-  ['没有取到 critical path 等待链', 'No critical-path wait chain was found'],
-]);
+/** Why the deterministic rule summary was returned instead of a model answer. */
+export type CriticalPathAiFallbackReason =
+  | 'ai_disabled'
+  | 'runtime_not_supported'
+  | 'runtime_unavailable'
+  | 'credentials_missing'
+  | 'client_disconnected'
+  | 'timed_out'
+  | 'failed'
+  | 'empty_response';
 
 export interface CriticalPathAiSummary {
   generated: boolean;
@@ -40,6 +43,39 @@ export interface CriticalPathAiSummary {
   summary: string;
   warnings: string[];
   redactionApplied?: boolean;
+  /** Set whenever `generated` is false; `warnings` carries the localized explanation. */
+  fallbackReason?: CriticalPathAiFallbackReason;
+}
+
+export interface CriticalPathAiSummaryOptions {
+  /**
+   * Provider Manager scope of the caller. The summary follows that scope's
+   * active profile exactly like an Agent run, instead of raw process env.
+   */
+  providerScope?: ProviderScope;
+  /** Caller cancellation, e.g. the HTTP client disconnecting. */
+  signal?: AbortSignal;
+  /** Defaults to the process-wide `SMARTPERFETTO_AI_ENABLED` policy. */
+  aiPolicy?: AiCapabilityPolicyV1;
+}
+
+type CriticalPathCounterfactual = NonNullable<
+  NonNullable<CriticalPathAnalysis['quantification']>['counterfactual']
+>;
+
+interface CounterfactualView {
+  longestSegmentDurMs: number;
+  /** Best-case task duration once the longest external segment is removed. */
+  bestCaseDurationMs: number;
+  /** The saving that removal can buy at most (a shorter path may take over). */
+  maxSavingMs: number;
+}
+
+// The pick keeps the deprecated `upperBoundMs` alias and the note out of the
+// prompt: the model sees the best-case fields only.
+function readCounterfactual(counterfactual: CriticalPathCounterfactual): CounterfactualView {
+  const {longestSegmentDurMs, bestCaseDurationMs, maxSavingMs} = counterfactual;
+  return {longestSegmentDurMs, bestCaseDurationMs, maxSavingMs};
 }
 
 // LLM input hard caps (Codex P1-6) — protect cost and avoid drowning the model
@@ -81,6 +117,13 @@ function redactCriticalPathFields(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const lk = k.toLowerCase();
+      // Hypothesis text is built by the product from numeric-only
+      // interpolation, and the prompt asks the model to reuse the SQL
+      // verbatim; clamping it would cut the SQL mid-predicate.
+      if (lk === 'statement' || lk === 'verificationsql' || lk === 'notes') {
+        out[k] = v;
+        continue;
+      }
       // Hash-style obfuscation for sensitive identifiers (keep grouping but
       // not the literal value).
       if (
@@ -122,6 +165,9 @@ export function buildDeterministicCriticalPathSummary(
   outputLanguage: OutputLanguage = 'zh-CN',
 ): string {
   if (outputLanguage === 'en') {
+    // The localization projection owns every English label; read the
+    // module and anomaly names from it instead of keeping a second map.
+    const view = projectCriticalPathAnalysis(analysis, 'en');
     const lines = [
       'Critical-path analysis for the selected task.',
       '',
@@ -130,13 +176,11 @@ export function buildDeterministicCriticalPathSummary(
       `External critical path: ${analysis.blockingMs.toFixed(2)} ms (${analysis.externalBlockingPercentage.toFixed(2)}%).`,
     ];
 
-    if (analysis.moduleBreakdown.length > 0) {
+    if (view.moduleBreakdown.length > 0) {
       lines.push(
-        `Primary modules: ${analysis.moduleBreakdown
+        `Primary modules: ${view.moduleBreakdown
           .slice(0, 4)
-          .map((item) =>
-            `${ENGLISH_CRITICAL_PATH_MODULES.get(item.module) || item.module} ` +
-            `${item.durationMs.toFixed(2)} ms`)
+          .map((item) => `${item.module} ${item.durationMs.toFixed(2)} ms`)
           .join(', ')}.`,
       );
     }
@@ -150,22 +194,17 @@ export function buildDeterministicCriticalPathSummary(
       );
     }
     if (analysis.quantification?.counterfactual) {
+      const counterfactual = readCounterfactual(analysis.quantification.counterfactual);
       lines.push(
-        `Counterfactual upper bound: removing the longest external segment ` +
-        `(${analysis.quantification.counterfactual.longestSegmentDurMs.toFixed(2)} ms) ` +
-        `gives a task-duration upper bound of ` +
-        `${analysis.quantification.counterfactual.upperBoundMs.toFixed(2)} ms. ` +
-        'This is an upper bound, not a guaranteed prediction.',
+        `Counterfactual best case: removing the longest external segment ` +
+        `(${counterfactual.longestSegmentDurMs.toFixed(2)} ms) leaves a best-case task duration of ` +
+        `${counterfactual.bestCaseDurationMs.toFixed(2)} ms, a saving of at most ` +
+        `${counterfactual.maxSavingMs.toFixed(2)} ms. ` +
+        'Another wait may become the bottleneck, so the real saving can be smaller.',
       );
     }
-    if (analysis.anomalies.length > 0) {
-      lines.push(
-        `Rule findings: ${analysis.anomalies
-          .slice(0, 3)
-          .map((item) =>
-            ENGLISH_CRITICAL_PATH_ANOMALIES.get(item.title) || item.title)
-          .join('; ')}.`,
-      );
+    if (view.anomalies.length > 0) {
+      lines.push(`Rule findings: ${view.anomalies.slice(0, 3).map((item) => item.title).join('; ')}.`);
     }
     return lines.filter(line => line !== undefined).join('\n');
   }
@@ -194,8 +233,11 @@ export function buildDeterministicCriticalPathSummary(
     );
   }
   if (analysis.quantification?.counterfactual) {
+    const counterfactual = readCounterfactual(analysis.quantification.counterfactual);
     lines.push(
-      `反事实上界：消除最长外部段（${analysis.quantification.counterfactual.longestSegmentDurMs.toFixed(2)} ms）后任务时长上界 ${analysis.quantification.counterfactual.upperBoundMs.toFixed(2)} ms（仅上界估算，可能因次长段成为新瓶颈而无法达到）。`
+      `反事实最好情况：消除最长外部段（${counterfactual.longestSegmentDurMs.toFixed(2)} ms）后，` +
+      `任务时长最好可降至 ${counterfactual.bestCaseDurationMs.toFixed(2)} ms，即至多节省 ` +
+      `${counterfactual.maxSavingMs.toFixed(2)} ms；其他等待可能成为新瓶颈，实际节省可能更少。`
     );
   }
   if (analysis.anomalies.length > 0) {
@@ -237,7 +279,6 @@ function compactAnalysisForLLM(analysis: CriticalPathAnalysis): unknown {
     reasons: segment.reasons.slice(0, 6),
     semantics: segment.semantics
       ? {
-          sources: segment.semantics.sources,
           binderTxns: segment.semantics.binderTxns.slice(0, HARD_CAPS.binderTxnsPerSeg).map((txn) => ({
             side: txn.side,
             isSync: txn.isSync,
@@ -297,7 +338,9 @@ function compactAnalysisForLLM(analysis: CriticalPathAnalysis): unknown {
     directWaker: analysis.directWaker,
     quantification: analysis.quantification
       ? {
-          counterfactual: analysis.quantification.counterfactual,
+          counterfactual: analysis.quantification.counterfactual
+            ? readCounterfactual(analysis.quantification.counterfactual)
+            : null,
           frameImpacts: analysis.quantification.frameImpacts.slice(0, 4),
           hypotheses: analysis.quantification.hypotheses.slice(0, HARD_CAPS.hypotheses),
         }
@@ -318,7 +361,7 @@ const STRUCTURED_PROMPT_TEMPLATE = `你是 Android Perfetto 调度与渲染性�
 基于 semantics.binderTxns / monitorContention / ioSignals / gcEvents / cpuCompetition 给出**具体**的语义事件（method 名已 base64 脱敏，请按 ID 引用），并说明每条事件如何叠加形成总等待。
 
 # 4. 量化影响 [evidence_strength]
-基于 quantification.counterfactual + frameImpacts：消除最长段的反事实上界、是否覆盖某帧 deadline。**明确表述 counterfactual 是上界而非确定预测**。
+基于 quantification.counterfactual + frameImpacts：bestCaseDurationMs 是消除最长外部段后任务时长的最好情况，节省至多 maxSavingMs；并说明是否覆盖某帧 deadline。**明确表述这是最好情况估算而非确定预测：其他等待可能成为新瓶颈，实际节省可能更少**。
 
 # 5. 可证伪假设 + SQL [evidence_strength]
 基于 quantification.hypotheses 列出最多 3 条假设，每条用一句话陈述 + 注明 strength + 给出 verificationSql（直接复用，不要改字符串）。
@@ -345,7 +388,7 @@ Use directWaker and recursive wakeupChain children. Explain the direct source an
 Use semantics.binderTxns, monitorContention, ioSignals, gcEvents, and cpuCompetition. Reference redacted method IDs unchanged and explain how events combine into total wait time.
 
 # 4. Quantified impact [evidence_strength]
-Use quantification.counterfactual and frameImpacts. Explicitly state that the counterfactual is an upper bound, not a guaranteed prediction.
+Use quantification.counterfactual and frameImpacts. bestCaseDurationMs is the best-case task duration after removing the longest external segment, and the saving is at most maxSavingMs. Explicitly state that this is a best-case estimate, not a guaranteed prediction: another wait may become the bottleneck, so the real saving can be smaller.
 
 # 5. Falsifiable hypotheses and SQL [evidence_strength]
 List at most three hypotheses with strength and reuse verificationSql verbatim.
@@ -360,30 +403,69 @@ Fact JSON:
 {{JSON}}
 {{QUESTION_BLOCK}}`;
 
-export async function summarizeCriticalPathWithAi(
-  analysis: CriticalPathAnalysis,
-  question?: string,
-  outputLanguage: OutputLanguage = 'zh-CN',
-): Promise<CriticalPathAiSummary> {
-  const fallback = buildDeterministicCriticalPathSummary(
-    analysis,
-    outputLanguage,
-  );
-  if (!hasClaudeCredentials()) {
-    return {
-      generated: false,
-      summary: fallback,
-      warnings: [
-        localize(
-          outputLanguage,
-          'AI 模型未配置，已返回规则兜底总结。',
-          'No AI model is configured; a deterministic rule summary was returned.',
-        ),
-      ],
-    };
+/** Localized explanation for each deterministic-summary fallback. */
+function fallbackWarning(
+  reason: CriticalPathAiFallbackReason,
+  outputLanguage: OutputLanguage,
+  detail = '',
+): string {
+  switch (reason) {
+    case 'ai_disabled':
+      return localize(
+        outputLanguage,
+        `AI 已由 ${AI_CAPABILITY_ENV_KEY} 关闭，已返回规则兜底总结。`,
+        `AI is disabled by ${AI_CAPABILITY_ENV_KEY}; a deterministic rule summary was returned.`,
+      );
+    case 'runtime_not_supported':
+      return localize(
+        outputLanguage,
+        `当前 Provider 使用 ${detail} 运行时，关键路径 AI 总结只支持 Claude Agent SDK，已返回规则兜底总结。`,
+        `The active provider uses the ${detail} runtime; the critical-path AI summary supports only the Claude Agent SDK, so a deterministic rule summary was returned.`,
+      );
+    case 'runtime_unavailable':
+      return localize(
+        outputLanguage,
+        '无法解析当前 AI Provider，已返回规则兜底总结。',
+        'The active AI provider could not be resolved; a deterministic rule summary was returned.',
+      );
+    case 'credentials_missing':
+      return localize(
+        outputLanguage,
+        'AI 模型未配置，已返回规则兜底总结。',
+        'No AI model is configured; a deterministic rule summary was returned.',
+      );
+    case 'client_disconnected':
+      return localize(
+        outputLanguage,
+        '客户端已断开，AI 诊断已取消。',
+        'The client disconnected, so the AI diagnosis was cancelled.',
+      );
+    case 'timed_out':
+      return localize(
+        outputLanguage,
+        'AI 诊断超时，已返回规则兜底总结。',
+        'AI diagnosis timed out; a deterministic rule summary was returned.',
+      );
+    case 'failed':
+      return localize(
+        outputLanguage,
+        `AI 诊断失败，已返回规则兜底总结：${detail}`,
+        `AI diagnosis failed; a deterministic rule summary was returned: ${detail}`,
+      );
+    case 'empty_response':
+      return localize(
+        outputLanguage,
+        'AI 没有返回有效内容，已返回规则兜底总结。',
+        'The AI returned no valid content; a deterministic rule summary was returned.',
+      );
   }
+}
 
-  const config = loadClaudeConfig();
+function buildStructuredPrompt(
+  analysis: CriticalPathAnalysis,
+  question: string | undefined,
+  outputLanguage: OutputLanguage,
+): {prompt: string; redactionApplied: boolean} {
   const compact = compactAnalysisForLLM(analysis);
   const customRedacted = redactCriticalPathFields(compact);
   const redacted = redactObjectForLLM(customRedacted);
@@ -405,96 +487,137 @@ export async function summarizeCriticalPathWithAi(
         )
       : '',
   );
+  return {prompt, redactionApplied: redacted.stats.applied};
+}
 
-  const timeoutMs = Number.parseInt(process.env.CRITICAL_PATH_AI_TIMEOUT_MS || '60000', 10);
-  const sdkEnv = createSdkEnv();
-  const stream = sdkQuery({
-    prompt,
-    options: {
-      model: config.model,
-      maxTurns: 1,
-      permissionMode: 'bypassPermissions' as const,
-      allowDangerouslySkipPermissions: true,
-      env: sdkEnv,
-      stderr: (data: string) => {
-        console.warn(`[CriticalPathAI] SDK stderr: ${data.trimEnd()}`);
-      },
-      ...getSdkBinaryOption(sdkEnv),
-    },
+/**
+ * Optional model narrative over the deterministic analysis. Every path that
+ * does not produce a model answer returns the deterministic summary with a
+ * `fallbackReason` and a localized warning; this function never throws for
+ * policy, provider, or model failures.
+ */
+export async function summarizeCriticalPathWithAi(
+  analysis: CriticalPathAnalysis,
+  question?: string,
+  outputLanguage: OutputLanguage = 'zh-CN',
+  options: CriticalPathAiSummaryOptions = {},
+): Promise<CriticalPathAiSummary> {
+  const fallback = buildDeterministicCriticalPathSummary(
+    analysis,
+    outputLanguage,
+  );
+  const degrade = (
+    reason: CriticalPathAiFallbackReason,
+    extra: Pick<CriticalPathAiSummary, 'model' | 'redactionApplied'> = {},
+    detail = '',
+  ): CriticalPathAiSummary => ({
+    generated: false,
+    ...extra,
+    summary: fallback,
+    warnings: [fallbackWarning(reason, outputLanguage, detail)],
+    fallbackReason: reason,
   });
 
-  let result = '';
+  // The operator switch is checked before any provider or credential lookup:
+  // with AI off, no trace-derived text may reach a model.
+  const policy = options.aiPolicy ?? getAiCapabilityPolicy();
+  if (!isAiFeatureEnabled('critical_path_ai_summary', policy)) {
+    return degrade('ai_disabled');
+  }
+  const {signal, providerScope} = options;
+  if (signal?.aborted) {
+    return degrade('client_disconnected');
+  }
+
+  // Follow the caller's active Provider Manager profile, as an Agent run does.
+  let model: string;
+  let sdkEnv: ReturnType<typeof createSdkEnv>;
+  try {
+    const selection = resolveAgentRuntimeSelection(undefined, undefined, providerScope);
+    if (selection.kind !== 'claude-agent-sdk') {
+      return degrade('runtime_not_supported', {}, selection.kind);
+    }
+    model = resolveRuntimeConfig(loadClaudeConfig(), undefined, providerScope).model;
+    sdkEnv = createSdkEnv(undefined, providerScope);
+  } catch (error: unknown) {
+    console.warn('[CriticalPathAI] Provider resolution failed:', errorMessage(error));
+    return degrade('runtime_unavailable');
+  }
+  if (!hasClaudeCredentials(sdkEnv)) {
+    return degrade('credentials_missing');
+  }
+
+  const {prompt, redactionApplied} = buildStructuredPrompt(analysis, question, outputLanguage);
+  const attempted = {model, redactionApplied};
+
+  const timeoutMs = Number.parseInt(process.env.CRITICAL_PATH_AI_TIMEOUT_MS || '60000', 10);
+  // One controller owns the SDK subprocess; the caller's disconnect and the
+  // wall-clock deadline both stop it through the same path.
+  const abortController = new AbortController();
+  let stream: ReturnType<typeof sdkQuery> | undefined;
   let timedOut = false;
+  const stop = () => {
+    abortController.abort();
+    try {
+      stream?.close();
+    } catch {
+      // ignore
+    }
+  };
+  signal?.addEventListener('abort', stop, {once: true});
   const timer = setTimeout(
     () => {
       timedOut = true;
-      try {
-        stream.close();
-      } catch {
-        // ignore
-      }
+      stop();
     },
     Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000
   );
 
+  let result = '';
   try {
+    stream = sdkQuery({
+      prompt,
+      options: {
+        ...isolatedSceneModelCallOptions({
+          model,
+          env: sdkEnv,
+          stderr: (data: string) => {
+            console.warn(`[CriticalPathAI] SDK stderr: ${data.trimEnd()}`);
+          },
+        }),
+        abortController,
+      },
+    });
     for await (const message of stream) {
-      if (timedOut) break;
+      if (abortController.signal.aborted) break;
       if (isSuccessfulResultMessage(message)) {
         result = message.result || '';
       }
     }
   } catch (error: unknown) {
-    return {
-      generated: false,
-      model: config.model,
-      summary: fallback,
-      warnings: [
-        localize(
-          outputLanguage,
-          `AI 诊断失败，已返回规则兜底总结：${errorMessage(error)}`,
-          `AI diagnosis failed; a deterministic rule summary was returned: ${errorMessage(error)}`,
-        ),
-      ],
-      redactionApplied: redacted.stats.applied,
-    };
+    if (!abortController.signal.aborted) {
+      console.warn('[CriticalPathAI] Model call failed:', error);
+      return degrade('failed', attempted, errorMessage(error));
+    }
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
     try {
-      stream.close();
+      stream?.close();
     } catch {
       // ignore
     }
   }
 
-  if (timedOut || !result.trim()) {
-    return {
-      generated: false,
-      model: config.model,
-      summary: fallback,
-      warnings: [
-        timedOut
-          ? localize(
-              outputLanguage,
-              'AI 诊断超时，已返回规则兜底总结。',
-              'AI diagnosis timed out; a deterministic rule summary was returned.',
-            )
-          : localize(
-              outputLanguage,
-              'AI 没有返回有效内容，已返回规则兜底总结。',
-              'The AI returned no valid content; a deterministic rule summary was returned.',
-            ),
-      ],
-      redactionApplied: redacted.stats.applied,
-    };
-  }
+  if (signal?.aborted) return degrade('client_disconnected', attempted);
+  if (timedOut) return degrade('timed_out', attempted);
+  if (!result.trim()) return degrade('empty_response', attempted);
 
   return {
     generated: true,
-    model: config.model,
+    ...attempted,
     summary: result.trim(),
     warnings: [],
-    redactionApplied: redacted.stats.applied,
   };
 }
 
