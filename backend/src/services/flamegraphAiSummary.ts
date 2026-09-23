@@ -2,21 +2,15 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { type SDKMessage, type SDKResultSuccess, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { createSdkEnv, getSdkBinaryOption, hasClaudeCredentials, loadClaudeConfig } from '../agentv3/claudeConfig';
-import { redactObjectForLLM } from '../utils/llmPrivacy';
-import type { FlamegraphAiSummary, FlamegraphAnalysis } from './flamegraphTypes';
+import {loadPromptTemplate, renderTemplate, stripPromptComments} from '../agentv3/strategyLoader';
+import {redactObjectForLLM} from '../utils/llmPrivacy';
+import {AI_CAPABILITY_ENV_KEY, type AiCapabilityPolicyV1} from './aiCapabilityPolicy';
+import type {FlamegraphAiFallbackReason, FlamegraphAiSummary, FlamegraphAnalysis} from './flamegraphTypes';
+import {resolveOneShotModelRoute, runIsolatedClaudeOneShot} from './oneShotModelCall';
+import type {ProviderScope} from './providerManager';
 
 function pct(value: number): string {
   return `${Math.round(value * 100) / 100}%`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isSuccessfulResultMessage(message: SDKMessage): message is SDKResultSuccess {
-  return message.type === 'result' && message.subtype === 'success';
 }
 
 export function buildDeterministicFlamegraphSummary(analysis: FlamegraphAnalysis): string {
@@ -92,105 +86,106 @@ function compactAnalysisForLLM(analysis: FlamegraphAnalysis): unknown {
   };
 }
 
+export interface FlamegraphAiSummaryOptions {
+  /** Provider Manager scope of the caller; the call follows its active profile. */
+  providerScope?: ProviderScope;
+  /** Caller cancellation, e.g. the HTTP client disconnecting. */
+  signal?: AbortSignal;
+  /** Defaults to the process-wide `SMARTPERFETTO_AI_ENABLED` policy. */
+  aiPolicy?: AiCapabilityPolicyV1;
+  /** Whether the caller may start model work (`agent:run`); false never calls a model. */
+  aiPermitted?: boolean;
+}
+
+// The flamegraph surface is Chinese-only (its static page and rule summary).
+function fallbackWarning(reason: FlamegraphAiFallbackReason, detail = ''): string {
+  switch (reason) {
+    case 'ai_disabled':
+      return `AI 已由 ${AI_CAPABILITY_ENV_KEY} 关闭，已返回规则兜底总结。`;
+    case 'permission_denied':
+      return '当前账号没有运行 AI 分析的权限（agent:run），已返回规则兜底总结。';
+    case 'runtime_not_supported':
+      return `当前 Provider 使用 ${detail} 运行时，火焰图 AI 总结只支持 Claude Agent SDK，已返回规则兜底总结。`;
+    case 'runtime_unavailable':
+      return '无法解析当前 AI Provider，已返回规则兜底总结。';
+    case 'credentials_missing':
+      return 'AI 模型未配置，已返回规则兜底总结。';
+    case 'client_disconnected':
+      return '客户端已断开，AI 总结已取消。';
+    case 'timed_out':
+      return 'AI 总结超时，已返回规则兜底总结。';
+    case 'failed':
+      // The provider's own error text stays in the server log.
+      return 'AI 总结失败，已返回规则兜底总结。';
+    case 'empty_response':
+      return 'AI 没有返回有效内容，已返回规则兜底总结。';
+  }
+}
+
+function buildPrompt(
+  analysis: FlamegraphAnalysis,
+  question: string | undefined,
+): {prompt: string; redactionApplied: boolean} | undefined {
+  const template = loadPromptTemplate('prompt-flamegraph-summary');
+  if (!template) return undefined;
+  const redacted = redactObjectForLLM(compactAnalysisForLLM(analysis));
+  const prompt = renderTemplate(stripPromptComments(template), {
+    questionBlock: question ? `\n\n用户问题：${question.slice(0, 500)}` : '',
+    statsJson: JSON.stringify(redacted.value),
+  });
+  return {prompt, redactionApplied: redacted.stats.applied};
+}
+
+/**
+ * Optional model narrative over the flamegraph statistics. Every path that
+ * does not produce a model answer returns the rule summary with a
+ * `fallbackReason` and a warning; this never throws for policy, permission,
+ * provider or model failures.
+ */
 export async function summarizeFlamegraphWithAi(
   analysis: FlamegraphAnalysis,
-  question?: string
+  question?: string,
+  options: FlamegraphAiSummaryOptions = {},
 ): Promise<FlamegraphAiSummary> {
   const fallback = buildDeterministicFlamegraphSummary(analysis);
-  if (!hasClaudeCredentials()) {
-    return {
-      generated: false,
-      summary: fallback,
-      warnings: ['AI 模型未配置，已返回规则兜底总结。'],
-    };
-  }
-
-  const config = loadClaudeConfig();
-  const redacted = redactObjectForLLM(compactAnalysisForLLM(analysis));
-  const prompt = [
-    '你是 Android 性能分析专家，请基于下面的 Perfetto CPU 火焰图统计做中文解释。',
-    '要求：',
-    '1. 明确区分 self_count（函数自身耗 CPU）和 cumulative_count（调用链累计热度），不要混为一谈。',
-    '2. 不要编造 trace 中没有的数据；如果证据不足，直接说证据不足。',
-    '3. 输出结构：结论、证据、下一步排查建议。',
-    '4. 结合 category/categoryLabel 判断热点更像业务代码、Android Framework、ART/JIT、Native、图形渲染、Kernel 还是未知符号。',
-    '5. 重点解释“为什么这个火焰图值得关注”，而不是只复述数字。',
-    question ? `用户问题：${question}` : '',
-    `火焰图统计 JSON：${JSON.stringify(redacted.value)}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  const timeoutMs = Number.parseInt(process.env.FLAMEGRAPH_AI_TIMEOUT_MS || '60000', 10);
-  const sdkEnv = createSdkEnv();
-  const stream = sdkQuery({
-    prompt,
-    options: {
-      model: config.model,
-      maxTurns: 1,
-      permissionMode: 'bypassPermissions' as const,
-      allowDangerouslySkipPermissions: true,
-      env: sdkEnv,
-      stderr: (data: string) => {
-        console.warn(`[FlamegraphAI] SDK stderr: ${data.trimEnd()}`);
-      },
-      ...getSdkBinaryOption(sdkEnv),
-    },
+  const degrade = (
+    reason: FlamegraphAiFallbackReason,
+    extra: Pick<FlamegraphAiSummary, 'model' | 'redactionApplied'> = {},
+    detail = '',
+  ): FlamegraphAiSummary => ({
+    generated: false,
+    ...extra,
+    summary: fallback,
+    warnings: [fallbackWarning(reason, detail)],
+    fallbackReason: reason,
   });
 
-  let result = '';
-  let timedOut = false;
-  const timer = setTimeout(
-    () => {
-      timedOut = true;
-      try {
-        stream.close();
-      } catch {
-        /* ignore */
-      }
-    },
-    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000
-  );
+  // Operator switch and caller permission first: no trace-derived text may
+  // reach a model otherwise.
+  const route = resolveOneShotModelRoute({
+    feature: 'flamegraph_ai_summary',
+    providerScope: options.providerScope,
+    aiPolicy: options.aiPolicy,
+    logLabel: 'FlamegraphAI',
+  });
+  if (route.kind === 'unavailable' && route.reason === 'ai_disabled') return degrade('ai_disabled');
+  if (options.aiPermitted === false) return degrade('permission_denied');
+  if (options.signal?.aborted) return degrade('client_disconnected');
+  if (route.kind === 'unavailable') return degrade(route.reason);
+  if (route.runtime !== 'claude-agent-sdk') return degrade('runtime_not_supported', {}, route.runtime);
 
-  try {
-    for await (const message of stream) {
-      if (timedOut) break;
-      if (isSuccessfulResultMessage(message)) {
-        result = message.result || '';
-      }
-    }
-  } catch (error: unknown) {
-    return {
-      generated: false,
-      model: config.model,
-      summary: fallback,
-      warnings: [`AI 总结失败，已返回规则兜底总结：${errorMessage(error)}`],
-      redactionApplied: redacted.stats.applied,
-    };
-  } finally {
-    clearTimeout(timer);
-    try {
-      stream.close();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  if (timedOut || !result.trim()) {
-    return {
-      generated: false,
-      model: config.model,
-      summary: fallback,
-      warnings: [timedOut ? 'AI 总结超时，已返回规则兜底总结。' : 'AI 没有返回有效内容，已返回规则兜底总结。'],
-      redactionApplied: redacted.stats.applied,
-    };
-  }
-
-  return {
-    generated: true,
-    model: config.model,
-    summary: result.trim(),
-    warnings: [],
-    redactionApplied: redacted.stats.applied,
-  };
+  const built = buildPrompt(analysis, question);
+  if (!built) return degrade('failed');
+  const timeoutMs = Number.parseInt(process.env.FLAMEGRAPH_AI_TIMEOUT_MS || '60000', 10);
+  const result = await runIsolatedClaudeOneShot({
+    prompt: built.prompt,
+    tier: 'main',
+    timeoutMs,
+    signal: options.signal,
+    logLabel: 'FlamegraphAI',
+    providerScope: options.providerScope,
+  });
+  const attempted = {...(result.model ? {model: result.model} : {}), redactionApplied: built.redactionApplied};
+  if (!result.ok) return degrade(result.reason, attempted);
+  return {generated: true, ...attempted, model: result.model, summary: result.text, warnings: []};
 }

@@ -14,6 +14,7 @@ import {
   type CriticalPathInputErrorCode,
 } from '../services/criticalPathAnalyzer';
 import {projectCriticalPathAnalysis} from '../services/criticalPathLocalization';
+import {hasRbacPermission} from '../services/rbac';
 import {sendResourceNotFound} from '../services/resourceOwnership';
 import {isSafeTraceId, readTraceMetadataForContext} from '../services/traceMetadataStore';
 import {isTraceProcessorQueryCancelledError} from '../services/traceProcessorCancellation';
@@ -161,6 +162,9 @@ router.post('/:traceId/analyze', async (req, res) => {
         ? undefined
         : await summarizeCriticalPathWithAi(rawAnalysis, body.question, outputLanguage, {
             signal: clientGone,
+            // Reading the trace is not enough to spend the workspace's model:
+            // the summary needs the same permission as an Agent run.
+            aiPermitted: hasRbacPermission(requestContext, 'agent:run'),
             providerScope: {
               tenantId: requestContext.tenantId,
               workspaceId: requestContext.workspaceId,

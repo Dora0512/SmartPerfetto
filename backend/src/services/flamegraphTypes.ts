@@ -2,16 +2,16 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import type {OneShotFallbackReason} from './oneShotModelCall';
+
 export interface FlamegraphAnalyzeOptions {
   startTs?: number | string;
   endTs?: number | string;
   packageName?: string;
   threadName?: string;
   sampleSource?: string;
-  maxDepth?: number;
   maxNodes?: number;
   minSampleCount?: number;
-  maxSampleBuckets?: number;
   includeAi?: boolean;
   question?: string;
 }
@@ -117,10 +117,15 @@ export interface FlamegraphAvailability {
   warnings: string[];
 }
 
+/** Why the rule summary was returned instead of a model answer. */
+export type FlamegraphAiFallbackReason = OneShotFallbackReason;
+
 export interface FlamegraphAiSummary {
   generated: boolean;
   model?: string;
   summary: string;
   warnings: string[];
   redactionApplied?: boolean;
+  /** Set whenever `generated` is false; `warnings` carries the explanation. */
+  fallbackReason?: FlamegraphAiFallbackReason;
 }

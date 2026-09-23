@@ -2,28 +2,21 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import {type SDKMessage, type SDKResultSuccess, query as sdkQuery} from '@anthropic-ai/claude-agent-sdk';
-import {isolatedSceneModelCallOptions} from '../agent/scene/isolatedSceneModelCall';
-import {resolveAgentRuntimeSelection} from '../agentRuntime/runtimeSelection';
-import {
-  createSdkEnv,
-  hasClaudeCredentials,
-  loadClaudeConfig,
-  resolveRuntimeConfig,
-} from '../agentv3/claudeConfig';
+import {loadPromptTemplate, renderTemplate, stripPromptComments} from '../agentv3/strategyLoader';
 import {
   localize,
   type OutputLanguage,
 } from '../agentv3/outputLanguage';
 import {redactObjectForLLM} from '../utils/llmPrivacy';
-import {
-  AI_CAPABILITY_ENV_KEY,
-  type AiCapabilityPolicyV1,
-  getAiCapabilityPolicy,
-  isAiFeatureEnabled,
-} from './aiCapabilityPolicy';
+import {AI_CAPABILITY_ENV_KEY, type AiCapabilityPolicyV1} from './aiCapabilityPolicy';
 import type {CriticalPathAnalysis} from './criticalPathAnalyzer';
+import {projectCriticalPathAnalysis} from './criticalPathLocalization';
 import {buildDeterministicCriticalPathSummary} from './criticalPathSummary';
+import {
+  resolveOneShotModelRoute,
+  runIsolatedClaudeOneShot,
+  type OneShotFallbackReason,
+} from './oneShotModelCall';
 import type {ProviderScope} from './providerManager';
 
 // Re-exported so the critical-path route keeps its historical import site while
@@ -31,15 +24,7 @@ import type {ProviderScope} from './providerManager';
 export {buildDeterministicCriticalPathSummary};
 
 /** Why the deterministic rule summary was returned instead of a model answer. */
-export type CriticalPathAiFallbackReason =
-  | 'ai_disabled'
-  | 'runtime_not_supported'
-  | 'runtime_unavailable'
-  | 'credentials_missing'
-  | 'client_disconnected'
-  | 'timed_out'
-  | 'failed'
-  | 'empty_response';
+export type CriticalPathAiFallbackReason = OneShotFallbackReason;
 
 export interface CriticalPathAiSummary {
   generated: boolean;
@@ -61,6 +46,12 @@ export interface CriticalPathAiSummaryOptions {
   signal?: AbortSignal;
   /** Defaults to the process-wide `SMARTPERFETTO_AI_ENABLED` policy. */
   aiPolicy?: AiCapabilityPolicyV1;
+  /**
+   * Whether the caller may start model work (`agent:run`). Reading a trace is
+   * not enough to spend the workspace's provider; false returns the rule
+   * summary without any model call.
+   */
+  aiPermitted?: boolean;
 }
 
 type CriticalPathCounterfactual = NonNullable<
@@ -96,14 +87,6 @@ const HARD_CAPS = {
   warnings: 8,
   stringMaxLen: 200,
 } as const;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isSuccessfulResultMessage(message: SDKMessage): message is SDKResultSuccess {
-  return message.type === 'result' && message.subtype === 'success';
-}
 
 function clampString<T>(value: T, max: number = HARD_CAPS.stringMaxLen): T {
   if (typeof value !== 'string') return value;
@@ -147,7 +130,10 @@ function redactCriticalPathFields(value: unknown): unknown {
         lk === 'layername' ||
         lk === 'io_path' ||
         lk === 'iopath' ||
-        lk === 'path'
+        lk === 'path' ||
+        // The compact payload's own keys (binder and monitor methods).
+        lk === 'method' ||
+        lk === 'blockedmethod'
       ) {
         if (typeof v === 'string' && v.length > 0) {
           out[k] = `<${lk}_${Buffer.from(v).toString('base64').slice(0, 8)}>`;
@@ -263,60 +249,6 @@ function compactAnalysisForLLM(analysis: CriticalPathAnalysis): unknown {
   };
 }
 
-const STRUCTURED_PROMPT_TEMPLATE = `你是 Android Perfetto 调度与渲染性能分析专家。下面是一份针对选中 task 的结构化 critical path 分析事实（已脱敏）。请严格按照以下 5 段输出，每段一个段落，无前置废话。
-
-# 1. 等什么 [evidence_strength]
-基于 L1 task state（S/D/R/Running）和 L3 语义信号（binder/monitor/io/gc/cpu_competition）说明这一段在等什么类型的资源。如果信号矛盾或薄弱，标【弱证据】或【证据不足】。
-
-# 2. 谁唤醒 / 为什么 [evidence_strength]
-基于 directWaker（kind=irq/swapper/thread）+ wakeupChain 上的递归子链（children）说明：直接唤醒来自哪里，以及该唤醒方在被唤醒前自己当时在做什么。如果是 IRQ/swapper 终止，明确说明无更上游链路可追。
-
-# 3. 链路语义 [evidence_strength]
-基于 semantics.binderTxns / monitorContention / ioSignals / gcEvents / cpuCompetition 给出**具体**的语义事件（method 名已 base64 脱敏，请按 ID 引用），并说明每条事件如何叠加形成总等待。
-
-# 4. 量化影响 [evidence_strength]
-基于 quantification.counterfactual + frameImpacts：bestCaseDurationMs 是消除最长外部段后任务时长的最好情况，节省至多 maxSavingMs；并说明是否覆盖某帧 deadline。**明确表述这是最好情况估算而非确定预测：其他等待可能成为新瓶颈，实际节省可能更少**。
-
-# 5. 可证伪假设 + SQL [evidence_strength]
-基于 quantification.hypotheses 列出最多 3 条假设，每条用一句话陈述 + 注明 strength + 给出 verificationSql（直接复用，不要改字符串）。
-
-规则：
-- 每段必须以【强证据】/【弱证据】/【证据不足】开头标注 evidence_strength。
-- 禁止编造未在 JSON 中出现的数据。
-- 禁止把 base64 脱敏标记还原为可读名字（如 <method_name_xxxx>），保持原样引用。
-- 全文中文，专业语气，每段 ≤ 4 句话。
-
-事实 JSON：
-{{JSON}}
-{{QUESTION_BLOCK}}`;
-
-const STRUCTURED_PROMPT_TEMPLATE_EN = `You are an Android Perfetto scheduling and rendering-performance expert. The following JSON contains redacted, structured facts for a selected task. Return exactly five short sections with no preamble.
-
-# 1. What is it waiting for? [evidence_strength]
-Use the L1 task state and L3 semantic signals (binder, monitor, I/O, GC, CPU contention). Mark conflicting or thin signals as [Weak evidence] or [Insufficient evidence].
-
-# 2. Who woke it and why? [evidence_strength]
-Use directWaker and recursive wakeupChain children. Explain the direct source and what the waker was doing before the wakeup. State when IRQ or swapper ends the upstream chain.
-
-# 3. Path semantics [evidence_strength]
-Use semantics.binderTxns, monitorContention, ioSignals, gcEvents, and cpuCompetition. Reference redacted method IDs unchanged and explain how events combine into total wait time.
-
-# 4. Quantified impact [evidence_strength]
-Use quantification.counterfactual and frameImpacts. bestCaseDurationMs is the best-case task duration after removing the longest external segment, and the saving is at most maxSavingMs. Explicitly state that this is a best-case estimate, not a guaranteed prediction: another wait may become the bottleneck, so the real saving can be smaller.
-
-# 5. Falsifiable hypotheses and SQL [evidence_strength]
-List at most three hypotheses with strength and reuse verificationSql verbatim.
-
-Rules:
-- Begin every section with [Strong evidence], [Weak evidence], or [Insufficient evidence].
-- Do not invent facts absent from the JSON.
-- Keep redacted markers such as <method_name_xxxx> unchanged.
-- Write entirely in English with a professional tone and no more than four sentences per section.
-
-Fact JSON:
-{{JSON}}
-{{QUESTION_BLOCK}}`;
-
 /** Localized explanation for each deterministic-summary fallback. */
 function fallbackWarning(
   reason: CriticalPathAiFallbackReason,
@@ -361,10 +293,17 @@ function fallbackWarning(
         'AI diagnosis timed out; a deterministic rule summary was returned.',
       );
     case 'failed':
+      // The provider's own error text stays in the server log.
       return localize(
         outputLanguage,
-        `AI 诊断失败，已返回规则兜底总结：${detail}`,
-        `AI diagnosis failed; a deterministic rule summary was returned: ${detail}`,
+        'AI 诊断失败，已返回规则兜底总结。',
+        'AI diagnosis failed; a deterministic rule summary was returned.',
+      );
+    case 'permission_denied':
+      return localize(
+        outputLanguage,
+        '当前账号没有运行 AI 分析的权限（agent:run），已返回规则兜底总结。',
+        'This account may not run AI analysis (agent:run); a deterministic rule summary was returned.',
       );
     case 'empty_response':
       return localize(
@@ -379,28 +318,24 @@ function buildStructuredPrompt(
   analysis: CriticalPathAnalysis,
   question: string | undefined,
   outputLanguage: OutputLanguage,
-): {prompt: string; redactionApplied: boolean} {
-  const compact = compactAnalysisForLLM(analysis);
-  const customRedacted = redactCriticalPathFields(compact);
-  const redacted = redactObjectForLLM(customRedacted);
-
-  const promptTemplate =
-    outputLanguage === 'en'
-      ? STRUCTURED_PROMPT_TEMPLATE_EN
-      : STRUCTURED_PROMPT_TEMPLATE;
-  const prompt = promptTemplate.replace(
-    '{{JSON}}',
-    JSON.stringify(redacted.value).slice(0, 32_000)
-  ).replace(
-    '{{QUESTION_BLOCK}}',
-    question
+): {prompt: string; redactionApplied: boolean} | undefined {
+  const template = loadPromptTemplate(
+    outputLanguage === 'en' ? 'prompt-critical-path-summary-en' : 'prompt-critical-path-summary-zh',
+  );
+  if (!template) return undefined;
+  // The model reads the facts in the language it answers in.
+  const compact = compactAnalysisForLLM(projectCriticalPathAnalysis(analysis, outputLanguage));
+  const redacted = redactObjectForLLM(redactCriticalPathFields(compact));
+  const prompt = renderTemplate(stripPromptComments(template), {
+    factsJson: JSON.stringify(redacted.value).slice(0, 32_000),
+    questionBlock: question
       ? localize(
           outputLanguage,
           `\n\n用户额外问题：${clampString(question, 500)}`,
           `\n\nAdditional user question: ${clampString(question, 500)}`,
         )
       : '',
-  );
+  });
   return {prompt, redactionApplied: redacted.stats.applied};
 }
 
@@ -408,7 +343,7 @@ function buildStructuredPrompt(
  * Optional model narrative over the deterministic analysis. Every path that
  * does not produce a model answer returns the deterministic summary with a
  * `fallbackReason` and a localized warning; this function never throws for
- * policy, provider, or model failures.
+ * policy, permission, provider, or model failures.
  */
 export async function summarizeCriticalPathWithAi(
   analysis: CriticalPathAnalysis,
@@ -416,10 +351,7 @@ export async function summarizeCriticalPathWithAi(
   outputLanguage: OutputLanguage = 'zh-CN',
   options: CriticalPathAiSummaryOptions = {},
 ): Promise<CriticalPathAiSummary> {
-  const fallback = buildDeterministicCriticalPathSummary(
-    analysis,
-    outputLanguage,
-  );
+  const fallback = buildDeterministicCriticalPathSummary(analysis, outputLanguage);
   const degrade = (
     reason: CriticalPathAiFallbackReason,
     extra: Pick<CriticalPathAiSummary, 'model' | 'redactionApplied'> = {},
@@ -432,112 +364,33 @@ export async function summarizeCriticalPathWithAi(
     fallbackReason: reason,
   });
 
-  // The operator switch is checked before any provider or credential lookup:
-  // with AI off, no trace-derived text may reach a model.
-  const policy = options.aiPolicy ?? getAiCapabilityPolicy();
-  if (!isAiFeatureEnabled('critical_path_ai_summary', policy)) {
-    return degrade('ai_disabled');
-  }
-  const {signal, providerScope} = options;
-  if (signal?.aborted) {
-    return degrade('client_disconnected');
-  }
+  // The operator switch and the caller's permission are checked before any
+  // provider or credential lookup: no trace-derived text may reach a model
+  // otherwise.
+  const route = resolveOneShotModelRoute({
+    feature: 'critical_path_ai_summary',
+    providerScope: options.providerScope,
+    aiPolicy: options.aiPolicy,
+    logLabel: 'CriticalPathAI',
+  });
+  if (route.kind === 'unavailable' && route.reason === 'ai_disabled') return degrade('ai_disabled');
+  if (options.aiPermitted === false) return degrade('permission_denied');
+  if (options.signal?.aborted) return degrade('client_disconnected');
+  if (route.kind === 'unavailable') return degrade(route.reason);
+  if (route.runtime !== 'claude-agent-sdk') return degrade('runtime_not_supported', {}, route.runtime);
 
-  // Follow the caller's active Provider Manager profile, as an Agent run does.
-  let model: string;
-  let sdkEnv: ReturnType<typeof createSdkEnv>;
-  try {
-    const selection = resolveAgentRuntimeSelection(undefined, undefined, providerScope);
-    if (selection.kind !== 'claude-agent-sdk') {
-      return degrade('runtime_not_supported', {}, selection.kind);
-    }
-    model = resolveRuntimeConfig(loadClaudeConfig(), undefined, providerScope).model;
-    sdkEnv = createSdkEnv(undefined, providerScope);
-  } catch (error: unknown) {
-    console.warn('[CriticalPathAI] Provider resolution failed:', errorMessage(error));
-    return degrade('runtime_unavailable');
-  }
-  if (!hasClaudeCredentials(sdkEnv)) {
-    return degrade('credentials_missing');
-  }
-
-  const {prompt, redactionApplied} = buildStructuredPrompt(analysis, question, outputLanguage);
-  const attempted = {model, redactionApplied};
-
+  const built = buildStructuredPrompt(analysis, question, outputLanguage);
+  if (!built) return degrade('failed');
   const timeoutMs = Number.parseInt(process.env.CRITICAL_PATH_AI_TIMEOUT_MS || '60000', 10);
-  // One controller owns the SDK subprocess; the caller's disconnect and the
-  // wall-clock deadline both stop it through the same path.
-  const abortController = new AbortController();
-  let stream: ReturnType<typeof sdkQuery> | undefined;
-  let timedOut = false;
-  const stop = () => {
-    abortController.abort();
-    try {
-      stream?.close();
-    } catch {
-      // ignore
-    }
-  };
-  signal?.addEventListener('abort', stop, {once: true});
-  const timer = setTimeout(
-    () => {
-      timedOut = true;
-      stop();
-    },
-    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000
-  );
-
-  let result = '';
-  try {
-    stream = sdkQuery({
-      prompt,
-      options: {
-        ...isolatedSceneModelCallOptions({
-          model,
-          env: sdkEnv,
-          stderr: (data: string) => {
-            console.warn(`[CriticalPathAI] SDK stderr: ${data.trimEnd()}`);
-          },
-        }),
-        abortController,
-      },
-    });
-    for await (const message of stream) {
-      if (abortController.signal.aborted) break;
-      if (isSuccessfulResultMessage(message)) {
-        result = message.result || '';
-      }
-    }
-  } catch (error: unknown) {
-    if (!abortController.signal.aborted) {
-      console.warn('[CriticalPathAI] Model call failed:', error);
-      return degrade('failed', attempted, errorMessage(error));
-    }
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', stop);
-    try {
-      stream?.close();
-    } catch {
-      // ignore
-    }
-  }
-
-  if (signal?.aborted) return degrade('client_disconnected', attempted);
-  if (timedOut) return degrade('timed_out', attempted);
-  if (!result.trim()) return degrade('empty_response', attempted);
-
-  return {
-    generated: true,
-    ...attempted,
-    summary: result.trim(),
-    warnings: [],
-  };
+  const result = await runIsolatedClaudeOneShot({
+    prompt: built.prompt,
+    tier: 'main',
+    timeoutMs,
+    signal: options.signal,
+    logLabel: 'CriticalPathAI',
+    providerScope: options.providerScope,
+  });
+  const attempted = {...(result.model ? {model: result.model} : {}), redactionApplied: built.redactionApplied};
+  if (!result.ok) return degrade(result.reason, attempted);
+  return {generated: true, ...attempted, model: result.model, summary: result.text, warnings: []};
 }
-
-// Exported for tests.
-export const __INTERNAL__ = {
-  redactCriticalPathFields,
-  HARD_CAPS,
-  STRUCTURED_PROMPT_TEMPLATE,
-};

@@ -9,6 +9,7 @@ import {
 } from '../sceneStage3Summarizer';
 import type {DisplayedScene} from '../types';
 import {isolatedSceneModelCallOptions} from '../isolatedSceneModelCall';
+import {resolveClaudeSdkPermissionOptions} from '../../../agentv3/claudeConfig';
 
 const scene: DisplayedScene = {
   id: 'scene-1',
@@ -34,9 +35,14 @@ describe('scene Stage3 bilingual narrative contract', () => {
 
     expect(options).toMatchObject({
       maxTurns: 1,
-      permissionMode: 'bypassPermissions',
+      ...resolveClaudeSdkPermissionOptions(),
       settingSources: [],
       tools: [],
+      allowedTools: [],
+      skills: [],
+      plugins: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       persistSession: false,
     });
     expect(options).not.toHaveProperty('resume');

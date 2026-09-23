@@ -783,8 +783,10 @@ and `presentationAnalysis` the requested language. `longestSegment` names the
 longest external segment of the whole chain.
 `aiSummary` falls back to the deterministic rule summary (`generated: false`)
 with a `fallbackReason` and localized `warnings` when AI is disabled (feature
-`critical_path_ai_summary`), the active provider is not on the Claude Agent SDK
-runtime, credentials are missing, the call times out, or the client disconnects.
+`critical_path_ai_summary`), the caller lacks `agent:run` (`permission_denied`:
+reading a trace is not enough to spend the model), the active provider is not
+on the Claude Agent SDK runtime, credentials are missing, the call times out, or
+the client disconnects. Raw model errors go only to the server log.
 Disabling AI never turns this route into a 403. A client disconnect cancels the
 in-flight model call and any pending trace query; no response is written then.
 
@@ -798,3 +800,23 @@ Failures return `{success: false, code, error}` with a localized `error`:
 | 404 | `trace_not_found` | The trace does not exist or is not the caller's |
 | 404 | `thread_state_not_found` | The trace has no such thread_state |
 | 500 | `critical_path_failed` | Any other failure; the raw error goes only to the server log |
+
+### Flamegraph
+
+`GET /api/flamegraph/:traceId/availability` reports whether the trace has CPU
+call-stack samples (a Perfetto summary tree); `POST /api/flamegraph/:traceId/analyze`
+returns `{success: true, analysis, aiSummary}`. Both are global, non-workspace
+routes (410 under enterprise / OIDC). Like the critical-path route they validate
+the traceId and body first, then require the trace to be the caller's with
+`trace:read`, and only then load it. The body takes optional `startTs`, `endTs`,
+`packageName`, `threadName`, `sampleSource`, `maxNodes`, `minSampleCount`,
+`includeAi` and `question`; undeclared fields are dropped. A trace processor
+without the summary module or table reports `available: false`; any other query
+failure is retried once and then returns 500. `aiSummary` (feature
+`flamegraph_ai_summary`) falls back exactly like the critical-path summary,
+including the `agent:run` requirement and `fallbackReason`; its output is
+Chinese only. A client disconnect cancels pending queries and the model call.
+Failures return `{success: false, code, error}` with `code` one of
+`invalid_trace_id`, `invalid_request_body`, `trace_not_found` or
+`flamegraph_failed`. The former `POST /api/flamegraph/:traceId/summarize`, which
+sent client-supplied analysis to a model, is removed; nothing called it.

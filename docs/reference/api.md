@@ -689,7 +689,7 @@ legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续�
 
 请求体为 `threadStateId`，或 `utid` + `startTs` + `dur`（可选 `endTs`），另可带 `maxSegments`、`recursionDepth`、`recursionEnabled`、`segmentBudget`、`includeAi`、`question`、`outputLanguage`。
 
-成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。阻塞时长、占比、模块归因和 `chainSegmentCount` / `chainWaitMs` / `waitClassTotalsMs` 覆盖完整的顶层等待链（最多 5000 个原始栈段；超过时 `truncated: true` 并在 `warnings` 中说明只覆盖截断前部分），递归子链不重复计入；`wakeupChain` 只是展示前缀（`maxSegments`）。时长先按纳秒求和再换算，外部占比不会因舍入超过 100%。结果里的模块、异常、建议、警告、原因、唤醒提示和假设都带稳定 id（`moduleIds` / `moduleId`、`anomalies[].id` + `params` + `evidenceItems`、`recommendationIds`、`warningCodes`、`reasonItems`、`directWaker.hintCodes`、`hypotheses[].params` + `noteCodes`），文字只在输出时按语言渲染：`analysis` 是 zh-CN 渲染（兼容旧字段），`presentationAnalysis` 按请求语言渲染；`longestSegment` 给出整条链最长的外部段。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用，也会取消尚未完成的 trace 查询，此时不再返回响应。
+成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。阻塞时长、占比、模块归因和 `chainSegmentCount` / `chainWaitMs` / `waitClassTotalsMs` 覆盖完整的顶层等待链（最多 5000 个原始栈段；超过时 `truncated: true` 并在 `warnings` 中说明只覆盖截断前部分），递归子链不重复计入；`wakeupChain` 只是展示前缀（`maxSegments`）。时长先按纳秒求和再换算，外部占比不会因舍入超过 100%。结果里的模块、异常、建议、警告、原因、唤醒提示和假设都带稳定 id（`moduleIds` / `moduleId`、`anomalies[].id` + `params` + `evidenceItems`、`recommendationIds`、`warningCodes`、`reasonItems`、`directWaker.hintCodes`、`hypotheses[].params` + `noteCodes`），文字只在输出时按语言渲染：`analysis` 是 zh-CN 渲染（兼容旧字段），`presentationAnalysis` 按请求语言渲染；`longestSegment` 给出整条链最长的外部段。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、调用方没有 `agent:run`（`permission_denied`，只读 trace 不足以动用模型）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。模型失败的原始错误只写入服务端日志。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用，也会取消尚未完成的 trace 查询，此时不再返回响应。
 
 失败返回 `{success: false, code, error}`，`error` 已本地化：
 
@@ -701,3 +701,7 @@ legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续�
 | 404 | `trace_not_found` | Trace 不存在，或不属于调用方 |
 | 404 | `thread_state_not_found` | Trace 中没有该 thread_state |
 | 500 | `critical_path_failed` | 其他失败；原始错误只写入服务端日志 |
+
+### 火焰图
+
+`GET /api/flamegraph/:traceId/availability` 返回 trace 是否含 CPU 调用栈采样（Perfetto summary tree）；`POST /api/flamegraph/:traceId/analyze` 返回 `{success: true, analysis, aiSummary}`。两者都是全局非 workspace 接口（enterprise / OIDC 下 410），与 Critical path 一样先校验 traceId 和请求体、再校验 trace 属于调用方并要求 `trace:read`，然后才加载 trace。请求体可带 `startTs`、`endTs`、`packageName`、`threadName`、`sampleSource`、`maxNodes`、`minSampleCount`、`includeAi`、`question`；未声明字段会被丢弃。缺少 summary 模块或表的 trace processor 返回 `available: false`；其他查询失败重试一次后返回 500。`aiSummary`（feature `flamegraph_ai_summary`）的兜底规则与 Critical path 相同，包括 `agent:run` 要求和 `fallbackReason`；输出只有中文。客户端断开会取消未完成的查询和模型调用。失败返回 `{success: false, code, error}`，`code` 为 `invalid_trace_id`、`invalid_request_body`、`trace_not_found` 或 `flamegraph_failed`。原 `POST /api/flamegraph/:traceId/summarize`（把客户端提交的分析结果发给模型）已删除，没有调用方。

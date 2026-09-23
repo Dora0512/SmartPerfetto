@@ -32,6 +32,7 @@ jest.mock('../../agentv3/claudeConfig', () => ({
   loadClaudeConfig: jest.fn(() => ({model: 'env-model'})),
   resolveRuntimeConfig: jest.fn(() => ({model: 'profile-model'})),
   getSdkBinaryOption: jest.fn(() => ({})),
+  resolveClaudeSdkPermissionOptions: jest.fn(() => ({permissionMode: 'dontAsk'})),
 }));
 
 jest.mock('../../services/criticalPathAnalyzer', () => ({
@@ -68,11 +69,14 @@ const REQUEST_CONTEXT = {
 };
 const PROVIDER_SCOPE = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
 
-function makeApp(): express.Express {
+// A viewer may read the trace but not start model work (`agent:run`).
+const VIEWER_CONTEXT = {...REQUEST_CONTEXT, roles: ['viewer'], scopes: []};
+
+function makeApp(context: object = REQUEST_CONTEXT): express.Express {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => {
-    req.requestContext = REQUEST_CONTEXT;
+    req.requestContext = context;
     next();
   });
   app.use('/api/critical-path', criticalPathRoutes);
@@ -324,12 +328,73 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
       maxTurns: 1,
       settingSources: [],
       tools: [],
+      allowedTools: [],
+      skills: [],
+      plugins: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       persistSession: false,
+      permissionMode: 'dontAsk',
       env: {ANTHROPIC_API_KEY: 'profile-key'},
     });
     expect(options.abortController).toBeInstanceOf(AbortController);
-    expect(options).not.toHaveProperty('mcpServers');
     expect(options).not.toHaveProperty('resume');
+  });
+
+  it('never puts a raw binder or monitor method name into the prompt', async () => {
+    const analysis = analysisFixture();
+    const segment = {
+      startTs: 1_000, dur: 30_000_000, startOffsetMs: 0, durationMs: 30, utid: 40,
+      threadName: 'binder:55', processName: 'system_server', state: 'S',
+      slices: [], moduleIds: [], modules: [], reasonItems: [], reasons: [],
+      semantics: {
+        segmentKey: '40|1000|30001000', utid: 40, upid: 8, startTs: 1_000, endTs: 30_001_000,
+        binderTxns: [{
+          binderTxnId: 1, binderReplyId: 2, side: 'client', interfaceName: 'com.secret.IVault',
+          methodName: 'unlockVaultWithPin', isSync: true, isMainThread: true, clientProcess: 'com.example',
+          clientThread: 'main', serverProcess: 'system_server', serverThread: 'binder:55', clientUtid: 10,
+          serverUtid: 40, clientTid: 100, serverTid: 1055, durMs: 30, eventDurMs: 30,
+        }],
+        monitorContention: [{
+          rowId: 5, side: 'blocked', shortBlockedMethod: 'readSecretLedger()', shortBlockingMethod: 'writeSecretLedger()',
+          blockedThreadName: 'main', blockingThreadName: 'worker', blockedTid: 100, blockingTid: 101,
+          blockedUtid: 10, blockingUtid: 41, durMs: 3, eventDurMs: 12, isBlockedThreadMain: true,
+        }],
+        ioSignals: [], gcEvents: [], cpuCompetition: [], wakeSources: [],
+      },
+    };
+    mockAnalyze.mockResolvedValue({...analysis, wakeupChain: [segment]});
+
+    const res = await request(makeApp()).post('/api/critical-path/trace-1/analyze').send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    const {prompt} = mockQuery.mock.calls[0][0] as {prompt: string};
+    for (const raw of ['unlockVaultWithPin', 'com.secret.IVault', 'readSecretLedger', 'writeSecretLedger']) {
+      expect(prompt).not.toContain(raw);
+    }
+    expect(prompt).toContain('<method_');
+    expect(prompt).toContain('<blockedmethod_');
+  });
+
+  it('gives a viewer the deterministic summary without any model call', async () => {
+    const viewer = await request(makeApp(VIEWER_CONTEXT))
+      .post('/api/critical-path/trace-1/analyze')
+      .send(VALID_BODY);
+
+    expect(viewer.status).toBe(200);
+    expect(viewer.body.analysis).toBeDefined();
+    expect(viewer.body.aiSummary).toMatchObject({generated: false, fallbackReason: 'permission_denied'});
+    expect(viewer.body.aiSummary.warnings[0]).toContain('agent:run');
+    expect(mockCreateSdkEnv).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+
+    // The same request from an analyst reaches the model.
+    const analyst = await request(makeApp({...REQUEST_CONTEXT, roles: ['analyst'], scopes: []}))
+      .post('/api/critical-path/trace-1/analyze')
+      .send(VALID_BODY);
+
+    expect(analyst.body.aiSummary).toMatchObject({generated: true, summary: '## model summary'});
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it('returns the deterministic summary when the active runtime is not Claude', async () => {

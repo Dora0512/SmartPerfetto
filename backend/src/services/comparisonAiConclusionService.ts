@@ -2,22 +2,20 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { buildChatCompletionsUrl } from '../agentOpenAI/openAiComplexityClassifier';
 import {
   hasOpenAICredentials,
   loadOpenAIConfig,
 } from '../agentOpenAI/openAiConfig';
-import {
-  createSdkEnv,
-  getSdkBinaryOption,
-  hasClaudeCredentials,
-  loadClaudeConfig,
-  resolveRuntimeConfig,
-} from '../agentv3/claudeConfig';
 import { parseOutputLanguage, outputLanguageDisplayName } from '../agentv3/outputLanguage';
 import { loadPromptTemplate, renderTemplate } from '../agentv3/strategyLoader';
-import { resolveAgentRuntimeSelection } from '../agentRuntime/runtimeSelection';
+import {
+  AI_CAPABILITY_ENV_KEY,
+  type AiCapabilityPolicyV1,
+  getAiCapabilityPolicy,
+  isAiFeatureEnabled,
+} from './aiCapabilityPolicy';
+import { resolveOneShotModelRoute, runIsolatedClaudeOneShot } from './oneShotModelCall';
 import {
   buildOpenAIChatCompletionsTokenLimit,
   isOpenAIChatCompletionsOutputTruncated,
@@ -82,6 +80,8 @@ export interface GenerateAiComparisonConclusionInput {
   client?: ComparisonConclusionClient;
   /** Propagated to the provider call; see ComparisonConclusionClientInput. */
   signal?: AbortSignal;
+  /** Defaults to the process-wide `SMARTPERFETTO_AI_ENABLED` policy. */
+  aiPolicy?: AiCapabilityPolicyV1;
 }
 
 function truncateForPrompt(value: string, maxLength: number): string {
@@ -230,70 +230,35 @@ async function completeWithOpenAI(input: ComparisonConclusionClientInput): Promi
 }
 
 async function completeWithClaude(input: ComparisonConclusionClientInput): Promise<ComparisonConclusionClientOutput> {
-  const baseConfig = loadClaudeConfig();
-  const config = resolveRuntimeConfig(baseConfig, input.providerId, input.providerScope);
-  const env = createSdkEnv(input.providerId, input.providerScope);
-  if (!hasClaudeCredentials(env)) {
-    throw new Error('Claude credentials are not configured');
-  }
-  const binaryOption = getSdkBinaryOption(env);
-  // The SDK spawns a subprocess; without this, a disconnected client leaves it
-  // running and spending budget for the whole generation.
-  const abortController = new AbortController();
-  const abortFromCaller = () => abortController.abort(input.signal?.reason);
-  if (input.signal?.aborted) {
-    abortFromCaller();
-  } else {
-    input.signal?.addEventListener('abort', abortFromCaller, {once: true});
-  }
-  const stream = sdkQuery({
+  // The comparison keeps its own choices: the light model, low effort, and
+  // the long generation deadline; everything else is the shared isolated call.
+  const result = await runIsolatedClaudeOneShot({
     prompt: input.prompt,
-    options: {
-      model: config.lightModel || config.model,
-      maxTurns: 1,
-      includePartialMessages: false,
-      permissionMode: 'bypassPermissions' as const,
-      allowDangerouslySkipPermissions: true,
-      cwd: config.cwd,
-      effort: 'low',
-      env,
-      abortController,
-      ...binaryOption,
-      stderr: (data: string) => {
-        console.warn(`[ComparisonConclusion] Claude SDK stderr: ${data.trimEnd()}`);
-      },
-    },
+    tier: 'light',
+    effort: 'low',
+    timeoutMs: COMPARISON_CONCLUSION_TIMEOUT_MS,
+    signal: input.signal,
+    logLabel: 'ComparisonConclusion',
+    providerId: input.providerId,
+    providerScope: input.providerScope,
   });
-  let text = '';
-  try {
-    for await (const message of stream) {
-      if (message.type === 'assistant' && Array.isArray((message as any).message?.content)) {
-        for (const block of (message as any).message.content) {
-          if (block.type === 'text' && typeof block.text === 'string') {
-            text += block.text;
-          }
-        }
-      }
-      if (message.type === 'result' && typeof (message as any).result === 'string') {
-        text = (message as any).result || text;
-      }
-    }
-  } finally {
-    input.signal?.removeEventListener('abort', abortFromCaller);
-  }
-  return {
-    text,
-    model: config.lightModel || config.model,
-  };
+  if (!result.ok) throw new Error(`Claude comparison conclusion ${result.reason.replace(/_/g, ' ')}`);
+  return {text: result.text, model: result.model};
 }
 
+/** Claude and OpenAI runtimes answer; any other runtime is reported, never silently sent to Claude. */
 class DefaultComparisonConclusionClient implements ComparisonConclusionClient {
   async complete(input: ComparisonConclusionClientInput): Promise<ComparisonConclusionClientOutput> {
-    const selection = resolveAgentRuntimeSelection(input.providerId, undefined, input.providerScope);
-    if (selection.kind === 'openai-agents-sdk') {
-      return completeWithOpenAI(input);
-    }
-    return completeWithClaude(input);
+    const route = resolveOneShotModelRoute({
+      feature: 'comparison_ai_conclusion',
+      providerId: input.providerId,
+      providerScope: input.providerScope,
+      logLabel: 'ComparisonConclusion',
+    });
+    if (route.kind === 'unavailable') throw new Error(`the AI provider is unavailable (${route.reason})`);
+    if (route.runtime === 'openai-agents-sdk') return completeWithOpenAI(input);
+    if (route.runtime === 'claude-agent-sdk') return completeWithClaude(input);
+    throw new Error(`the active provider runs the ${route.runtime} runtime, which the comparison conclusion does not support`);
   }
 }
 
@@ -303,6 +268,10 @@ export async function generateAiComparisonConclusion(
   const fallback = input.result.conclusion;
   if (process.env.SMARTPERFETTO_COMPARISON_AI_DISABLED === 'true') {
     return fallbackConclusion(fallback, 'disabled by SMARTPERFETTO_COMPARISON_AI_DISABLED');
+  }
+  // The operator's global AI switch applies before any client is asked.
+  if (!isAiFeatureEnabled('comparison_ai_conclusion', input.aiPolicy ?? getAiCapabilityPolicy())) {
+    return fallbackConclusion(fallback, `disabled by ${AI_CAPABILITY_ENV_KEY}`);
   }
 
   let prompt: string;

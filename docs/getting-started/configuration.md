@@ -452,6 +452,16 @@ SMARTPERFETTO_AI_ENABLED=false
 
 禁用后仍可用：trace 上传/读取、SQL 查询、capture config proposal、Android capture（不带 `--analyze`）、报告读取、Provider profile 列表/编辑/激活/runtime 切换，以及不调用 LLM 的确定性 Skill。会被阻断：agent analyze/resume、场景还原冷启动、Provider connection test、`smp provider test`、`smp capture android --analyze`、LLM Skill step。阻断响应统一包含 `code: "AI_DISABLED"` 和 `retryable: false`。只降级、不阻断：Critical path 等待链分析照常返回，其 AI 总结（feature `critical_path_ai_summary`）改为规则兜底总结，并通过 `aiSummary.fallbackReason: "ai_disabled"` 和 `aiSummary.warnings` 说明原因。
 
+三个辅助 AI 总结只降级、不阻断，也都走同一个隔离的单轮模型调用（无工具、无 MCP、不读用户设置、不落会话），跟随调用者的 Provider Manager 配置：
+
+| Feature | 入口 | AI 不可用时 |
+| --- | --- | --- |
+| `critical_path_ai_summary` | `POST /api/critical-path/:traceId/analyze` | 规则兜底总结，`aiSummary.fallbackReason` + `warnings` |
+| `flamegraph_ai_summary` | `POST /api/flamegraph/:traceId/analyze` | 规则兜底总结，`aiSummary.fallbackReason` + `warnings` |
+| `comparison_ai_conclusion` | 分析结果对比的 AI 结论 | 确定性对比结论，`uncertainty` 写明原因 |
+
+除 AI 开关外，模型调用还要求：调用者有 `agent:run` 权限（只有 `trace:read` 的 viewer 得到 `fallbackReason: "permission_denied"`；对比结论沿用创建对比所需的 `comparison:create`），当前 Provider 是 Claude Agent SDK runtime（对比结论另外支持 OpenAI runtime；其他 runtime 一律降级），以及已配置凭证。`SMARTPERFETTO_COMPARISON_AI_DISABLED=true` 只关闭对比结论，与全局开关同时生效。超时分别由 `CRITICAL_PATH_AI_TIMEOUT_MS`、`FLAMEGRAPH_AI_TIMEOUT_MS`（默认 60000）控制。
+
 ## 分析预算与超时
 
 慢模型或本地模型通常需要更长的 per-turn timeout：

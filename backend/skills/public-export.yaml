@@ -1626,6 +1626,18 @@ strategies:
   backend/strategies/prompt-conversation.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime session and conversation orchestration
+  backend/strategies/prompt-analyze-wait-chain-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto analyze_wait_chain MCP tool contract
+  backend/strategies/prompt-critical-path-summary-zh.template.md:
+    disposition: product-only
+    reason: SmartPerfetto critical-path route one-shot summary over its engine payload
+  backend/strategies/prompt-critical-path-summary-en.template.md:
+    disposition: product-only
+    reason: SmartPerfetto critical-path route one-shot summary over its engine payload
+  backend/strategies/prompt-flamegraph-summary.template.md:
+    disposition: product-only
+    reason: SmartPerfetto flamegraph route one-shot summary over its analyzer payload
   backend/strategies/prompt-execute-sql-on-tool-description.template.md:
     disposition: product-only
     reason: SmartPerfetto comparison MCP tool description and runtime schema lookup

@@ -3,7 +3,9 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import { buildDeterministicFlamegraphSummary } from '../flamegraphAiSummary';
-import { buildFlamegraphFromPerfettoSummaryRows } from '../flamegraphAnalyzer';
+import { buildFlamegraphFromPerfettoSummaryRows, getFlamegraphAvailability } from '../flamegraphAnalyzer';
+import { createTraceProcessorQueryCancelledError } from '../traceProcessorCancellation';
+import type { QueryResult, TraceProcessorService } from '../traceProcessorService';
 
 describe('flamegraph analyzer', () => {
   const rows = [
@@ -100,5 +102,71 @@ describe('flamegraph analyzer', () => {
     expect(analysis.available).toBe(false);
     expect(analysis.filteredSampleCount).toBe(0);
     expect(analysis.warnings.join('\n')).toContain('summary tree');
+  });
+});
+
+describe('flamegraph source lookup reads processor errors', () => {
+  type Answer = Partial<QueryResult> | Error;
+
+  /** A processor whose statements answer from `respond`; errors come back as data, like the real service. */
+  function fakeProcessor(respond: (sql: string) => Answer) {
+    const statements: string[] = [];
+    const service = {
+      query: jest.fn(async (_traceId: string, sql: string) => {
+        statements.push(sql.trim());
+        const answer = respond(sql);
+        if (answer instanceof Error) throw answer;
+        return { columns: [], rows: [], durationMs: 0, ...answer } as QueryResult;
+      }),
+    } as unknown as TraceProcessorService;
+    return { service, statements };
+  }
+
+  const stats = { columns: ['node_count', 'sample_count', 'root_sample_count'], rows: [[4, 10, 10]] };
+
+  it('reports a source whose module or table is missing as unavailable, not as a source without samples', async () => {
+    const { service } = fakeProcessor((sql) => {
+      if (sql.includes('INCLUDE PERFETTO MODULE appleos')) return { error: 'Unknown module name provided - appleos.instruments.samples' };
+      if (sql.includes('INCLUDE')) return {};
+      return { error: 'no such table: linux_perf_samples_summary_tree' };
+    });
+
+    const availability = await getFlamegraphAvailability(service, 'trace-1');
+
+    expect(availability.available).toBe(false);
+    expect(availability.availableSources).toEqual([]);
+    expect(availability.warnings).toEqual([]);
+    expect(availability.missing.length).toBeGreaterThan(0);
+  });
+
+  it('retries a failed statement once and then fails instead of reading it as empty', async () => {
+    const { service, statements } = fakeProcessor((sql) =>
+      sql.includes('INCLUDE') ? {} : { error: 'trace processor RPC reset' });
+
+    await expect(getFlamegraphAvailability(service, 'trace-1')).rejects.toThrow('trace processor RPC reset');
+    expect(statements.filter((sql) => sql.includes('COUNT(*)'))).toHaveLength(2);
+  });
+
+  it('recovers when the retry succeeds', async () => {
+    let failures = 1;
+    const { service } = fakeProcessor((sql) => {
+      if (sql.includes('INCLUDE')) return {};
+      if (sql.includes('appleos')) return { error: 'no such table: appleos_instruments_samples_summary_tree' };
+      if (failures-- > 0) return { error: 'transient' };
+      return stats;
+    });
+
+    const availability = await getFlamegraphAvailability(service, 'trace-1');
+
+    expect(availability).toMatchObject({ available: true, sampleSource: 'linux_perf_samples_summary_tree' });
+  });
+
+  it('does not retry a cancelled statement', async () => {
+    const { service, statements } = fakeProcessor(() => createTraceProcessorQueryCancelledError('client gone'));
+
+    await expect(getFlamegraphAvailability(service, 'trace-1')).rejects.toMatchObject({
+      code: 'TRACE_PROCESSOR_QUERY_CANCELLED',
+    });
+    expect(statements).toHaveLength(1);
   });
 });

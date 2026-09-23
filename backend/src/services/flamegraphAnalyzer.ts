@@ -16,7 +16,15 @@ import type {
   FlamegraphNode,
   FlamegraphPerfettoSummaryRow,
 } from './flamegraphTypes';
+import { assertQuerySucceeded, queryRows } from '../utils/traceProcessorRowUtils';
+import { rethrowIfTraceProcessorQueryCancelled } from './traceProcessorCancellation';
 import type { TraceProcessorService } from './traceProcessorService';
+
+/** Request-scoped controls that are not part of the analysis input. */
+export interface FlamegraphRunOptions {
+  /** Cancels queued and running trace-processor statements. */
+  signal?: AbortSignal;
+}
 
 interface PerfettoSummarySource {
   module: string;
@@ -110,41 +118,37 @@ function normalizeOptions(options: FlamegraphAnalyzeOptions = {}): NormalizedOpt
   };
 }
 
-function rowObject(columns: string[], row: unknown[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  columns.forEach((column, index) => {
-    out[column] = row[index];
-  });
-  return out;
-}
-
-async function queryRows(
-  traceProcessorService: TraceProcessorService,
-  traceId: string,
-  sql: string
-): Promise<Record<string, unknown>[]> {
-  const result = await traceProcessorService.query(traceId, sql);
-  return result.rows.map((row) => rowObject(result.columns, row));
-}
-
 async function loadPerfettoModule(
   traceProcessorService: TraceProcessorService,
   traceId: string,
-  module: string
+  module: string,
+  signal?: AbortSignal
 ): Promise<void> {
-  await traceProcessorService.query(traceId, `INCLUDE PERFETTO MODULE ${module};`);
+  assertQuerySucceeded(
+    await traceProcessorService.query(traceId, `INCLUDE PERFETTO MODULE ${module};`, { signal })
+  );
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * The trace processor lacks this summary source: the stdlib has no such module
+ * or the module defines no such table. That is "not available", not a failure.
+ */
+function isMissingSummarySource(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /unknown module/i.test(message) || /no such table/i.test(message);
+}
+
 async function getSummarySourceStatsOnce(
   traceProcessorService: TraceProcessorService,
   traceId: string,
-  source: PerfettoSummarySource
-): Promise<SummarySourceStats | null> {
-  await loadPerfettoModule(traceProcessorService, traceId, source.module);
+  source: PerfettoSummarySource,
+  signal?: AbortSignal
+): Promise<SummarySourceStats> {
+  await loadPerfettoModule(traceProcessorService, traceId, source.module, signal);
   const table = toSqlIdentifier(source.table);
   const rows = await queryRows(
     traceProcessorService,
@@ -155,7 +159,8 @@ async function getSummarySourceStatsOnce(
         COALESCE(SUM(self_count), 0) AS sample_count,
         COALESCE(SUM(CASE WHEN parent_id IS NULL THEN cumulative_count ELSE 0 END), 0) AS root_sample_count
       FROM ${table}
-    `
+    `,
+    { signal }
   );
   const row = rows[0] ?? {};
   return {
@@ -166,34 +171,41 @@ async function getSummarySourceStatsOnce(
   };
 }
 
+/**
+ * Statistics of one summary source, or null when the processor lacks it. Any
+ * other failure is retried once and then thrown: a broken query must not read
+ * as "this trace has no samples".
+ */
 async function getSummarySourceStats(
   traceProcessorService: TraceProcessorService,
   traceId: string,
-  source: PerfettoSummarySource
+  source: PerfettoSummarySource,
+  signal?: AbortSignal
 ): Promise<SummarySourceStats | null> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      return await getSummarySourceStatsOnce(traceProcessorService, traceId, source);
-    } catch {
-      if (attempt === 0) {
-        await sleep(50);
-      }
+      return await getSummarySourceStatsOnce(traceProcessorService, traceId, source, signal);
+    } catch (error: unknown) {
+      rethrowIfTraceProcessorQueryCancelled(error);
+      if (isMissingSummarySource(error)) return null;
+      if (attempt > 0) throw error;
+      await sleep(50);
     }
   }
-  return null;
 }
 
 async function findAvailableSummarySource(
   traceProcessorService: TraceProcessorService,
   traceId: string,
-  requested?: string
+  requested: string | undefined,
+  signal?: AbortSignal
 ): Promise<SummarySourceStats | null> {
   const candidates = requested
     ? PERFETTO_SUMMARY_SOURCES.filter((source) => source.table === requested || source.sampleSource === requested)
     : PERFETTO_SUMMARY_SOURCES;
 
   for (const source of candidates) {
-    const stats = await getSummarySourceStats(traceProcessorService, traceId, source);
+    const stats = await getSummarySourceStats(traceProcessorService, traceId, source, signal);
     if (stats && stats.nodeCount > 0 && stats.sampleCount > 0) {
       return stats;
     }
@@ -203,14 +215,15 @@ async function findAvailableSummarySource(
 
 export async function getFlamegraphAvailability(
   traceProcessorService: TraceProcessorService,
-  traceId: string
+  traceId: string,
+  runOptions: FlamegraphRunOptions = {}
 ): Promise<FlamegraphAvailability> {
   const availableSources: FlamegraphAvailability['availableSources'] = [];
   const warnings: string[] = [];
 
   let selected: SummarySourceStats | null = null;
   for (const source of PERFETTO_SUMMARY_SOURCES) {
-    const stats = await getSummarySourceStats(traceProcessorService, traceId, source);
+    const stats = await getSummarySourceStats(traceProcessorService, traceId, source, runOptions.signal);
     if (!stats) {
       continue;
     }
@@ -258,12 +271,13 @@ async function loadPerfettoSummaryRows(
   traceProcessorService: TraceProcessorService,
   traceId: string,
   source: PerfettoSummarySource,
-  options: NormalizedOptions
+  options: NormalizedOptions,
+  signal?: AbortSignal
 ): Promise<{
   rows: FlamegraphPerfettoSummaryRow[];
   truncated: boolean;
 }> {
-  await loadPerfettoModule(traceProcessorService, traceId, source.module);
+  await loadPerfettoModule(traceProcessorService, traceId, source.module, signal);
   const table = toSqlIdentifier(source.table);
   const rows = await queryRows(
     traceProcessorService,
@@ -280,7 +294,8 @@ async function loadPerfettoSummaryRows(
     WHERE cumulative_count >= ${options.minSampleCount}
     ORDER BY cumulative_count DESC, self_count DESC, name ASC
     LIMIT ${options.maxNodes + 1}
-  `
+  `,
+    { signal }
   );
 
   const truncated = rows.length > options.maxNodes;
@@ -725,10 +740,12 @@ async function analyzePerfettoSummaryRowsWithRust(params: {
 export async function analyzeFlamegraph(
   traceProcessorService: TraceProcessorService,
   traceId: string,
-  rawOptions: FlamegraphAnalyzeOptions = {}
+  rawOptions: FlamegraphAnalyzeOptions = {},
+  runOptions: FlamegraphRunOptions = {}
 ): Promise<FlamegraphAnalysis> {
   const options = normalizeOptions(rawOptions);
-  const stats = await findAvailableSummarySource(traceProcessorService, traceId, options.sampleSource);
+  const { signal } = runOptions;
+  const stats = await findAvailableSummarySource(traceProcessorService, traceId, options.sampleSource, signal);
 
   if (!stats) {
     return buildFlamegraphFromPerfettoSummaryRows([], {
@@ -738,7 +755,7 @@ export async function analyzeFlamegraph(
     });
   }
 
-  const loaded = await loadPerfettoSummaryRows(traceProcessorService, traceId, stats.source, options);
+  const loaded = await loadPerfettoSummaryRows(traceProcessorService, traceId, stats.source, options, signal);
   const warnings = ignoredFilterWarnings(options);
   const sampleCount = stats.sampleCount || stats.rootSampleCount;
   let analysis: FlamegraphAnalysis;
