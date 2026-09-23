@@ -8,29 +8,46 @@ import express from 'express';
 import request from 'supertest';
 import {query as sdkQuery} from '@anthropic-ai/claude-agent-sdk';
 import criticalPathRoutes from '../criticalPathRoutes';
+import {authenticate} from '../../middleware/auth';
+import {rejectEnterpriseUnscopedApi} from '../../middleware/enterpriseRouteBoundary';
+import {bindWorkspaceRouteContext, requireWorkspaceRouteContext} from '../../middleware/workspaceRouteContext';
 import {clientDisconnectSignal} from '../clientDisconnect';
-import {resolveAgentRuntimeSelection} from '../../agentRuntime/runtimeSelection';
-import {createSdkEnv, hasClaudeCredentials} from '../../agentv3/claudeConfig';
+import {selectRuntimeForProvider} from '../../agentRuntime/runtimeSelection';
+import {hasClaudeCredentials, sdkEnvForProviderEnv} from '../../agentv3/claudeConfig';
 import {AI_CAPABILITY_ENV_KEY} from '../../services/aiCapabilityPolicy';
 import {summarizeCriticalPathWithAi} from '../../services/criticalPathAiSummary';
-import {CriticalPathInputError, analyzeCriticalPath, type CriticalPathAnalysis} from '../../services/criticalPathAnalyzer';
+import {CriticalPathInputError, analyzeCriticalPath} from '../../services/criticalPathAnalyzer';
 import {readTraceMetadataForContext} from '../../services/traceMetadataStore';
 import {getTraceProcessorService} from '../../services/traceProcessorService';
+import {renderCriticalPathAnalysis} from '../../services/criticalPathLocalization';
+import type {CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: jest.fn(),
 }));
 
 jest.mock('../../agentRuntime/runtimeSelection', () => ({
-  resolveAgentRuntimeSelection: jest.fn(),
+  selectRuntimeForProvider: jest.fn(),
+}));
+
+// One provider read per summary: the store is faked so the test can count it.
+const mockProviderService = {
+  getRawEffectiveProvider: jest.fn<(...args: any[]) => any>(),
+  getRawProvider: jest.fn<(...args: any[]) => any>(),
+  getEnvForProviderConfig: jest.fn<(...args: any[]) => any>(),
+};
+jest.mock('../../services/providerManager', () => ({
+  ...(jest.requireActual('../../services/providerManager') as object),
+  getProviderService: () => mockProviderService,
 }));
 
 jest.mock('../../agentv3/claudeConfig', () => ({
-  createSdkEnv: jest.fn(),
+  sdkEnvForProviderEnv: jest.fn(),
   hasClaudeCredentials: jest.fn(),
   loadClaudeConfig: jest.fn(() => ({model: 'env-model'})),
-  resolveRuntimeConfig: jest.fn(() => ({model: 'profile-model'})),
+  runtimeConfigForProviderEnv: jest.fn(() => ({model: 'profile-model'})),
   getSdkBinaryOption: jest.fn(() => ({})),
+  resolveClaudeSdkPermissionOptions: jest.fn(() => ({permissionMode: 'dontAsk'})),
 }));
 
 jest.mock('../../services/criticalPathAnalyzer', () => ({
@@ -48,8 +65,8 @@ jest.mock('../../services/traceProcessorService', () => ({
 }));
 
 const mockQuery = sdkQuery as unknown as jest.Mock<(...args: any[]) => any>;
-const mockSelection = resolveAgentRuntimeSelection as unknown as jest.Mock<(...args: any[]) => any>;
-const mockCreateSdkEnv = createSdkEnv as unknown as jest.Mock<(...args: any[]) => any>;
+const mockSelection = selectRuntimeForProvider as unknown as jest.Mock<(...args: any[]) => any>;
+const mockCreateSdkEnv = sdkEnvForProviderEnv as unknown as jest.Mock<(...args: any[]) => any>;
 const mockHasClaudeCredentials = hasClaudeCredentials as unknown as jest.Mock<(...args: any[]) => any>;
 const mockAnalyze = analyzeCriticalPath as unknown as jest.Mock<(...args: any[]) => any>;
 const mockReadMetadata = readTraceMetadataForContext as unknown as jest.Mock<(...args: any[]) => any>;
@@ -67,11 +84,14 @@ const REQUEST_CONTEXT = {
 };
 const PROVIDER_SCOPE = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
 
-function makeApp(): express.Express {
+// A viewer may read the trace but not start model work (`agent:run`).
+const VIEWER_CONTEXT = {...REQUEST_CONTEXT, roles: ['viewer'], scopes: []};
+
+function makeApp(context: object = REQUEST_CONTEXT): express.Express {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => {
-    req.requestContext = REQUEST_CONTEXT;
+    req.requestContext = context;
     next();
   });
   app.use('/api/critical-path', criticalPathRoutes);
@@ -79,7 +99,7 @@ function makeApp(): express.Express {
 }
 
 function analysisFixture(): CriticalPathAnalysis {
-  return {
+  return renderCriticalPathAnalysis({
     available: true,
     task: {
       threadStateId: 1,
@@ -98,8 +118,10 @@ function analysisFixture(): CriticalPathAnalysis {
     wakeupChain: [],
     moduleBreakdown: [],
     anomalies: [],
-    summary: '选中 task 的外部等待占比较高。',
+    summary: '',
+    recommendationIds: [],
     recommendations: [],
+    warningCodes: [],
     warnings: [],
     rawRows: 1,
     truncated: false,
@@ -109,14 +131,17 @@ function analysisFixture(): CriticalPathAnalysis {
         longestSegmentDurMs: 30,
         bestCaseDurationMs: 20,
         maxSavingMs: 30,
-        upperBoundMs: 20,
+        longestSegmentDurNs: 30_000_000,
+        bestCaseDurationNs: 20_000_000,
+        maxSavingNs: 30_000_000,
+        noteCode: 'best_case_only',
         note: '',
       },
       frameImpacts: [],
       hypotheses: [],
       warnings: [],
     },
-  } as unknown as CriticalPathAnalysis;
+  }, 'zh-CN');
 }
 
 function codedError(message: string, code: string): Error {
@@ -146,6 +171,8 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     mockAnalyze.mockResolvedValue(analysisFixture());
     mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
     mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue({id: 'provider-a'});
+    mockProviderService.getEnvForProviderConfig.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
     mockHasClaudeCredentials.mockReturnValue(true);
     mockQuery.mockImplementation(() => sdkStream('## model summary'));
   });
@@ -242,6 +269,23 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     });
   });
 
+  it('passes a disconnect signal into the engine so a gone client stops the analysis', async () => {
+    const response = await request(makeApp()).post('/api/critical-path/trace-1/analyze').send(VALID_BODY);
+
+    expect(response.status).toBe(200);
+    const options = mockAnalyze.mock.calls[0][2] as {signal?: unknown};
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('maps an invalid selector name to a coded 400', async () => {
+    mockAnalyze.mockRejectedValueOnce(new CriticalPathInputError('invalid_name', 'thread_name must be printable'));
+
+    const response = await request(makeApp()).post('/api/critical-path/trace-1/analyze').send(VALID_BODY);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({success: false, code: 'invalid_name'});
+  });
+
   it('maps other engine input errors to a coded 400', async () => {
     mockAnalyze.mockRejectedValue(new CriticalPathInputError('missing_selector', 'threadStateId or utid/startTs/dur is required'));
 
@@ -286,8 +330,10 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
       model: 'profile-model',
       summary: '## model summary',
     });
-    expect(mockSelection).toHaveBeenCalledWith(undefined, undefined, PROVIDER_SCOPE);
-    expect(mockCreateSdkEnv).toHaveBeenCalledWith(undefined, PROVIDER_SCOPE);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledTimes(1);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledWith(PROVIDER_SCOPE);
+    expect(mockProviderService.getEnvForProviderConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateSdkEnv).toHaveBeenCalledWith({ANTHROPIC_API_KEY: 'profile-key'});
     expect(mockHasClaudeCredentials).toHaveBeenCalledWith({ANTHROPIC_API_KEY: 'profile-key'});
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const {prompt, options} = mockQuery.mock.calls[0][0] as {
@@ -297,18 +343,81 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     // The model reads the counterfactual through its best-case fields only.
     expect(prompt).toContain('"bestCaseDurationMs":20');
     expect(prompt).toContain('"maxSavingMs":30');
-    expect(prompt).not.toContain('upperBoundMs');
+    expect(prompt).not.toContain('bestCaseDurationNs');
     expect(options).toMatchObject({
       model: 'profile-model',
       maxTurns: 1,
       settingSources: [],
       tools: [],
+      allowedTools: [],
+      skills: [],
+      plugins: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       persistSession: false,
+      permissionMode: 'dontAsk',
       env: {ANTHROPIC_API_KEY: 'profile-key'},
     });
     expect(options.abortController).toBeInstanceOf(AbortController);
-    expect(options).not.toHaveProperty('mcpServers');
     expect(options).not.toHaveProperty('resume');
+  });
+
+  it('never puts a raw binder or monitor method name into the prompt', async () => {
+    const analysis = analysisFixture();
+    const segment = {
+      startTs: 1_000, dur: 30_000_000, startOffsetMs: 0, durationMs: 30, utid: 40,
+      threadName: 'binder:55', processName: 'system_server', state: 'S',
+      slices: [], moduleIds: [], modules: [], reasonItems: [], reasons: [],
+      semantics: {
+        segmentKey: '40|1000|30001000', utid: 40, upid: 8, startTs: 1_000, endTs: 30_001_000,
+        binderTxns: [{
+          binderTxnId: 1, binderReplyId: 2, side: 'client', interfaceName: 'com.secret.IVault',
+          methodName: 'unlockVaultWithPin', isSync: true, isMainThread: true, clientProcess: 'com.example',
+          clientThread: 'main', serverProcess: 'system_server', serverThread: 'binder:55', clientUtid: 10,
+          serverUtid: 40, clientTid: 100, serverTid: 1055, durMs: 30, eventDurMs: 30,
+        }],
+        monitorContention: [{
+          rowId: 5, side: 'blocked', shortBlockedMethod: 'readSecretLedger()', shortBlockingMethod: 'writeSecretLedger()',
+          blockedThreadName: 'main', blockingThreadName: 'worker', blockedTid: 100, blockingTid: 101,
+          blockedUtid: 10, blockingUtid: 41, durMs: 3, eventDurMs: 12, isBlockedThreadMain: true,
+        }],
+        ioSignals: [], gcEvents: [], cpuCompetition: [], wakeSources: [],
+      },
+    };
+    mockAnalyze.mockResolvedValue({...analysis, wakeupChain: [segment]});
+
+    const res = await request(makeApp()).post('/api/critical-path/trace-1/analyze').send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    const {prompt} = mockQuery.mock.calls[0][0] as {prompt: string};
+    for (const raw of ['unlockVaultWithPin', 'com.secret.IVault', 'readSecretLedger', 'writeSecretLedger']) {
+      expect(prompt).not.toContain(raw);
+    }
+    expect(prompt).toContain('<method_');
+    expect(prompt).toContain('<blockedmethod_');
+  });
+
+  it('gives a viewer the deterministic summary without any model call', async () => {
+    const viewer = await request(makeApp(VIEWER_CONTEXT))
+      .post('/api/critical-path/trace-1/analyze')
+      .send(VALID_BODY);
+
+    expect(viewer.status).toBe(200);
+    expect(viewer.body.analysis).toBeDefined();
+    expect(viewer.body.aiSummary).toMatchObject({generated: false, fallbackReason: 'permission_denied'});
+    expect(viewer.body.aiSummary.warnings[0]).toContain('agent:run');
+    // Permission is checked before the provider is read.
+    expect(mockProviderService.getRawEffectiveProvider).not.toHaveBeenCalled();
+    expect(mockCreateSdkEnv).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+
+    // The same request from an analyst reaches the model.
+    const analyst = await request(makeApp({...REQUEST_CONTEXT, roles: ['analyst'], scopes: []}))
+      .post('/api/critical-path/trace-1/analyze')
+      .send(VALID_BODY);
+
+    expect(analyst.body.aiSummary).toMatchObject({generated: true, summary: '## model summary'});
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it('returns the deterministic summary when the active runtime is not Claude', async () => {
@@ -353,6 +462,8 @@ describe('summarizeCriticalPathWithAi cancellation', () => {
     jest.clearAllMocks();
     mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'default'});
     mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'env-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue(undefined);
+    mockProviderService.getEnvForProviderConfig.mockReturnValue(null);
     mockHasClaudeCredentials.mockReturnValue(true);
   });
 
@@ -414,5 +525,103 @@ describe('clientDisconnectSignal', () => {
     const signal = clientDisconnectSignal(res);
     res.emit('close');
     expect(signal.aborted).toBe(false);
+  });
+});
+
+describe('critical-path route mounts', () => {
+  const envKeys = ['SMARTPERFETTO_ENTERPRISE', 'SMARTPERFETTO_SSO_TRUSTED_HEADERS', 'SMARTPERFETTO_API_KEY', AI_CAPABILITY_ENV_KEY];
+  const savedEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+  /** The production chain: global auth, the legacy mount behind the enterprise gate, the workspace mount. */
+  function mountedApp(): express.Express {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', (req, res, next) => {
+      void authenticate(req as any, res, next);
+    });
+    app.use(
+      '/api/workspaces/:workspaceId/critical-path',
+      bindWorkspaceRouteContext,
+      (req, res, next) => {
+        void authenticate(req as any, res, next);
+      },
+      requireWorkspaceRouteContext,
+      criticalPathRoutes,
+    );
+    app.use('/api/critical-path', rejectEnterpriseUnscopedApi, criticalPathRoutes);
+    return app;
+  }
+
+  function sso(test: request.Test, role: string, scopes: string, workspaceId = 'workspace-a'): request.Test {
+    return test
+      .set('X-SmartPerfetto-SSO-User-Id', 'user-a')
+      .set('X-SmartPerfetto-SSO-Email', 'user-a@example.test')
+      .set('X-SmartPerfetto-SSO-Tenant-Id', 'tenant-a')
+      .set('X-SmartPerfetto-SSO-Workspace-Id', workspaceId)
+      .set('X-SmartPerfetto-SSO-Roles', role)
+      .set('X-SmartPerfetto-SSO-Scopes', scopes);
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.SMARTPERFETTO_ENTERPRISE = 'true';
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    delete process.env.SMARTPERFETTO_API_KEY;
+    delete process.env[AI_CAPABILITY_ENV_KEY];
+    mockGetOrLoadTrace.mockResolvedValue({id: 'trace-1'});
+    mockGetTraceProcessorService.mockReturnValue({getOrLoadTrace: mockGetOrLoadTrace});
+    mockReadMetadata.mockResolvedValue({id: 'trace-1'});
+    mockAnalyze.mockResolvedValue(analysisFixture());
+    mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
+    mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue({id: 'provider-a'});
+    mockProviderService.getEnvForProviderConfig.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockHasClaudeCredentials.mockReturnValue(true);
+    mockQuery.mockImplementation(() => sdkStream('## model summary'));
+  });
+
+  afterEach(() => {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it('keeps the legacy mount closed in enterprise mode and serves the workspace mount', async () => {
+    const app = mountedApp();
+
+    const legacy = await sso(request(app).post('/api/critical-path/trace-1/analyze'), 'analyst', 'trace:read,agent:run')
+      .send(VALID_BODY);
+    expect(legacy.status).toBe(410);
+    expect(legacy.body.code).toBe('ENTERPRISE_WORKSPACE_ROUTE_REQUIRED');
+
+    const scoped = await sso(
+      request(app).post('/api/workspaces/workspace-a/critical-path/trace-1/analyze'), 'analyst', 'trace:read,agent:run',
+    ).send(VALID_BODY);
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.aiSummary).toMatchObject({generated: true});
+    expect(mockReadMetadata).toHaveBeenCalledWith('trace-1', expect.objectContaining({
+      tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a',
+    }));
+  });
+
+  it('answers 404 for another workspace\'s path without reading the trace', async () => {
+    const res = await sso(
+      request(mountedApp()).post('/api/workspaces/workspace-b/critical-path/trace-1/analyze'), 'analyst', 'trace:read,agent:run',
+    ).send(VALID_BODY);
+
+    expect(res.status).toBe(404);
+    expect(mockReadMetadata).not.toHaveBeenCalled();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('gives a workspace viewer the rule summary without a model call', async () => {
+    const res = await sso(
+      request(mountedApp()).post('/api/workspaces/workspace-a/critical-path/trace-1/analyze'), 'viewer', 'trace:read',
+    ).send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.aiSummary).toMatchObject({generated: false, fallbackReason: 'permission_denied'});
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });

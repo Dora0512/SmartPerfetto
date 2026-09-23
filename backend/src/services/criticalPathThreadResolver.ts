@@ -19,6 +19,7 @@ import {
   toNumber,
   toOptionalString,
 } from '../utils/traceProcessorRowUtils';
+import {CriticalPathInputError} from './criticalPathAnalyzer';
 import type {TraceProcessorService} from './traceProcessorService';
 
 export interface CriticalPathThreadSelector {
@@ -58,7 +59,9 @@ export const MAX_THREAD_CANDIDATES = 10;
 function integerPredicate(column: string, value: unknown, field: string): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const raw = String(value).trim();
-  if (!/^\d+$/.test(raw)) throw new Error(`${field} must be a non-negative integer`);
+  if (!/^\d+$/.test(raw)) {
+    throw new CriticalPathInputError('invalid_integer', `${field} must be a non-negative integer`);
+  }
   return `${column} = ${raw}`;
 }
 
@@ -69,7 +72,9 @@ function integerPredicate(column: string, value: unknown, field: string): string
  */
 function sqlStringLiteral(value: string, field: string): string {
   // eslint-disable-next-line no-control-regex
-  if (/[\x00-\x1f]/.test(value)) throw new Error(`${field} must not contain control characters`);
+  if (/[\x00-\x1f]/.test(value)) {
+    throw new CriticalPathInputError('invalid_name', `${field} must not contain control characters`);
+  }
   return `'${value.replace(/'/g, "''")}'`;
 }
 
@@ -88,7 +93,7 @@ function trimmedName(value: string | undefined, field: string): string | undefin
   if (value === undefined) return undefined;
   const text = value.trim();
   if (!text) return undefined;
-  if (text.length > 200) throw new Error(`${field} must be at most 200 characters`);
+  if (text.length > 200) throw new CriticalPathInputError('invalid_name', `${field} must be at most 200 characters`);
   return text;
 }
 
@@ -109,6 +114,7 @@ async function selectThreads(
   tp: TraceProcessorService,
   traceId: string,
   predicates: string[],
+  signal: AbortSignal | undefined,
 ): Promise<ResolvedCriticalPathThread[]> {
   const rows = await queryRows(
     tp,
@@ -128,6 +134,7 @@ async function selectThreads(
     ORDER BY thread.utid ASC
     LIMIT ${MAX_THREAD_CANDIDATES + 1}
   `,
+    {signal},
   );
   return rows.map(rowToThread);
 }
@@ -145,6 +152,7 @@ export async function resolveCriticalPathThread(
   tp: TraceProcessorService,
   traceId: string,
   selector: CriticalPathThreadSelector,
+  options: {signal?: AbortSignal} = {},
 ): Promise<CriticalPathThreadResolution> {
   const base: string[] = [];
   const utid = integerPredicate('thread.utid', selector.utid, 'utid');
@@ -173,7 +181,7 @@ export async function resolveCriticalPathThread(
     : [base];
 
   for (const predicates of passes) {
-    const candidates = await selectThreads(tp, traceId, predicates);
+    const candidates = await selectThreads(tp, traceId, predicates, options.signal);
     if (candidates.length === 0) continue;
     if (candidates.length === 1) return {status: 'resolved', thread: candidates[0]};
     return {

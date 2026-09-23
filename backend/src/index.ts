@@ -260,6 +260,13 @@ app.use(
   ...workspaceRouteContextMiddleware,
   batchTraceRoutes,
 );
+// The critical-path drawer's route. The legacy mount below answers 410 under
+// enterprise/OIDC; this one is reachable there and scoped to the path's workspace.
+app.use(
+  '/api/workspaces/:workspaceId/critical-path',
+  ...workspaceRouteContextMiddleware,
+  criticalPathRoutes,
+);
 app.use(
   '/api/traces',
   markLegacyApi(

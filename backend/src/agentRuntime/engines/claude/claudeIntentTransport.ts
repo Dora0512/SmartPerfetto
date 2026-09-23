@@ -5,6 +5,8 @@
 import type {Options} from '@anthropic-ai/claude-agent-sdk';
 import type {ClaudeAgentConfig} from './claudeConfig';
 import {intentTransportTextResult, runIntentTransport, type IntentTransportInput} from '../../intentTransport';
+import {isPlainObject} from '../../../utils/llmJson';
+import {claudeMessageHasToolUse} from './claudeSdkMessageGuards';
 
 interface ClaudeClassifierQuery extends AsyncIterable<unknown> {
   close(): void | Promise<void>;
@@ -21,26 +23,6 @@ export interface ClaudeIntentTransportInput extends IntentTransportInput {
   /** Already resolved by getSdkBinaryOption using that same scoped environment. */
   sdkBinaryOptions: Pick<Options, 'pathToClaudeCodeExecutable'>;
   loadSdk(): Promise<ClaudeIntentSdk>;
-}
-
-function object(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown> : undefined;
-}
-
-function hasToolUse(message: Record<string, unknown>): boolean {
-  const content = object(message.message)?.content;
-  const event = object(message.event);
-  const isToolBlock = (value: unknown) => {
-    const type = object(value)?.type;
-    return type === 'tool_use' || type === 'tool_result';
-  };
-  return (Array.isArray(content) && content.some(isToolBlock))
-    || (event?.type === 'content_block_start' && isToolBlock(event.content_block))
-    || message.tool_use_result !== undefined
-    || message.deferred_tool_use != null
-    || (Array.isArray(message.permission_denials) && message.permission_denials.length > 0)
-    || (message.type === 'system' && message.subtype === 'permission_denied');
 }
 
 /** Uses the caller's pinned Claude environment for one isolated classification query. */
@@ -85,9 +67,9 @@ export function runClaudeIntentTransport(input: ClaudeIntentTransportInput) {
       const entry = await iterator.next();
       scope.throwIfInactive();
       if (entry.done) return {status: 'unavailable', reason: 'invalid_response'};
-      const message = object(entry.value);
+      const message = isPlainObject(entry.value) ? entry.value : undefined;
       if (!message) continue;
-      if (hasToolUse(message)) return {status: 'unavailable', reason: 'tool_use'};
+      if (claudeMessageHasToolUse(message)) return {status: 'unavailable', reason: 'tool_use'};
       if (message.type === 'system'
         && (message.subtype === 'model_refusal_fallback' || message.subtype === 'model_refusal_no_fallback')) {
         return {status: 'unavailable', reason: 'invalid_response'};
@@ -102,7 +84,7 @@ export function runClaudeIntentTransport(input: ClaudeIntentTransportInput) {
       if (message.stop_reason != null && message.stop_reason !== 'end_turn' && message.stop_reason !== 'stop_sequence') {
         return {status: 'unavailable', reason: 'invalid_response'};
       }
-      const models = Object.keys(object(message.modelUsage) ?? {});
+      const models = isPlainObject(message.modelUsage) ? Object.keys(message.modelUsage) : [];
       return intentTransportTextResult(typeof message.result === 'string' ? message.result : '', input, {
         ...(models.length === 1 ? {actualModel: models[0]} : {}),
         ...(typeof message.stop_reason === 'string' ? {finishReason: message.stop_reason} : {}),

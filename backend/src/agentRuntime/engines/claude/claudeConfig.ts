@@ -724,6 +724,16 @@ export function createSdkEnv(
   const providerEnv = providerRuntime === 'claude-agent-sdk' && provider
     ? svc.getEnvForProvider(provider.id, providerScope)
     : null;
+  return sdkEnvForProviderEnv(providerEnv);
+}
+
+/**
+ * The SDK subprocess env over a Claude provider's already-read env vars (null:
+ * no provider applies, the process env is used as is).
+ */
+export function sdkEnvForProviderEnv(
+  providerEnv: Record<string, string> | null,
+): Record<string, string | undefined> {
   const env = mergeIsolatedProviderEnv(process.env, providerEnv);
   if (providerEnv && process.env.CLAUDE_BINARY_PATH && !providerEnv.CLAUDE_BINARY_PATH) {
     env.CLAUDE_BINARY_PATH = process.env.CLAUDE_BINARY_PATH;
@@ -775,7 +785,14 @@ export function resolveRuntimeConfig(
   const providerEnv = providerRuntime === 'claude-agent-sdk' && provider
     ? svc.getEnvForProvider(provider.id, providerScope)
     : null;
+  return runtimeConfigForProviderEnv(baseConfig, providerEnv);
+}
 
+/** `baseConfig` overridden by a Claude provider's already-read env vars (null: unchanged). */
+export function runtimeConfigForProviderEnv(
+  baseConfig: ClaudeAgentConfig,
+  providerEnv: Record<string, string> | null,
+): ClaudeAgentConfig {
   if (!providerEnv) return baseConfig;
 
   const isolatedEnv = mergeIsolatedProviderEnv(process.env, providerEnv);

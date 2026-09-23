@@ -75,6 +75,8 @@ display:
       type: string
       format: truncate
 
+sql_fragments:
+  - fragments/io_blocked_function_families.sql
 sql: |
   WITH state_rows AS (
     SELECT
@@ -114,19 +116,7 @@ sql: |
     CASE
       WHEN state IN ('D', 'DK') AND io_wait = 1 THEN 'direct_io_wait'
       WHEN state IN ('D', 'DK') AND (
-        blocked_function_lc LIKE '%filemap%'
-        OR blocked_function_lc LIKE '%page_fault%'
-        OR blocked_function_lc LIKE '%wait_on_page%'
-        OR blocked_function_lc LIKE '%folio_wait%'
-        OR blocked_function_lc LIKE '%io_schedule%'
-        OR blocked_function_lc LIKE '%submit_bio%'
-        OR blocked_function_lc LIKE '%blk_%'
-        OR blocked_function_lc LIKE '%ext4%'
-        OR blocked_function_lc LIKE '%f2fs%'
-        OR blocked_function_lc LIKE '%erofs%'
-        OR blocked_function_lc LIKE '%ufshcd%'
-        OR blocked_function_lc LIKE '%mmc_%'
-        OR blocked_function_lc LIKE '%dm_%'
+        EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE blocked_function_lc GLOB f.pattern)
       ) THEN 'inferred_io_or_page_cache'
       WHEN state IN ('D', 'DK') THEN 'ambiguous_uninterruptible_wait'
       WHEN state = 'S' AND (blocked_function_lc LIKE '%epoll%' OR blocked_function_lc LIKE '%poll%') THEN 'poll_idle_or_ambiguous'

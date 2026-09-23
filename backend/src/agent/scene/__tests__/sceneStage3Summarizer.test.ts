@@ -8,7 +8,8 @@ import {
   parseStage3Summaries,
 } from '../sceneStage3Summarizer';
 import type {DisplayedScene} from '../types';
-import {isolatedSceneModelCallOptions} from '../isolatedSceneModelCall';
+import {isolatedClaudeOneShotOptions} from '../../../services/oneShotModelCall';
+import {resolveClaudeSdkPermissionOptions} from '../../../agentv3/claudeConfig';
 
 const scene: DisplayedScene = {
   id: 'scene-1',
@@ -26,7 +27,7 @@ const scene: DisplayedScene = {
 
 describe('scene Stage3 bilingual narrative contract', () => {
   it('isolates one-shot scene model calls from tools, settings, and resume persistence', () => {
-    const options = isolatedSceneModelCallOptions({
+    const options = isolatedClaudeOneShotOptions({
       model: 'test-model',
       env: {} as NodeJS.ProcessEnv,
       stderr: () => undefined,
@@ -34,9 +35,14 @@ describe('scene Stage3 bilingual narrative contract', () => {
 
     expect(options).toMatchObject({
       maxTurns: 1,
-      permissionMode: 'bypassPermissions',
+      ...resolveClaudeSdkPermissionOptions(),
       settingSources: [],
       tools: [],
+      allowedTools: [],
+      skills: [],
+      plugins: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       persistSession: false,
     });
     expect(options).not.toHaveProperty('resume');

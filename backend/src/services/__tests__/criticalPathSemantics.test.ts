@@ -10,121 +10,54 @@ import {
   type SegmentInput,
 } from '../criticalPathSemantics';
 import type {QueryResult, TraceProcessorService} from '../traceProcessorService';
-import {EMPTY, queryResult, sqliteTraceProcessor} from '../../../tests/helpers/criticalPathTraceProcessorFixture';
+import {EMPTY, sqliteTraceProcessor} from '../../../tests/helpers/criticalPathTraceProcessorFixture';
 
-const {buildSegmentValuesCte, segmentKeyOf} = __INTERNAL__;
+const {segmentWindowsCte, segmentKeyOf} = __INTERNAL__;
 
-interface PublishedSegment {
-  idx: number;
-  utid: number;
-  tsStart: number;
-  tsEnd: number;
-}
-
-/** The `(idx, utid, tid, upid, ts_start, ts_end)` tuples a loader put in its VALUES CTE. */
-function publishedSegments(sql: string): PublishedSegment[] {
-  return Array.from(
-    sql.matchAll(/\((\d+), (\d+), (?:\d+|NULL), (?:\d+|NULL), (\d+), (\d+)\)/g),
-    (m) => ({idx: Number(m[1]), utid: Number(m[2]), tsStart: Number(m[3]), tsEnd: Number(m[4])})
-  );
-}
-
-const CPU_COLUMNS = [
-  'segment_idx',
-  'cpu',
-  'competing_tid',
-  'competing_utid',
-  'competing_thread',
-  'competing_process',
-  'competing_state',
-  'competing_dur_ns',
-  'cpu_max_freq',
-];
-
-/**
- * Behaves like trace_processor for the CPU-competition query: it returns one
- * competitor per published window, tagged with whatever `idx` the SQL itself
- * declared for that window. That is the value distribute() resolves against
- * the full segment list, so a loader that renumbers a filtered subset from
- * zero is caught here rather than hidden by a hand-written segment_idx.
- */
-function cpuEchoService(): {tp: TraceProcessorService; cpuSqls: string[]} {
-  const cpuSqls: string[] = [];
-  const query = jest
-    .fn<TraceProcessorService['query']>()
-    .mockImplementation(async (_traceId, sql) => {
-      if (/target_cpu/.test(sql)) {
-        cpuSqls.push(sql);
-        const rows = publishedSegments(sql).map((seg) => [
-          seg.idx,
-          3,
-          999,
-          99,
-          'other-thread',
-          'other.process',
-          'Running',
-          400_000,
-          1_800_000,
-        ]);
-        return queryResult(CPU_COLUMNS, rows);
-      }
-      return EMPTY;
-    });
-  return {tp: {query} as unknown as TraceProcessorService, cpuSqls};
-}
-
-const COMPETITOR = expect.objectContaining({
-  cpu: 3,
-  competingTid: 999,
-  competingThread: 'other-thread',
-  competingProcess: 'other.process',
-});
+const MS_UNIT = 1_000_000;
 
 describe('criticalPathSemantics segment index contract', () => {
-  const sleeping: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 1_000, endTs: 2_000, state: 'S'};
-  const runnable: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 2_000, endTs: 3_000, state: 'R'};
-  const blocked: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 3_000, endTs: 4_000, state: 'D'};
-  const preempted: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 4_000, endTs: 5_000, state: 'R+'};
+  const sleeping: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 1 * MS_UNIT, endTs: 2 * MS_UNIT, state: 'S'};
+  const runnable: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 2 * MS_UNIT, endTs: 3 * MS_UNIT, state: 'R'};
+  const blocked: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 3 * MS_UNIT, endTs: 4 * MS_UNIT, state: 'D'};
+  const preempted: SegmentInput = {utid: 7, tid: 7, upid: 2, startTs: 4 * MS_UNIT, endTs: 5 * MS_UNIT, state: 'R+'};
 
-  it('keeps full-list indices when a loader narrows to a subset', () => {
-    const cte = buildSegmentValuesCte([sleeping, runnable], (segment) => segment.state === 'R');
-    expect(cte).toBe('(1, 7, 7, 2, 2000, 3000)');
-  });
-
-  it('attaches CPU competition to the runnable segment, not the sleeping one before it', async () => {
-    const {tp, cpuSqls} = cpuEchoService();
-    const {segments: result} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, runnable]);
-
-    expect(cpuSqls).toHaveLength(1);
-    expect(publishedSegments(cpuSqls[0])).toEqual([{idx: 1, utid: 7, tsStart: 2_000, tsEnd: 3_000}]);
-
-    const runnableSem = result.get(segmentKeyOf(runnable));
-    const sleepingSem = result.get(segmentKeyOf(sleeping));
-    expect(runnableSem?.cpuCompetition).toEqual([COMPETITOR]);
-    expect(runnableSem?.sources.cpu).toBe('present');
-    expect(sleepingSem?.cpuCompetition).toEqual([]);
+  it('numbers every segment in list order and passes the state as numeric flags only', () => {
+    expect(segmentWindowsCte([sleeping, {...runnable, waiterUtid: 1}])).toBe(
+      'segment_windows(idx, utid, tid, upid, ts_start, ts_end, sleeping, runnable, waiter_utid) AS (VALUES ' +
+        `(0, 7, 7, 2, ${1 * MS_UNIT}, ${2 * MS_UNIT}, 1, 0, NULL), (1, 7, 7, 2, ${2 * MS_UNIT}, ${3 * MS_UNIT}, 0, 1, 1))`
+    );
   });
 
   it('keeps every runnable window on its own segment when runnable and waiting states interleave', async () => {
-    const {tp, cpuSqls} = cpuEchoService();
+    // Thread 7 is queued on CPU 3 in both runnable windows; thread 9 runs there throughout.
+    const {tp} = sqliteTraceProcessor(`
+      INSERT INTO process(upid, name) VALUES (4, 'other.process');
+      INSERT INTO thread VALUES (9, 999, 4, 'other-thread');
+      INSERT INTO thread_state(utid, ts, dur, state, cpu) VALUES
+        (7, ${2 * MS_UNIT}, ${1 * MS_UNIT}, 'R', 3),
+        (7, ${4 * MS_UNIT}, ${1 * MS_UNIT}, 'R+', 3);
+      INSERT INTO sched(ts, dur, cpu, utid) VALUES (0, ${10 * MS_UNIT}, 3, 9);
+    `);
     const segments = [sleeping, runnable, blocked, preempted];
-    const {segments: result} = await enrichSegmentsWithSemantics(tp, 'trace-1', segments);
 
-    expect(publishedSegments(cpuSqls[0]).map((seg) => seg.idx)).toEqual([1, 3]);
+    const {segments: result, sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', segments);
+
+    const competitor = expect.objectContaining({cpu: 3, competingTid: 999, competingThread: 'other-thread',
+      competingProcess: 'other.process', competingDurMs: 1});
     expect(segments.map((segment) => result.get(segmentKeyOf(segment))?.cpuCompetition)).toEqual([
-      [],
-      [COMPETITOR],
-      [],
-      [COMPETITOR],
+      [], [competitor], [], [competitor],
     ]);
+    expect(sources.cpu).toBe('present');
   });
 
   it('skips the CPU query entirely when no segment is runnable', async () => {
-    const {tp, cpuSqls} = cpuEchoService();
-    const {segments: result} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, blocked]);
+    const {tp, sqls} = sqliteTraceProcessor('');
 
-    expect(cpuSqls).toHaveLength(0);
-    expect(result.get(segmentKeyOf(sleeping))?.sources.cpu).toBe('skipped');
+    const {sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', [sleeping, blocked]);
+
+    expect(sqls.some((sql) => /segment_cpu_competition/.test(sql))).toBe(false);
+    expect(sources.cpu).toBe('skipped');
   });
 });
 
@@ -197,6 +130,12 @@ describe('criticalPathSemantics overlap and attribution', () => {
         (10, ${5 * MS}, ${5 * MS}, 'Running', 3),
         (11, ${20 * MS}, ${2 * MS}, 'Running', 3),
         (12, ${10 * MS}, ${10 * MS}, 'Running', 1);
+      -- sched mirrors the Running rows, plus the idle task, which is never a competitor.
+      INSERT INTO sched(ts, dur, cpu, utid) VALUES
+        (${5 * MS}, ${5 * MS}, 1, 7), (${20 * MS}, ${5 * MS}, 3, 7),
+        (${12 * MS}, ${13 * MS}, 3, 9), (${5 * MS}, ${5 * MS}, 3, 10),
+        (${20 * MS}, ${2 * MS}, 3, 11), (${10 * MS}, ${10 * MS}, 1, 12),
+        (${10 * MS}, ${2 * MS}, 3, 0);
       INSERT INTO cpu_frequency_counters VALUES (3, 0, ${100 * MS}, 1800000);
     `);
     const runnable: SegmentInput = {utid: 7, tid: 1007, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'R'};
@@ -302,8 +241,7 @@ describe('criticalPathSemantics wake sources', () => {
 
     const {segments} = await enrichSegmentsWithSemantics(tp, 'trace-1', [runnable, sleeping]);
 
-    const wakeSql = sqls.find((sql) => /FROM waits AS w/.test(sql));
-    expect(wakeSql && publishedSegments(wakeSql)).toEqual([{idx: 1, utid: 8, tsStart: 10 * MS, tsEnd: 20 * MS}]);
+    expect(sqls.some((sql) => /segment_wake_sources/.test(sql))).toBe(true);
     expect(segments.get(segmentKeyOf(runnable))?.wakeSources).toEqual([]);
     expect(segments.get(segmentKeyOf(sleeping))?.wakeSources).toEqual([
       expect.objectContaining({irqContext: true, wakeSource: 'irq_or_softirq', waitClass: 'timer_or_device_wake'}),
@@ -317,26 +255,20 @@ describe('criticalPathSemantics wake sources', () => {
     const {sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', [runnable]);
 
     expect(sources.wakeSource).toBe('skipped');
-    expect(sqls.some((sql) => /FROM waits AS w/.test(sql))).toBe(false);
+    expect(sqls.some((sql) => /segment_wake_sources/.test(sql))).toBe(false);
   });
 });
 
 describe('criticalPathSemantics source status and warnings', () => {
   const segment: SegmentInput = {utid: 7, tid: 1007, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'S'};
 
-  it('reports GC as not_checked without querying it when the thread lookup failed', async () => {
-    const {tp, sqls} = sqliteTraceProcessor(`
-      INSERT INTO android_garbage_collection_events VALUES
-        (2, ${12 * MS}, ${4 * MS}, 'young', 0, 1.0, 'HeapTaskDaemon', 'com.demo');
-    `);
+  it('rethrows a cancelled query instead of reporting the source as failed', async () => {
+    const cancelled = Object.assign(new Error('Trace processor query cancelled'), {name: 'AbortError'});
+    const {tp} = sqliteTraceProcessor('', {rules: [
+      {match: /android_binder_txns/, responder: () => { throw cancelled; }},
+    ]});
 
-    const enrichment = await enrichSegmentsWithSemantics(tp, 'trace-1', [segment], {threadLookupFailed: true});
-
-    expect(sqls.some((sql) => /garbage_collection/.test(sql))).toBe(false);
-    expect(enrichment.sources.gc).toBe('not_checked');
-    expect(enrichment.segments.get(segmentKeyOf(segment))?.sources.gc).toBe('not_checked');
-    expect(enrichment.segments.get(segmentKeyOf(segment))?.gcEvents).toEqual([]);
-    expect(enrichment.sources.io).toBe('empty');
+    await expect(enrichSegmentsWithSemantics(tp, 'trace-1', [segment])).rejects.toBe(cancelled);
   });
 
   it('labels only an unknown module as stdlib_missing; other INCLUDE failures are query errors', async () => {
@@ -358,28 +290,24 @@ describe('criticalPathSemantics source status and warnings', () => {
       wakeSource: 'empty',
     });
     expect(enrichment.warnings).toEqual([
-      'INCLUDE android.binder failed',
-      'schema mismatch: no such column: blocked_utid',
+      {code: 'include_failed', params: {module: 'android.binder'}},
+      {code: 'schema_mismatch', params: {message: 'no such column: blocked_utid'}},
     ]);
   });
 
-  it('returns sources and each warning once at analysis level, and still on every segment', async () => {
+  it('returns sources and each warning once at analysis level', async () => {
     const {tp} = sqliteTraceProcessor('', {
       queryErrors: [
-        [/FROM segs\s+JOIN thread_state/, 'interrupted'],
-        [/JOIN android_garbage_collection_events/, 'interrupted'],
+        [/segment_io_signals/, 'interrupted'],
+        [/segment_gc_events/, 'interrupted'],
       ],
     });
     const other: SegmentInput = {...segment, utid: 8, startTs: 20 * MS, endTs: 30 * MS};
 
     const enrichment = await enrichSegmentsWithSemantics(tp, 'trace-1', [segment, other]);
 
-    expect(enrichment.warnings).toEqual(['query failed: interrupted']);
+    expect(enrichment.warnings).toEqual([{code: 'query_failed', params: {message: 'interrupted'}}]);
     expect(enrichment.sources).toMatchObject({io: 'sql_error', gc: 'sql_error', binder: 'empty'});
-    for (const sem of enrichment.segments.values()) {
-      expect(sem.sources).toEqual(enrichment.sources);
-      expect(sem.warnings).toEqual(['query failed: interrupted']);
-    }
   });
 
   it('surfaces a failure the service reports in result.error instead of throwing', async () => {
@@ -403,8 +331,8 @@ describe('criticalPathSemantics source status and warnings', () => {
     expect(sources.monitor).toBe('stdlib_missing');
     expect(warnings).toEqual(
       expect.arrayContaining([
-        'INCLUDE android.binder failed',
-        expect.stringMatching(/^stdlib table missing: no such table: android_monitor_contention/),
+        {code: 'include_failed', params: {module: 'android.binder'}},
+        {code: 'stdlib_table_missing', params: {message: 'no such table: android_monitor_contention'}},
       ])
     );
   });
@@ -418,5 +346,111 @@ describe('criticalPathSemantics source status and warnings', () => {
     expect(enrichment.segments.size).toBe(0);
     expect(Object.values(enrichment.sources)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
     expect(enrichment.warnings).toEqual([]);
+  });
+});
+
+describe('criticalPathSemantics monitor contention sides', () => {
+  // Thread 7 (the task) waits on a monitor held by thread 8; thread 9 waits on the same owner.
+  const SETUP = `
+    INSERT INTO android_monitor_contention VALUES
+      (5, ${10 * MS}, ${10 * MS}, 7, 8, 1007, 1008, 'main', 'owner', 'a()', 'b()', 1),
+      (6, ${12 * MS}, ${6 * MS}, 9, 8, 1009, 1008, 'other', 'owner', 'c()', 'b()', 0);
+  `;
+  const ownerSegment: SegmentInput = {
+    utid: 8, tid: 1008, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'Running', waiterUtid: 7,
+  };
+
+  it('attaches the contention to the lock owner segment whose waiter it explains', async () => {
+    const {tp} = sqliteTraceProcessor(SETUP);
+
+    const {segments} = await enrichSegmentsWithSemantics(tp, 'trace-1', [ownerSegment]);
+
+    expect(segments.get(segmentKeyOf(ownerSegment))?.monitorContention).toEqual([
+      expect.objectContaining({rowId: 5, side: 'owner', blockedUtid: 7, blockingUtid: 8, durMs: 10}),
+    ]);
+  });
+
+  it('never attaches another thread blocked on the same owner, nor any owner row without a waiter', async () => {
+    const {tp} = sqliteTraceProcessor(SETUP);
+    const unrelatedWaiter: SegmentInput = {...ownerSegment, waiterUtid: 3};
+    const noWaiter: SegmentInput = {...ownerSegment, startTs: 10 * MS + 1, waiterUtid: null};
+
+    const {segments} = await enrichSegmentsWithSemantics(tp, 'trace-1', [unrelatedWaiter, noWaiter]);
+
+    expect(segments.get(segmentKeyOf(unrelatedWaiter))?.monitorContention).toEqual([]);
+    expect(segments.get(segmentKeyOf(noWaiter))?.monitorContention).toEqual([]);
+  });
+
+  it('still attaches the blocked side to the waiting thread itself', async () => {
+    const {tp} = sqliteTraceProcessor(SETUP);
+    const blocked: SegmentInput = {utid: 9, tid: 1009, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'S'};
+
+    const {segments} = await enrichSegmentsWithSemantics(tp, 'trace-1', [blocked]);
+
+    expect(segments.get(segmentKeyOf(blocked))?.monitorContention).toEqual([
+      expect.objectContaining({rowId: 6, side: 'blocked', durMs: 6}),
+    ]);
+  });
+});
+
+describe('criticalPathSemantics I/O blocked_function families', () => {
+  const segment: SegmentInput = {utid: 7, tid: 1007, upid: 2, startTs: 0, endTs: 100 * MS, state: 'D'};
+  const ioFunctions = async (names: string[]): Promise<Array<string | null>> => {
+    const rows = names.map((name, index) => `(7, ${index * 10 * MS}, ${5 * MS}, 'D', 0, '${name}')`).join(', ');
+    const {tp} = sqliteTraceProcessor(
+      `INSERT INTO thread_state(utid, ts, dur, state, io_wait, blocked_function) VALUES ${rows};`
+    );
+    const {segments} = await enrichSegmentsWithSemantics(tp, 'trace-1', [segment]);
+    return (segments.get(segmentKeyOf(segment))?.ioSignals ?? []).map((io) => io.blockedFunction);
+  };
+
+  it('matches the I/O families, including buffer and file-system wchans', async () => {
+    // At most four rows per segment are kept, so check four names at a time.
+    for (const names of [
+      ['__wait_on_buffer', 'ext4_file_read_iter', 'f2fs_write_begin', 'folio_wait_bit_common'],
+      ['io_schedule', 'blk_mq_get_tag', 'filemap_fault', 'do_page_fault'],
+    ]) {
+      expect((await ioFunctions(names)).sort()).toEqual([...names].sort());
+    }
+  });
+
+  it('does not read `_` as a wildcard: a GPU fence wait is not I/O', async () => {
+    expect(await ioFunctions(['dma_fence_wait_timeout', 'blkdev_notify', 'mmcdriver_poll'])).toEqual([]);
+  });
+});
+
+describe('criticalPathSemantics row bounds', () => {
+  it('keeps the longest rows of every segment, so one busy segment cannot starve the others', async () => {
+    // Segment A has 10 long D/io_wait rows, segment B one short one.
+    const aRows = Array.from({length: 10}, (_, index) => `(7, ${index * 2 * MS}, ${2 * MS}, 'D', 1)`).join(', ');
+    const {tp} = sqliteTraceProcessor(`
+      INSERT INTO thread_state(utid, ts, dur, state, io_wait) VALUES ${aRows}, (8, ${50 * MS}, ${1 * MS / 10}, 'D', 1);
+    `);
+    const a: SegmentInput = {utid: 7, tid: 1007, upid: 2, startTs: 0, endTs: 20 * MS, state: 'D'};
+    const b: SegmentInput = {utid: 8, tid: 1008, upid: 2, startTs: 50 * MS, endTs: 60 * MS, state: 'D'};
+
+    const {segments, warnings} = await enrichSegmentsWithSemantics(tp, 'trace-1', [a, b]);
+
+    expect(segments.get(segmentKeyOf(a))?.ioSignals).toHaveLength(4);
+    expect(segments.get(segmentKeyOf(b))?.ioSignals).toHaveLength(1);
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe('criticalPathSemantics loader ceiling', () => {
+  it('keeps the longest rows and warns when a loader reaches its row ceiling', async () => {
+    // 1001 D segments with four io_wait rows each: 4004 rows, over the 4000 ceiling.
+    const segments: SegmentInput[] = Array.from({length: 1001}, (_, index) => ({
+      utid: 7, tid: 1007, upid: 2, startTs: index * 10 * MS, endTs: (index * 10 + 8) * MS, state: 'D',
+    }));
+    const rows = segments.flatMap((segment, index) => Array.from({length: 4}, (_, row) =>
+      `(7, ${segment.startTs + row * 2 * MS}, ${(row === 0 && index === 0 ? 1.9 : 2) * MS}, 'D', 1)`)).join(', ');
+    const {tp} = sqliteTraceProcessor(`INSERT INTO thread_state(utid, ts, dur, state, io_wait) VALUES ${rows};`);
+
+    const {segments: result, warnings, sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', segments);
+
+    expect(sources.io).toBe('present');
+    expect([...result.values()].reduce((sum, sem) => sum + sem.ioSignals.length, 0)).toBe(4000);
+    expect(warnings).toContainEqual({code: 'loader_row_cap', params: {source: 'io', cap: 4000}});
   });
 });

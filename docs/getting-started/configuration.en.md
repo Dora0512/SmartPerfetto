@@ -501,6 +501,26 @@ analysis still returns, and its AI summary (feature `critical_path_ai_summary`)
 falls back to the deterministic rule summary, reported through
 `aiSummary.fallbackReason: "ai_disabled"` and `aiSummary.warnings`.
 
+The three auxiliary AI summaries degrade rather than block, and all run the same
+isolated one-shot model call (no tools, no MCP servers, no user settings, no
+persisted session) under the caller's Provider Manager profile:
+
+| Feature | Entry point | When AI is unavailable |
+| --- | --- | --- |
+| `critical_path_ai_summary` | `POST /api/critical-path/:traceId/analyze` | Rule summary, `aiSummary.fallbackReason` + `warnings` |
+| `flamegraph_ai_summary` | `POST /api/flamegraph/:traceId/analyze` | Rule summary, `aiSummary.fallbackReason` + `warnings` |
+| `comparison_ai_conclusion` | AI conclusion of analysis-result comparison | Deterministic conclusion, reason in `uncertainty` |
+
+Besides the AI switch, a model call also needs the caller's `agent:run`
+permission (a viewer with only `trace:read` gets
+`fallbackReason: "permission_denied"`; the comparison conclusion keeps the
+`comparison:create` permission its route already requires), a Claude Agent SDK active runtime (the comparison
+conclusion also supports the OpenAI runtime; every other runtime degrades), and
+configured credentials. `SMARTPERFETTO_COMPARISON_AI_DISABLED=true` turns off
+only the comparison conclusion and applies alongside the global switch.
+Timeouts: `CRITICAL_PATH_AI_TIMEOUT_MS` and `FLAMEGRAPH_AI_TIMEOUT_MS`
+(default 60000).
+
 ## Budgets and Timeouts
 
 Slow or local models usually need longer per-turn timeouts:

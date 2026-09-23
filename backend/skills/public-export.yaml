@@ -98,6 +98,33 @@ sql_fragments:
   backend/skills/fragments/sleep_wake_source.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/sleep_wake_source.sql
+  backend/skills/fragments/sleep_wake_source_labels.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/sleep_wake_source_labels.sql
+  backend/skills/fragments/io_blocked_function_families.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/io_blocked_function_families.sql
+  backend/skills/fragments/segment_binder_txns.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_monitor_contention.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_io_signals.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_gc_events.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_cpu_competition.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_cpu_frequency.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_wake_sources.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
   backend/skills/fragments/thread_states_quadrant.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/thread_states_quadrant.sql
@@ -1599,6 +1626,18 @@ strategies:
   backend/strategies/prompt-conversation.template.md:
     disposition: product-only
     reason: SmartPerfetto runtime session and conversation orchestration
+  backend/strategies/prompt-analyze-wait-chain-tool-description.template.md:
+    disposition: product-only
+    reason: SmartPerfetto analyze_wait_chain MCP tool contract
+  backend/strategies/prompt-critical-path-summary-zh.template.md:
+    disposition: product-only
+    reason: SmartPerfetto critical-path route one-shot summary over its engine payload
+  backend/strategies/prompt-critical-path-summary-en.template.md:
+    disposition: product-only
+    reason: SmartPerfetto critical-path route one-shot summary over its engine payload
+  backend/strategies/prompt-flamegraph-summary.template.md:
+    disposition: product-only
+    reason: SmartPerfetto flamegraph route one-shot summary over its analyzer payload
   backend/strategies/prompt-execute-sql-on-tool-description.template.md:
     disposition: product-only
     reason: SmartPerfetto comparison MCP tool description and runtime schema lookup

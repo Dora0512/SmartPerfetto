@@ -36,6 +36,7 @@ import {
   SynthesizeConfig,
 } from './types';
 import { validateSkillInputs } from './skillValidator';
+import { injectFragmentCtes, substituteSqlPlaceholders } from './skillFragments';
 import { EXACT_UPID_TOKEN, getExactProcessScopeSupport, sqlScopeDeclarationError, selectProcessScopeSql, type ScopedSqlSource } from './processScopeSql';
 import { assertEffectiveProcessScope, type EffectiveProcessScope } from '../processIdentity/effectiveProcessScope';
 import { sqlScopeEvidence, resultScopeProvenance, resultScopeLimitations } from './scopeEvidence';
@@ -622,38 +623,7 @@ class ExpressionEvaluator {
 // =============================================================================
 
 function substituteVariables(sql: string, context: SkillExecutionContext): string {
-  let result = sql;
-
-  // 判断 offset 位置是否处于 SQL 单引号字符串常量内部（用于决定缺省值是 '' 还是 NULL）
-  // 注：这里只做轻量扫描，足够覆盖 skill SQL 模板中常见的 '${package}*' / '%${name}%' 等模式。
-  const isInsideSingleQuotes = (s: string, offset: number): boolean => {
-    let inSingle = false;
-    for (let i = 0; i < offset; i++) {
-      const ch = s[i];
-      if (ch !== '\'') continue;
-
-      // SQL 中单引号转义使用 ''（两个单引号）。
-      if (inSingle && s[i + 1] === '\'') {
-        i++; // skip escaped quote
-        continue;
-      }
-      inSingle = !inSingle;
-    }
-    return inSingle;
-  };
-
-  // 替换所有 ${xxx} 格式的变量（支持 ${varName|defaultValue} 语法）
-  result = result.replace(/\$\{([^}]+)\}/g, (match, path, offset, full) => {
-    const rawPath = String(path ?? '').trim();
-    const insideQuotes = typeof offset === 'number' && typeof full === 'string'
-      ? isInsideSingleQuotes(full, offset)
-      : false;
-
-    // Support ${varName|defaultValue} syntax
-    const pipeIndex = rawPath.indexOf('|');
-    const actualPath = pipeIndex >= 0 ? rawPath.substring(0, pipeIndex).trim() : rawPath;
-    const explicitDefault = pipeIndex >= 0 ? rawPath.substring(pipeIndex + 1).trim() : undefined;
-
+  return substituteSqlPlaceholders(sql, ({match, path: actualPath, defaultValue: explicitDefault, insideQuotes}) => {
     if (actualPath === '__process_scope' || actualPath.startsWith('__process_scope.')) {
       if (match !== EXACT_UPID_TOKEN) throw new Error('Unsupported reserved process scope binding');
       const scope = context.processScope;
@@ -686,8 +656,6 @@ function substituteVariables(sql: string, context: SkillExecutionContext): strin
 
     return String(value);
   });
-
-  return result;
 }
 
 /**
@@ -1208,27 +1176,7 @@ export class SkillExecutor {
       fragmentCteBodies.push(substituted);
     }
 
-    if (fragmentCteBodies.length === 0) return sql;
-
-    // Put separators on their own line. A fragment may end with a `-- marker`
-    // comment; appending the comma to that line makes SQLite ignore it and
-    // leaves the next CTE syntactically unseparated.
-    const fragmentBlock = fragmentCteBodies.join('\n,\n');
-    const trimmed = sql.trimStart();
-
-    // Strip leading SQL single-line comments (-- ...) before WITH detection,
-    // since steps like root_cause_summary prefix SQL with comment lines.
-    const noLeadingComments = trimmed.replace(/^(?:(?:--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)\s*)*/, '');
-    const withMatch = noLeadingComments.match(/^WITH(?:\s+RECURSIVE)?\s+/i);
-    if (withMatch) {
-      // Preserve original comments, insert fragments after WITH
-      const commentPrefix = trimmed.slice(0, trimmed.length - noLeadingComments.length);
-      const afterWith = noLeadingComments.slice(withMatch[0].length);
-      return `${commentPrefix}${withMatch[0].trim()}\n${fragmentBlock}\n,\n${afterWith}`;
-    }
-
-    // Wrap the entire SQL in a WITH clause
-    return `WITH\n${fragmentBlock}\n${trimmed}`;
+    return injectFragmentCtes(sql, fragmentCteBodies);
   }
 
   /**

@@ -9348,7 +9348,8 @@ describe('analyze_wait_chain', () => {
       startTs: 1_500, dur: 1_000_000, startOffsetMs: 0.5, durationMs: 1,
       utid: 77, tid: 1500, upid: 9, processName: 'system_server', threadName: 'Binder:1500_2',
       state: 'S', blockedFunction: null, ioWait: null, cpu: null,
-      slices: [], modules: ['Binder / IPC'], reasons: ['binder reply'],
+      slices: [], moduleIds: ['binder_ipc'], modules: [],
+      reasonItems: [{kind: 'wake_class', waitClass: 'binder_reply'}], reasons: [],
       wakeSourceClass: 'binder_reply', recursionDepth: 1,
     };
     return {
@@ -9363,32 +9364,36 @@ describe('analyze_wait_chain', () => {
         startTs: 1_000, dur: 4_000_000, startOffsetMs: 0, durationMs: 4,
         utid: 55, tid: 1301, upid: 7, processName: 'com.example.app', threadName: 'OkHttp Dispatch',
         state: 'S', blockedFunction: null, ioWait: null, cpu: null,
-        slices: [], modules: ['网络收包等待候选'], reasons: ['waker irq_context=1', 'role=network', 'noise'],
+        slices: [], moduleIds: ['network_receive_candidate'], modules: [],
+        reasonItems: [{kind: 'state', state: 'S'}, {kind: 'wake_class', waitClass: 'network_receive_candidate'},
+          {kind: 'slice', name: 'noise'}],
+        reasons: [],
         wakeSourceClass: 'network_receive_candidate',
         semantics: {
           segmentKey: 's1', binderTxns: [], monitorContention: [], ioSignals: [], gcEvents: [],
-          cpuCompetition: [], wakeSources: [wakeSource], warnings: [],
-          sources: {binder: 'present', monitor: 'present', io: 'present', gc: 'present',
-            cpu: 'present', wakeSource: 'present'},
+          cpuCompetition: [], wakeSources: [wakeSource],
         },
         children: [child],
       }],
-      moduleBreakdown: [], anomalies: [{severity: 'warning', title: '等待链涉及网络收包等待候选',
-        detail: '该段睡眠由 IRQ 上下文唤醒，且线程角色为 network。', evidence: []}],
-      summary: '选中 task 等待 4ms。', recommendations: [], warnings: ['critical path 结果较大'],
+      moduleBreakdown: [], anomalies: [{id: 'network_receive_wait', severity: 'warning', title: '', detail: '',
+        evidenceItems: [], evidence: []}],
+      summary: '', recommendationIds: [], recommendations: [],
+      warningCodes: [{code: 'display_cut', params: {total: 2, shown: 1}}], warnings: [],
       rawRows: 12, truncated: false,
       chainSegmentCount: 2, chainWaitMs: 5,
       waitClassTotalsMs: {network_receive_candidate: 4, binder_reply: 1},
       slices: [
-        {threadStateId: 1, startTs: 1_000, endTs: 5_000_000, durationMs: 4, state: 'S',
-          kind: 'sleeping', cpu: null, blockedFunction: null, ioWait: null, segmentCount: 1},
-        {threadStateId: 2, startTs: 5_000_000, endTs: 11_000_000, durationMs: 6, state: 'Running',
-          kind: 'running', cpu: 3, blockedFunction: null, ioWait: null, segmentCount: 0},
+        {threadStateId: 1, startTs: 1_000, endTs: 4_001_000, durationMs: 4, state: 'S',
+          kind: 'sleeping', cpu: null, blockedFunction: null, ioWait: null},
+        {threadStateId: 2, startTs: 4_001_000, endTs: 10_001_000, durationMs: 6, state: 'Running',
+          kind: 'running', cpu: 3, blockedFunction: null, ioWait: null},
       ],
       directWaker: {threadStateId: null, utid: null, tid: null, threadName: null, processName: null,
-        state: null, cpu: null, irqContext: true, kind: 'irq', hints: []},
+        state: null, cpu: null, irqContext: true, kind: 'irq', hintCodes: [], hints: []},
+      totalsNs: {blocking: 4_000_000, chainWait: 5_000_000, waiting: 4_000_000},
       quantification: {counterfactual: {longestSegmentKey: 's1', longestSegmentDurMs: 4,
-        bestCaseDurationMs: 6, maxSavingMs: 4, upperBoundMs: 6, note: 'best case only'},
+        bestCaseDurationMs: 6, maxSavingMs: 4, longestSegmentDurNs: 4_000_000, bestCaseDurationNs: 6_000_000,
+        maxSavingNs: 4_000_000, noteCode: 'best_case_only', note: ''},
       frameImpacts: [], hypotheses: [], warnings: []},
       semanticSources: {},
       ...overrides,
@@ -9430,7 +9435,8 @@ describe('analyze_wait_chain', () => {
 
     // The engine is addressed by the resolved utid and the requested window.
     expect(analyze).toHaveBeenCalledWith(server.mockTpService as any, 'test-trace-123', expect.objectContaining({
-      utid: 42, startTs: '1000', endTs: '10001000', maxSegments: 200, recursionDepth: 1, recursionEnabled: true,
+      utid: 42, startTs: '1000', endTs: '10001000', recursionEnabled: true,
+      ...criticalPathAnalyzer.CRITICAL_PATH_DEFAULTS.agent,
     }));
 
     expect(payload.success).toBe(true);
@@ -9455,9 +9461,14 @@ describe('analyze_wait_chain', () => {
     });
     expect(payload.topWaits[0].reasons).toHaveLength(3);
     expect(payload.recursion).toEqual([expect.objectContaining({
-      processName: 'com.example.app', threadName: 'OkHttp Dispatch',
+      level: 1, processName: 'com.example.app', threadName: 'OkHttp Dispatch',
       childSegments: 1, dominantWaitClass: 'binder_reply', dominantWaitMs: 1,
     })]);
+    // The ms figures come with the exact ns they were rounded from.
+    expect(payload.exactNs).toEqual({
+      window: 10_000_000, blocking: 4_000_000, self: 6_000_000, waiting: 4_000_000,
+      chainWait: 5_000_000, bestCase: 6_000_000, maxSaving: 4_000_000,
+    });
     expect(payload.directWaker).toMatchObject({kind: 'irq', irqContext: true});
     // Best case and the most the longest segment can save; never an "upper bound".
     expect(payload.counterfactualBestCaseMs).toBe(6);
@@ -9471,8 +9482,19 @@ describe('analyze_wait_chain', () => {
     const stored = server.artifactStore._artifacts.get(payload.artifactId);
     expect(stored.skillId).toBe('analyze_wait_chain');
     expect(stored.data.columns).toContain('wake_source_class');
+    expect(stored.data.columns).toContain('utid');
     expect(stored.data.rows).toHaveLength(2);
     expect(stored.planPhaseId).toBe('p1');
+
+    // Every headline number is a cell of the captured summary row.
+    const summary = server.artifactStore._artifacts.get(payload.summaryArtifactId);
+    expect(summary.stepId).toBe('wait_summary');
+    const cell = (column: string) => summary.data.rows[0][summary.data.columns.indexOf(column)];
+    expect(cell('blocking_ms')).toBe(payload.blockingMs);
+    expect(cell('waiting_ms')).toBe(payload.waitingMs);
+    expect(cell('chain_wait_ns')).toBe(payload.exactNs.chainWait);
+    expect(cell('best_case_ms')).toBe(payload.counterfactualBestCaseMs);
+    expect(cell('chain_segment_count')).toBe(payload.segmentCount);
 
     const envelopes = server.emittedUpdates
       .filter((update: any) => update.type === 'data')
@@ -9483,6 +9505,56 @@ describe('analyze_wait_chain', () => {
     expect(envelope.display.layer).toBe('deep');
     expect(envelope.display.columns.find((column: any) => column.name === 'start_ts'))
       .toMatchObject({clickAction: 'navigate_range', durationColumn: 'dur_ns', unit: 'ns'});
+  });
+
+  it('captures exact ns cells a numeric claim can prove, and rounded ms cells it cannot', async () => {
+    spyAnalyzer();
+    const {ArtifactStore: RealArtifactStore} = jest.requireActual<typeof import('../artifactStore')>('../artifactStore');
+    const {prepareClaimEvidence} = await import('../../services/evidence/claimEvidencePreparation');
+    const {runClaimVerification} = await import('../../services/verifier/claimVerificationRunner');
+    const store = new RealArtifactStore();
+    const server = createTestServer({artifactStore: store});
+
+    const payload = await callTool(server.tools, 'analyze_wait_chain', {utid: 42, start_ts: 1_000, end_ts: 10_001_000});
+    expect(payload.summaryEvidenceRefId).toContain('wait_summary');
+
+    const view = store.createEvidenceReadView({
+      ownerKey: 'wait-chain-test', allowedTraces: [{traceId: 'test-trace-123', traceSide: 'current' as const}],
+    });
+    const verify = async (
+      evidenceRefId: string, column: string, cellValue: number, claimed: {value: number; unit: string},
+    ) => {
+      const reference = {evidenceRefId, rowIndex: 0, column, value: cellValue};
+      const conclusionContract: import('../../agent/core/conclusionContract').ConclusionContract = {
+        schemaVersion: 'conclusion_contract_v1', mode: 'focused_answer', bindingEligibility: 'eligible',
+        conclusions: [], clusters: [], evidenceChain: [], uncertainties: [], nextSteps: [],
+        claims: [{id: 'c1', kind: 'numeric', text: `The value is ${claimed.value} ${claimed.unit}`, references: [reference],
+          semantics: {schemaVersion: 'claim_semantics@1', predicate: 'numeric.cell', polarity: 'affirmed',
+            discourse: 'asserted', quantifier: 'one', modality: 'certain',
+            scope: {population: 'cited_rows', subjectRefs: [reference]},
+            numeric: {operator: 'eq', value: claimed.value, unit: claimed.unit}}}],
+      };
+      const preparedEvidence = await prepareClaimEvidence({conclusionContract, evidenceReadView: view});
+      return runClaimVerification({conclusionContract, preparedEvidence}).claimVerificationResult.claimResults[0];
+    };
+
+    // Exact ns cells prove a matching value in any time unit and reject a wrong one.
+    expect((await verify(payload.summaryEvidenceRefId, 'blocking_ns', 4_000_000, {value: 4, unit: 'ms'}))
+      .deterministicProof?.status).toBe('proved');
+    expect((await verify(payload.summaryEvidenceRefId, 'chain_wait_ns', 5_000_000, {value: 5_000_000, unit: 'ns'}))
+      .deterministicProof?.status).toBe('proved');
+    expect((await verify(payload.summaryEvidenceRefId, 'blocking_ns', 4_000_000, {value: 5, unit: 'ms'}))
+      .deterministicProof?.status).toBe('rejected');
+    // A segment's exact duration proves too.
+    expect((await verify(payload.evidenceRefId, 'dur_ns', 4_000_000, {value: 4, unit: 'ms'}))
+      .deterministicProof?.status).toBe('proved');
+    // Rounded display cells carry no producer semantics: neither proved nor contradicted.
+    for (const column of ['blocking_ms', 'external_blocking_pct']) {
+      const result = await verify(payload.summaryEvidenceRefId, column, column === 'blocking_ms' ? 4 : 40,
+        {value: column === 'blocking_ms' ? 4 : 40, unit: column === 'blocking_ms' ? 'ms' : '%'});
+      expect(result.deterministicProof?.status).toBe('candidate');
+      expect(result.deterministicProof?.reason).toBe('unit_authority_unknown');
+    }
   });
 
   it('names the unavailable reason instead of an empty wait chain', async () => {
@@ -9526,7 +9598,7 @@ describe('analyze_wait_chain', () => {
       task: {utid: 42, tid: 1200, upid: 7, startTs: 1_000, dur: 10_000_000, durationMs: 10,
         state: 'Running', threadName: 'com.example.app', processName: 'com.example.app'},
       slices: [{threadStateId: 2, startTs: 1_000, endTs: 10_001_000, durationMs: 10, state: 'Running',
-        kind: 'running', cpu: 3, blockedFunction: null, ioWait: null, segmentCount: 0}],
+        kind: 'running', cpu: 3, blockedFunction: null, ioWait: null}],
     }));
     const server = createTestServer();
 
@@ -9585,6 +9657,23 @@ describe('analyze_wait_chain', () => {
     // circuit breaker's failure rate would shrink the room it needs to fix it.
     expect(isPolicyRefusalResult(raw)).toBe(true);
     expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unprintable thread name as a caller error, and hands the run signal to the engine', async () => {
+    const analyze = spyAnalyzer();
+    const server = createTestServer();
+
+    const refused = await server.tools.get('analyze_wait_chain')!.handler({
+      process_name: 'com.example.app', thread_name: 'main\u0000x', start_ts: 1_000, end_ts: 10_001_000,
+    }, undefined);
+    expect(JSON.parse(refused.content[0].text)).toMatchObject({
+      success: false, error: 'invalid_name', action_required: 'provide_printable_name_up_to_200_chars',
+    });
+    expect(isPolicyRefusalResult(refused)).toBe(true);
+    expect(analyze).not.toHaveBeenCalled();
+
+    await callTool(server.tools, 'analyze_wait_chain', {thread_state_id: 5});
+    expect((analyze.mock.calls[0] as unknown[])[2]).toHaveProperty('signal');
   });
 
   it('asks for a thread when the selector matches nothing', async () => {

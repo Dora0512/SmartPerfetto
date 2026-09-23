@@ -11,63 +11,31 @@
 // Amdahl-style bookkeeping only.
 
 import {queryRows, assertQuerySucceeded, nsToMs, toNullableNumber, toNumber, toOptionalString} from '../utils/traceProcessorRowUtils';
+import {errorLine, hypothesisText, noteText} from './criticalPathText';
+import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
-import type {SegmentSemantics} from './criticalPathSemantics';
+import type {
+  CounterfactualEstimate,
+  CriticalPathHypothesis,
+  CriticalPathHypothesisId,
+  CriticalPathNote,
+  CriticalPathQuantification,
+  CriticalPathWarning,
+  FrameImpact,
+  HypothesisStrength,
+  SegmentSemantics,
+  TextParams,
+} from '../types/criticalPathContract';
 
 export interface QuantifyTaskInput {
   upid: number | null;
   startTs: number;
   endTs: number;
-  durMs: number;
 }
 
 export interface QuantifySegmentInput {
   segmentKey: string;
-  durMs: number;
-}
-
-export interface CounterfactualEstimate {
-  longestSegmentKey: string | null;
-  longestSegmentDurMs: number;
-  /** Task duration left if the longest external segment took no time (task − longest). */
-  bestCaseDurationMs: number;
-  /** The most removing that segment can save (= longestSegmentDurMs). */
-  maxSavingMs: number;
-  /** @deprecated read bestCaseDurationMs */
-  upperBoundMs: number;
-  note: string;
-}
-
-export interface FrameImpact {
-  frameId: number | null;
-  expectedDeadlineDurMs: number;
-  jankType: string | null;
-  presentType: string | null;
-  layerName: string | null;
-  appUpid: number | null;
-  overlapMs: number;
-}
-
-export type HypothesisStrength = 'strong' | 'weak' | 'speculative';
-
-export interface CriticalPathHypothesis {
-  id: string;
-  statement: string;
-  strength: HypothesisStrength;
-  /**
-   * SQL that, when run on the same trace, will return rows iff the hypothesis
-   * holds. Codex P1-8: only numeric IDs are interpolated; never string
-   * literals from segment metadata.
-   */
-  verificationSql: string;
-  notes: string[];
-}
-
-export interface CriticalPathQuantification {
-  counterfactual: CounterfactualEstimate | null;
-  frameImpacts: FrameImpact[];
-  hypotheses: CriticalPathHypothesis[];
-  warnings: string[];
+  durNs: number;
 }
 
 function buildCounterfactual(
@@ -78,37 +46,39 @@ function buildCounterfactual(
   // Stable order: dur DESC, then segmentKey ASC — guarantees deterministic
   // "longest segment" pick across equal-duration ties.
   const longest = [...segments].sort(
-    (a, b) => b.durMs - a.durMs || a.segmentKey.localeCompare(b.segmentKey)
+    (a, b) => b.durNs - a.durNs || a.segmentKey.localeCompare(b.segmentKey)
   )[0];
-  if (!longest || longest.durMs <= 0) return null;
-  const bestCaseDurationMs = Math.max(0, Math.round((task.durMs - longest.durMs) * 100) / 100);
+  if (!longest || longest.durNs <= 0) return null;
+  // Subtracted in ns and rounded once, like the analysis totals.
+  const bestCaseDurationNs = Math.max(0, task.endTs - task.startTs - longest.durNs);
+  const bestCaseDurationMs = nsToMs(bestCaseDurationNs);
   return {
     longestSegmentKey: longest.segmentKey,
-    longestSegmentDurMs: longest.durMs,
+    longestSegmentDurMs: nsToMs(longest.durNs),
     bestCaseDurationMs,
-    maxSavingMs: longest.durMs,
-    upperBoundMs: bestCaseDurationMs,
-    note:
-      'BEST CASE ONLY — bestCaseDurationMs is the task duration left if the longest external segment took no time; ' +
-      'the saving is at most maxSavingMs, and a previously shorter path may become critical, so the task may shrink by less.',
+    maxSavingMs: nsToMs(longest.durNs),
+    longestSegmentDurNs: longest.durNs,
+    bestCaseDurationNs,
+    maxSavingNs: longest.durNs,
+    noteCode: 'best_case_only',
+    note: noteText({code: 'best_case_only'}, 'en'),
   };
 }
 
 async function loadFrameImpacts(
   tp: TraceProcessorService,
   traceId: string,
-  task: QuantifyTaskInput
-): Promise<{impacts: FrameImpact[]; warning?: string}> {
+  task: QuantifyTaskInput,
+  signal: AbortSignal | undefined
+): Promise<{impacts: FrameImpact[]; warning?: CriticalPathWarning}> {
   // expected_frame_timeline_slice gives `ts + dur` as the deadline window
   // (end-of-expected-frame). actual_frame_timeline_slice carries jank_type
   // and present_type for that frame. Join via display_frame_token.
   try {
-    assertQuerySucceeded(await tp.query(traceId, 'INCLUDE PERFETTO MODULE android.frames.timeline;'));
+    assertQuerySucceeded(await tp.query(traceId, 'INCLUDE PERFETTO MODULE android.frames.timeline;', {signal}));
   } catch (error: unknown) {
-    return {
-      impacts: [],
-      warning: `frames.timeline include failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
-    };
+    rethrowIfTraceProcessorQueryCancelled(error);
+    return {impacts: [], warning: {code: 'frames_include_failed', params: {message: errorLine(error)}}};
   }
 
   const upidFilter = task.upid !== null ? `AND exp.upid = ${task.upid}` : '';
@@ -133,7 +103,7 @@ async function loadFrameImpacts(
   `;
 
   try {
-    const rows = await queryRows(tp, traceId, sql);
+    const rows = await queryRows(tp, traceId, sql, {signal});
     const impacts: FrameImpact[] = rows.map((obj) => {
       const overlapNs = toNumber(obj.overlap_ns);
       return {
@@ -148,10 +118,8 @@ async function loadFrameImpacts(
     });
     return {impacts: impacts.filter((impact) => impact.overlapMs > 0)};
   } catch (error: unknown) {
-    return {
-      impacts: [],
-      warning: `frame timeline query failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
-    };
+    rethrowIfTraceProcessorQueryCancelled(error);
+    return {impacts: [], warning: {code: 'frame_query_failed', params: {message: errorLine(error)}}};
   }
 }
 
@@ -186,7 +154,24 @@ function rankBy<T>(
  */
 function buildHypotheses(semantics: SegmentSemantics[]): CriticalPathHypothesis[] {
   const hypotheses: CriticalPathHypothesis[] = [];
-  const window = (sem: SegmentSemantics): string => `[${sem.startTs}, ${sem.endTs})`;
+  // Statements and notes are rendered from ids and numbers; English is the
+  // engine's neutral rendering, and a projection re-renders the language.
+  const hypothesis = (
+    id: CriticalPathHypothesisId,
+    params: TextParams,
+    strength: HypothesisStrength,
+    verificationSql: string,
+    noteCodes: CriticalPathNote[]
+  ): CriticalPathHypothesis => ({
+    id,
+    params,
+    statement: hypothesisText(id, params, 'en'),
+    strength,
+    verificationSql,
+    noteCodes,
+    notes: noteCodes.map((note) => noteText(note, 'en')),
+  });
+  const segment = (sem: SegmentSemantics): TextParams => ({utid: sem.utid, start: sem.startTs, end: sem.endTs});
 
   // H1: Sync binder client is blocked while server is GC'ing. Only fires when
   // this segment is on the CLIENT side AND the call is sync — server-side
@@ -198,63 +183,52 @@ function buildHypotheses(semantics: SegmentSemantics[]): CriticalPathHypothesis[
   );
   if (longBinder) {
     const {sem, item: txn} = longBinder;
-    hypotheses.push({
-      id: 'h-binder-server-gc',
-      statement:
-        `Sync binder client wait (txn id=${txn.binderTxnId}) covers ${txn.durMs} ms of the critical-path segment ` +
-        `of utid=${sem.utid} ${window(sem)} (clipped to the segment; the whole transaction lasts ${txn.eventDurMs} ms) ` +
-        `and is the dominant reason; verify that the server process was running GC during this segment.`,
-      strength: 'strong',
-      verificationSql:
-        `INCLUDE PERFETTO MODULE android.garbage_collection;\n` +
+    hypotheses.push(hypothesis(
+      'h-binder-server-gc',
+      {...segment(sem), txnId: txn.binderTxnId, durMs: txn.durMs, eventDurMs: txn.eventDurMs},
+      'strong',
+      `INCLUDE PERFETTO MODULE android.garbage_collection;\n` +
         `SELECT gc_type, gc_dur, reclaimed_mb FROM android_garbage_collection_events ` +
         `WHERE upid IN (SELECT upid FROM thread WHERE utid = ${txn.serverUtid}) ` +
         `AND gc_ts < ${sem.endTs} AND gc_ts + gc_dur > ${sem.startTs} ` +
         `ORDER BY gc_dur DESC LIMIT 5;`,
-      notes: ['sync binder call on client side'],
-    });
+      [{code: 'sync_binder_client'}]
+    ));
   }
 
-  // H2: Java monitor lock contention is the proximate cause.
+  // H2: Java monitor lock contention is the proximate cause. A chain segment
+  // usually carries it from the owner's side: while a thread waits for a lock
+  // the path follows the thread holding it.
   const longMonitor = rankBy(semantics, (sem) => sem.monitorContention, (mc) => mc.durMs).find(
     ({item: mc}) => mc.durMs >= 2
   );
   if (longMonitor) {
     const {sem, item: mc} = longMonitor;
-    hypotheses.push({
-      id: 'h-monitor-blocking',
-      statement:
-        `A Java monitor contention (row id=${mc.rowId}) blocks utid=${sem.utid} for ${mc.durMs} ms of its ` +
-        `critical-path segment ${window(sem)} (clipped to the segment; the whole contention lasts ${mc.eventDurMs} ms); ` +
-        `verify the blocking thread's call chain via android_monitor_contention_chain.`,
-      strength: mc.isBlockedThreadMain ? 'strong' : 'weak',
-      verificationSql:
-        `INCLUDE PERFETTO MODULE android.monitor_contention;\n` +
+    hypotheses.push(hypothesis(
+      'h-monitor-blocking',
+      {...segment(sem), side: mc.side, rowId: mc.rowId, blockedUtid: mc.blockedUtid, durMs: mc.durMs, eventDurMs: mc.eventDurMs},
+      mc.isBlockedThreadMain ? 'strong' : 'weak',
+      `INCLUDE PERFETTO MODULE android.monitor_contention;\n` +
         `SELECT parent_id, child_id, short_blocking_method, short_blocked_method, dur ` +
         `FROM android_monitor_contention_chain WHERE id = ${mc.rowId};`,
-      notes: mc.isBlockedThreadMain ? ['main thread blocked'] : ['non-main thread'],
-    });
+      [{code: mc.isBlockedThreadMain ? 'main_thread_blocked' : 'non_main_thread'}]
+    ));
   }
 
   // H3: io_wait or IO/page-cache blocked_function candidate on the segment's thread.
   const longIo = rankBy(semantics, (sem) => sem.ioSignals, (io) => io.durMs).find(({item: io}) => io.durMs >= 4);
   if (longIo) {
     const {sem, item: io} = longIo;
-    hypotheses.push({
-      id: 'h-io-wait',
-      statement:
-        `Thread utid=${sem.utid} spends ${io.durMs} ms of its critical-path segment ${window(sem)} in an io_wait ` +
-        `or IO/page-cache blocked_function candidate (clipped to the segment; the whole D/DK slice lasts ` +
-        `${io.eventDurMs} ms); blocked_function is a single-frame kernel wchan, so verify with D/DK slices plus ` +
-        `file/page-fault/block-I/O evidence.`,
-      strength: io.ioWait ? 'strong' : 'speculative',
-      verificationSql:
-        `SELECT ts, dur, state, blocked_function, io_wait FROM thread_state ` +
+    hypotheses.push(hypothesis(
+      'h-io-wait',
+      {...segment(sem), durMs: io.durMs, eventDurMs: io.eventDurMs},
+      io.ioWait ? 'strong' : 'speculative',
+      `SELECT ts, dur, state, blocked_function, io_wait FROM thread_state ` +
         `WHERE utid = ${sem.utid} AND state IN ('D', 'DK') ` +
         `AND ts < ${sem.endTs} AND ts + dur > ${sem.startTs} ` +
         `ORDER BY dur DESC LIMIT 10;`,
-      notes: io.ioWait ? ['io_wait flag confirmed'] : ['inferred from blocked_function pattern'],
-    });
+      [{code: io.ioWait ? 'io_wait_confirmed' : 'inferred_from_blocked_function'}]
+    ));
   }
 
   // H4: GC-induced stall in the segment's process.
@@ -263,21 +237,17 @@ function buildHypotheses(semantics: SegmentSemantics[]): CriticalPathHypothesis[
   );
   if (longGc) {
     const {sem, item: gc} = longGc;
-    hypotheses.push({
-      id: 'h-gc-stall',
-      statement:
-        `A GC event in process upid=${sem.upid} overlaps the critical-path segment of utid=${sem.utid} ` +
-        `${window(sem)} for ${gc.durMs} ms (clipped to the segment; the whole GC lasts ${gc.eventDurMs} ms); ` +
-        `verify all GC events touching the segment.`,
-      strength: gc.isMarkCompact ? 'strong' : 'weak',
-      verificationSql:
-        `INCLUDE PERFETTO MODULE android.garbage_collection;\n` +
+    hypotheses.push(hypothesis(
+      'h-gc-stall',
+      {...segment(sem), upid: sem.upid, durMs: gc.durMs, eventDurMs: gc.eventDurMs},
+      gc.isMarkCompact ? 'strong' : 'weak',
+      `INCLUDE PERFETTO MODULE android.garbage_collection;\n` +
         `SELECT gc_type, is_mark_compact, gc_dur, reclaimed_mb FROM android_garbage_collection_events ` +
         `WHERE upid = ${sem.upid} ` +
         `AND gc_ts < ${sem.endTs} AND gc_ts + gc_dur > ${sem.startTs} ` +
         `ORDER BY gc_dur DESC LIMIT 5;`,
-      notes: gc.isMarkCompact ? ['mark-compact (heap-blocking)'] : ['non-mark-compact'],
-    });
+      [{code: gc.isMarkCompact ? 'mark_compact' : 'non_mark_compact'}]
+    ));
   }
 
   // H5: CPU competition for runnable segments. `priority` lives on `sched`,
@@ -287,20 +257,16 @@ function buildHypotheses(semantics: SegmentSemantics[]): CriticalPathHypothesis[
   );
   if (longCpu) {
     const {sem, item: cpu} = longCpu;
-    hypotheses.push({
-      id: 'h-cpu-competition',
-      statement:
-        `While utid=${sem.utid} was runnable in its critical-path segment ${window(sem)}, a competing thread ` +
-        `(utid=${cpu.competingUtid}) ran on CPU ${cpu.cpu} for ${cpu.competingDurMs} ms (clipped to the segment; ` +
-        `the whole Running slice lasts ${cpu.eventDurMs} ms); verify priority and preemption.`,
-      strength: 'weak',
-      verificationSql:
-        `SELECT ts, dur, priority FROM sched ` +
+    hypotheses.push(hypothesis(
+      'h-cpu-competition',
+      {...segment(sem), competingUtid: cpu.competingUtid, cpu: cpu.cpu, durMs: cpu.competingDurMs, eventDurMs: cpu.eventDurMs},
+      'weak',
+      `SELECT ts, dur, priority FROM sched ` +
         `WHERE utid = ${cpu.competingUtid} ` +
         `AND ts < ${sem.endTs} AND ts + dur > ${sem.startTs} ` +
         `ORDER BY dur DESC LIMIT 10;`,
-      notes: cpu.cpuMaxFreqKhz !== null ? [`CPU max freq during segment: ${cpu.cpuMaxFreqKhz} kHz`] : [],
-    });
+      cpu.cpuMaxFreqKhz !== null ? [{code: 'cpu_max_freq', params: {khz: cpu.cpuMaxFreqKhz}}] : []
+    ));
   }
 
   // Cap to 3 strongest.
@@ -317,14 +283,14 @@ export async function quantifyCriticalPath(
   traceId: string,
   task: QuantifyTaskInput,
   segments: QuantifySegmentInput[],
-  semantics: SegmentSemantics[]
+  semantics: SegmentSemantics[],
+  signal?: AbortSignal
 ): Promise<CriticalPathQuantification> {
   const counterfactual = buildCounterfactual(task, segments);
-  const frameResult = await loadFrameImpacts(tp, traceId, task);
+  const frameResult = await loadFrameImpacts(tp, traceId, task, signal);
   const hypotheses = buildHypotheses(semantics);
 
-  const warnings: string[] = [];
-  if (frameResult.warning) warnings.push(frameResult.warning);
+  const warnings: CriticalPathWarning[] = frameResult.warning ? [frameResult.warning] : [];
 
   return {
     counterfactual,

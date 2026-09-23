@@ -756,24 +756,51 @@ The legacy agent API base is rejected by `rejectLegacyAgentApi` to avoid new ext
 
 ### Critical-path wait chain
 
-`POST /api/critical-path/:traceId/analyze` backs the AI Assistant Critical path
-button for a selected `thread_state`. It is a global, non-workspace route: in
-enterprise / OIDC deployments it always returns 410
-`ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`, and there is no workspace-scoped
-replacement yet. The trace must belong to the caller's workspace, and the caller
-needs `trace:read`.
+`POST /api/workspaces/:workspaceId/critical-path/:traceId/analyze` backs the AI
+Assistant Critical path drawer for a selected `thread_state`; the path's
+workspace must be the caller's (otherwise 404). The legacy global
+`POST /api/critical-path/:traceId/analyze` behaves the same but always returns
+410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED` in enterprise / OIDC deployments. The
+trace must belong to the caller's workspace, and the caller needs `trace:read`.
+The request and response types live in `backend/src/types/criticalPathContract.ts`;
+`npm --prefix backend run generate:frontend-types` emits them into the
+plugin's `generated/` types and `npm --prefix backend run check:types` fails
+when the two drift.
 
 The body takes `threadStateId`, or `utid` + `startTs` + `dur` (optional
 `endTs`), plus optional `maxSegments`, `recursionDepth`, `recursionEnabled`,
 `segmentBudget`, `includeAi`, `question`, and `outputLanguage`.
 
 Success returns `{success: true, analysis, presentationAnalysis, aiSummary}`.
+Blocking time, shares, module attribution and `chainSegmentCount` /
+`chainWaitMs` / `waitClassTotalsMs` cover the whole top-level wait chain (up to
+5000 stack segments; beyond that `truncated` is true and `warnings` says the totals
+cover only the part before the cut); recursion children are not counted again.
+`wakeupChain` is only the displayed prefix (`maxSegments`). Durations are summed
+in ns before conversion, so the external share cannot exceed 100% by rounding.
+Modules, anomalies, recommendations, warnings, reasons, waker hints and
+hypotheses carry stable ids (`moduleIds` / `moduleId`, `anomalies[].id` +
+`params` + `evidenceItems`, `recommendationIds`, `warningCodes`, `reasonItems`,
+`directWaker.hintCodes`, `hypotheses[].params` + `noteCodes`); text is rendered
+only at the edge: `presentationAnalysis` is the requested language. `analysis`
+is the same result rendered in zh-CN and is deprecated: it stays for existing
+clients and will be removed in a later release, so new clients read
+`presentationAnalysis` only. `longestSegment` names the
+longest external segment of the whole chain.
+`totalsNs` (`blocking`, `chainWait`, `waiting`, integer ns; the window is
+`task.dur` and self time is `task.dur - blocking`) and the
+counterfactual's `longestSegmentDurNs`, `bestCaseDurationNs` and `maxSavingNs`
+are additive; each ms field is rounded once from its ns value. Omitted
+`maxSegments` / `recursionDepth` / `segmentBudget` take the engine's
+`CRITICAL_PATH_DEFAULTS.ui` (160 / 2 / 16).
 `aiSummary` falls back to the deterministic rule summary (`generated: false`)
 with a `fallbackReason` and localized `warnings` when AI is disabled (feature
-`critical_path_ai_summary`), the active provider is not on the Claude Agent SDK
-runtime, credentials are missing, the call times out, or the client disconnects.
+`critical_path_ai_summary`), the caller lacks `agent:run` (`permission_denied`:
+reading a trace is not enough to spend the model), the active provider is not
+on the Claude Agent SDK runtime, credentials are missing, the call times out, or
+the client disconnects. Raw model errors go only to the server log.
 Disabling AI never turns this route into a 403. A client disconnect cancels the
-in-flight model call.
+in-flight model call and any pending trace query; no response is written then.
 
 Failures return `{success: false, code, error}` with a localized `error`:
 
@@ -781,7 +808,27 @@ Failures return `{success: false, code, error}` with a localized `error`:
 |---|---|---|
 | 400 | `invalid_trace_id` | The traceId contains characters outside the safe set |
 | 400 | `invalid_request_body` | The body failed validation; `issues` lists the fields |
-| 400 | `invalid_thread_state_id`, `missing_selector`, `non_positive_duration`, `invalid_integer` | The task selector is unusable |
+| 400 | `invalid_thread_state_id`, `missing_selector`, `non_positive_duration`, `invalid_integer`, `invalid_name` | The task selector is unusable |
 | 404 | `trace_not_found` | The trace does not exist or is not the caller's |
 | 404 | `thread_state_not_found` | The trace has no such thread_state |
 | 500 | `critical_path_failed` | Any other failure; the raw error goes only to the server log |
+
+### Flamegraph
+
+`GET /api/flamegraph/:traceId/availability` reports whether the trace has CPU
+call-stack samples (a Perfetto summary tree); `POST /api/flamegraph/:traceId/analyze`
+returns `{success: true, analysis, aiSummary}`. Both are global, non-workspace
+routes (410 under enterprise / OIDC). Like the critical-path route they validate
+the traceId and body first, then require the trace to be the caller's with
+`trace:read`, and only then load it. The body takes optional `startTs`, `endTs`,
+`packageName`, `threadName`, `sampleSource`, `maxNodes`, `minSampleCount`,
+`includeAi` and `question`; undeclared fields are dropped. A trace processor
+without the summary module or table reports `available: false`; any other query
+failure is retried once and then returns 500. `aiSummary` (feature
+`flamegraph_ai_summary`) falls back exactly like the critical-path summary,
+including the `agent:run` requirement and `fallbackReason`; its output is
+Chinese only. A client disconnect cancels pending queries and the model call.
+Failures return `{success: false, code, error}` with `code` one of
+`invalid_trace_id`, `invalid_request_body`, `trace_not_found` or
+`flamegraph_failed`. The former `POST /api/flamegraph/:traceId/summarize`, which
+sent client-supplied analysis to a model, is removed; nothing called it.

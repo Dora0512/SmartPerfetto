@@ -11,17 +11,12 @@
 
 import {afterEach, describe, expect, it, jest} from '@jest/globals';
 import fs from 'fs';
-import path from 'path';
 import {randomUUID} from 'crypto';
 import {WorkingTraceProcessor} from '../workingTraceProcessor';
 import type {TraceProcessorService} from '../traceProcessorService';
 import {resolveTraceCase} from '../../utils/traceCorpus';
-import {
-  analyzeCriticalPath,
-  CriticalPathInputError,
-  type CriticalPathAnalysis,
-  type CriticalPathSegment,
-} from '../criticalPathAnalyzer';
+import {analyzeCriticalPath, CriticalPathInputError} from '../criticalPathAnalyzer';
+import {CRITICAL_PATH_HYPOTHESIS_IDS, type CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 jest.setTimeout(120_000);
 const processors: WorkingTraceProcessor[] = [];
@@ -39,26 +34,20 @@ const TRACES = [
 // listed with the input no available trace carries; the final test enforces
 // both. If an "unproducible" id starts appearing, the corpus now carries its
 // input: move it to REQUIRED_HYPOTHESES.
-const REQUIRED_HYPOTHESES = ['h-binder-server-gc', 'h-cpu-competition', 'h-gc-stall'];
+// h-monitor-blocking is produced from the lock owner's side: while a thread
+// waits for a monitor the chain follows the owner, whose segment now carries
+// the contention of the wait it explains.
+const REQUIRED_HYPOTHESES = ['h-binder-server-gc', 'h-cpu-competition', 'h-gc-stall', 'h-monitor-blocking'];
 const UNPRODUCIBLE_HYPOTHESES = [
   // Missing input: a D/DK thread_state row with io_wait = 1 or a
   // blocked_function (sched_blocked_reason). No corpus trace records either;
   // the per-trace count is asserted to be zero.
   'h-io-wait',
-  // Missing input: a monitor contention whose blocked thread is a chain
-  // segment and overlaps that segment for >= MONITOR_THRESHOLD_MS. While the
-  // blocked thread waits, the chain follows the lock owner, so the clipped
-  // overlap stays below the threshold on every run, including the runs picked
-  // because the waker was monitor-blocked; the observed maximum is asserted.
-  'h-monitor-blocking',
 ];
-// H2's threshold in criticalPathQuantify.ts.
-const MONITOR_THRESHOLD_MS = 2;
 // H1 checks a further claim (the server process ran GC), so its SQL may return
 // nothing; every other hypothesis re-selects the evidence that produced it.
 const CLAIM_ONLY_HYPOTHESES = new Set(['h-binder-server-gc']);
 const UNAVAILABLE_REASONS = ['task_state_running', 'no_critical_path_stack', 'no_waiting_time'];
-const RANGE_WAKER_HINT = 'resolved for the longest waiting slice in the window';
 // Names a stdlib_missing warning must mention: `INCLUDE <module> failed` or
 // `stdlib table missing: ... <table> ...`.
 const SOURCE_STDLIB_NAMES: Record<string, string[]> = {
@@ -69,22 +58,18 @@ const SOURCE_STDLIB_NAMES: Record<string, string[]> = {
   cpu: ['linux.cpu.frequency', 'cpu_frequency_counters', 'thread_state'],
 };
 // Distinct stack keys bound the merged chain from above, so a candidate within
-// this many keys (and the 3200-row stack limit) is never truncated at the
-// analyzer's default 160 displayed segments, even with the range-mode margin.
+// this many keys is never truncated at the analyzer's default 160 displayed
+// segments, even with the range-mode margin. The row bound only keeps the
+// candidate set, and so the runs, the same as when the analyzer capped rows.
 const MAX_PROBE_SEGMENTS = 100;
 const MAX_STACK_ROWS = 3200;
 const MAX_POOL_RUNS = 8;
-// The h-monitor-blocking pool cannot produce its target (see
-// UNPRODUCIBLE_HYPOTHESES); its runs only add maxMonitorOverlapMs samples from
-// monitor-blocked wakers, so it stops after this many.
-const MONITOR_SAMPLE_RUNS = 2;
 const RANGE_MARGIN_NS = 1_000_000;
 
 const observed = {
   traces: new Set<string>(),
   produced: new Map<string, Set<string>>(),
   ioInputRows: {} as Record<string, number>,
-  maxMonitorOverlapMs: 0,
 };
 
 interface Candidate {id: number; utid: number; ts: number; dur: number; wakerUtid: number}
@@ -164,7 +149,7 @@ const EVIDENCE_POOLS: Array<{target: string; module?: string; filter: string; ma
     SELECT 1 FROM android_binder_txns AS b
     WHERE b.client_utid = w.utid AND b.is_sync
       AND ${overlapAtLeast('b.client_ts', 'b.client_ts + b.client_dur', 4_000_000)})`},
-  {target: 'h-monitor-blocking', module: 'android.monitor_contention', maxRuns: MONITOR_SAMPLE_RUNS, filter: `EXISTS (
+  {target: 'h-monitor-blocking', module: 'android.monitor_contention', filter: `EXISTS (
     SELECT 1 FROM android_monitor_contention AS m
     WHERE m.blocked_utid = w.utid AND ${overlapAtLeast('m.ts', 'm.ts + m.dur', 2_000_000)})`},
 ];
@@ -190,10 +175,6 @@ async function stackFits(ctx: TraceContext, candidate: Candidate): Promise<boole
   const fits = keys >= 1 && keys <= MAX_PROBE_SEGMENTS && rows <= MAX_STACK_ROWS;
   ctx.fits.set(candidate.id, fits);
   return fits;
-}
-
-function flatten(segments: CriticalPathSegment[]): CriticalPathSegment[] {
-  return segments.flatMap(segment => [segment, ...flatten(segment.children ?? [])]);
 }
 
 async function verificationSqlProblems(processor: WorkingTraceProcessor, id: string, text: string): Promise<string[]> {
@@ -231,30 +212,52 @@ async function checkAnalysis(ctx: TraceContext, analysis: CriticalPathAnalysis, 
     observed.produced.set(hypothesis.id, producers);
   }
 
+  // Durations are summed in ns, so the external share cannot pass 100%; the
+  // module shares may only overshoot by their own 0.01 rounding each.
+  if (analysis.externalBlockingPercentage > 100) {
+    problem(`externalBlockingPercentage is ${analysis.externalBlockingPercentage}`);
+  }
   // Each segment counts once, under its primary module.
   const shareSum = analysis.moduleBreakdown.reduce((sum, stat) => sum + stat.percentage, 0);
-  if (shareSum > 100.5) problem(`moduleBreakdown shares sum to ${shareSum}`);
+  if (shareSum > 100 + 0.005 * analysis.moduleBreakdown.length) problem(`moduleBreakdown shares sum to ${shareSum}`);
   const segmentCount = analysis.moduleBreakdown.reduce((sum, stat) => sum + stat.segmentCount, 0);
   if (!analysis.truncated && segmentCount !== analysis.wakeupChain.length) {
     problem(`moduleBreakdown counts ${segmentCount} segments for a ${analysis.wakeupChain.length}-segment chain`);
   }
   if (ctx.constructed && analysis.truncated) problem('truncated on a constructed case');
 
-  const counterfactual = analysis.quantification?.counterfactual;
-  if (counterfactual) {
-    const total = counterfactual.bestCaseDurationMs + counterfactual.maxSavingMs;
-    if (Math.abs(total - analysis.totalMs) >= 0.005) {
-      problem(`counterfactual bestCase ${counterfactual.bestCaseDurationMs} + maxSaving ${counterfactual.maxSavingMs} != totalMs ${analysis.totalMs}`);
+  // The exact ns totals are what evidence captures read; the ms fields are
+  // each rounded from them once.
+  const toMs = (ns: number) => Math.round((ns / 1e6) * 100) / 100;
+  const totals = analysis.totalsNs;
+  if (!totals) {
+    problem('totalsNs missing');
+  } else {
+    if (toMs(totals.blocking) !== analysis.blockingMs ||
+      toMs(Math.max(0, analysis.task.dur - totals.blocking)) !== analysis.selfMs ||
+      toMs(totals.chainWait) !== (analysis.chainWaitMs ?? 0)) {
+      problem(`ms totals are not rounded from totalsNs: ${JSON.stringify(totals)}`);
     }
-    if (counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs ||
-      counterfactual.upperBoundMs !== counterfactual.bestCaseDurationMs) {
-      problem(`counterfactual fields disagree: ${JSON.stringify(counterfactual)}`);
+    const ownWaitNs = (analysis.slices ?? [])
+      .filter(slice => slice.kind === 'sleeping' || slice.kind === 'uninterruptible')
+      .reduce((sum, slice) => sum + slice.endTs - slice.startTs, 0);
+    if (totals.waiting !== ownWaitNs || totals.waiting > analysis.task.dur) {
+      problem(`totalsNs.waiting ${totals.waiting} != the window's own S/D time ${ownWaitNs}`);
     }
   }
 
-  for (const segment of flatten(analysis.wakeupChain)) {
-    for (const contention of segment.semantics?.monitorContention ?? []) {
-      observed.maxMonitorOverlapMs = Math.max(observed.maxMonitorOverlapMs, contention.durMs);
+  const counterfactual = analysis.quantification?.counterfactual;
+  if (counterfactual) {
+    if (counterfactual.bestCaseDurationNs !== Math.max(0, analysis.task.dur - counterfactual.maxSavingNs)) {
+      problem(`counterfactual bestCase ${counterfactual.bestCaseDurationNs} ns + maxSaving ${counterfactual.maxSavingNs} ns != window ${analysis.task.dur} ns`);
+    }
+    if (toMs(counterfactual.bestCaseDurationNs) !== counterfactual.bestCaseDurationMs ||
+      toMs(counterfactual.maxSavingNs) !== counterfactual.maxSavingMs) {
+      problem(`counterfactual ms fields are not rounded from ns: ${JSON.stringify(counterfactual)}`);
+    }
+    if (counterfactual.maxSavingNs !== counterfactual.longestSegmentDurNs ||
+      counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs) {
+      problem(`counterfactual fields disagree: ${JSON.stringify(counterfactual)}`);
     }
   }
 }
@@ -267,9 +270,6 @@ async function runThreadState(ctx: TraceContext, candidate: Candidate, label: st
   if (wakerUtid !== candidate.wakerUtid) {
     ctx.problems.push(`${ctx.selector} ${where}: directWaker.utid ${wakerUtid} != successor waker_utid ${candidate.wakerUtid}`);
   }
-  if ((analysis.task.waker?.utid ?? null) !== wakerUtid) {
-    ctx.problems.push(`${ctx.selector} ${where}: task.waker.utid ${analysis.task.waker?.utid} != directWaker.utid ${wakerUtid}`);
-  }
   await checkAnalysis(ctx, analysis, where);
   return analysis;
 }
@@ -281,7 +281,7 @@ async function runRange(ctx: TraceContext, candidate: Candidate): Promise<void> 
   if (!analysis.available && !UNAVAILABLE_REASONS.includes(analysis.unavailableReason ?? '')) {
     ctx.problems.push(`${ctx.selector} ${where}: unavailable without a C5 reason (${analysis.unavailableReason})`);
   }
-  if (analysis.directWaker && !analysis.directWaker.hints.includes(RANGE_WAKER_HINT)) {
+  if (analysis.directWaker && !analysis.directWaker.hintCodes.includes('range_longest_waiting_slice')) {
     ctx.problems.push(`${ctx.selector} ${where}: range waker lacks the longest-waiting-slice hint`);
   }
   await checkAnalysis(ctx, analysis, where);
@@ -352,15 +352,13 @@ describe('critical-path engine on the pinned trace processor', () => {
 
   it('produces every hypothesis id the corpus supports and names the missing input for the rest', () => {
     expect([...observed.traces].sort()).toEqual(TRACES.map(trace => trace.selector).sort());
-    const source = fs.readFileSync(path.resolve(__dirname, '../criticalPathQuantify.ts'), 'utf8');
-    const emitted = [...source.matchAll(/\bid: '(h-[a-z-]+)'/g)].map(match => match[1]).sort();
-    expect(emitted).toEqual([...REQUIRED_HYPOTHESES, ...UNPRODUCIBLE_HYPOTHESES].sort());
+    // Every id the engine can emit is either required from the corpus or
+    // named with the input no trace carries.
+    expect([...CRITICAL_PATH_HYPOTHESIS_IDS].sort()).toEqual([...REQUIRED_HYPOTHESES, ...UNPRODUCIBLE_HYPOTHESES].sort());
 
     const produced = [...observed.produced.keys()].sort();
     expect(produced).toEqual(REQUIRED_HYPOTHESES);
     // h-io-wait: no trace carries its input.
     expect(observed.ioInputRows).toEqual(Object.fromEntries(TRACES.map(trace => [trace.selector, 0])));
-    // h-monitor-blocking: no run met its threshold.
-    expect(observed.maxMonitorOverlapMs).toBeLessThan(MONITOR_THRESHOLD_MS);
   });
 });

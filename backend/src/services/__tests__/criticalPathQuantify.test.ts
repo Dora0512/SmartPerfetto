@@ -5,8 +5,9 @@
 import {describe, expect, it, jest} from '@jest/globals';
 import Database from 'better-sqlite3';
 import {__INTERNAL__, quantifyCriticalPath, type QuantifyTaskInput} from '../criticalPathQuantify';
-import {segmentKeyOf, type SegmentSemantics} from '../criticalPathSemantics';
+import {segmentKeyOf} from '../criticalPathSemantics';
 import type {QueryResult, TraceProcessorService} from '../traceProcessorService';
+import type {SegmentSemantics} from '../../types/criticalPathContract';
 
 const {buildCounterfactual, buildHypotheses} = __INTERNAL__;
 
@@ -15,7 +16,7 @@ const EMPTY: QueryResult = {columns: [], rows: [], durationMs: 1};
 
 // The task is thread 1 of process 7; the evidence below comes from other
 // threads on its chain, as it does after the root thread is removed.
-const TASK: QuantifyTaskInput = {upid: 7, startTs: 0, endTs: 200 * MS, durMs: 200};
+const TASK: QuantifyTaskInput = {upid: 7, startTs: 0, endTs: 200 * MS};
 const WINDOW = {startTs: 100 * MS, endTs: 110 * MS};
 
 function semantics(
@@ -32,8 +33,6 @@ function semantics(
     gcEvents: [],
     cpuCompetition: [],
     wakeSources: [],
-    sources: {binder: 'present', monitor: 'present', io: 'present', gc: 'present', cpu: 'present', wakeSource: 'present'},
-    warnings: [],
     ...signals,
   };
 }
@@ -48,7 +47,7 @@ const BINDER = semantics({utid: 40, upid: 8}, {
 });
 const MONITOR = semantics({utid: 41, upid: 8}, {
   monitorContention: [{
-    rowId: 5, shortBlockedMethod: 'a()', shortBlockingMethod: 'b()', blockedThreadName: 'worker',
+    rowId: 5, side: 'blocked', shortBlockedMethod: 'a()', shortBlockingMethod: 'b()', blockedThreadName: 'worker',
     blockingThreadName: 'other', blockedTid: 1041, blockingTid: 1060, blockedUtid: 41, blockingUtid: 60,
     durMs: 3, eventDurMs: 12, isBlockedThreadMain: false,
   }],
@@ -71,9 +70,9 @@ const CPU = semantics({utid: 44, upid: 8}, {
 
 describe('criticalPathQuantify counterfactual', () => {
   it('reports the best-case remaining duration and the maximum saving', () => {
-    const estimate = buildCounterfactual({...TASK, durMs: 30}, [
-      {segmentKey: 'a', durMs: 5},
-      {segmentKey: 'b', durMs: 22},
+    const estimate = buildCounterfactual({...TASK, endTs: 30 * MS}, [
+      {segmentKey: 'a', durNs: 5 * MS},
+      {segmentKey: 'b', durNs: 22 * MS},
     ]);
 
     expect(estimate).toMatchObject({
@@ -81,20 +80,31 @@ describe('criticalPathQuantify counterfactual', () => {
       longestSegmentDurMs: 22,
       bestCaseDurationMs: 8,
       maxSavingMs: 22,
-      upperBoundMs: 8,
     });
     expect(estimate?.note).toMatch(/^BEST CASE ONLY/);
     expect(estimate?.note).toContain('at most maxSavingMs');
   });
 
+  it('subtracts in ns and rounds once, keeping the exact values beside the ms fields', () => {
+    // 10.004 ms - 4.005 ms: rounding each first would give 10.00 - 4.01 = 5.99.
+    const estimate = buildCounterfactual({...TASK, endTs: 10_004_000}, [{segmentKey: 'a', durNs: 4_005_000}]);
+
+    expect(estimate).toMatchObject({
+      bestCaseDurationNs: 5_999_000,
+      bestCaseDurationMs: 6,
+      maxSavingNs: 4_005_000,
+      longestSegmentDurNs: 4_005_000,
+      maxSavingMs: 4.01,
+    });
+  });
+
   it('floors the best case at zero and has no estimate without a positive segment', () => {
-    expect(buildCounterfactual({...TASK, durMs: 10}, [{segmentKey: 'a', durMs: 12}])).toMatchObject({
+    expect(buildCounterfactual({...TASK, endTs: 10 * MS}, [{segmentKey: 'a', durNs: 12 * MS}])).toMatchObject({
       bestCaseDurationMs: 0,
-      upperBoundMs: 0,
       maxSavingMs: 12,
     });
     expect(buildCounterfactual(TASK, [])).toBeNull();
-    expect(buildCounterfactual(TASK, [{segmentKey: 'a', durMs: 0}])).toBeNull();
+    expect(buildCounterfactual(TASK, [{segmentKey: 'a', durNs: 0}])).toBeNull();
   });
 });
 
@@ -167,6 +177,18 @@ describe('criticalPathQuantify hypotheses', () => {
     }
   });
 
+  it('names the owner and its waiter when the contention was attached from the owner side', () => {
+    const owner = semantics({utid: 60, upid: 8}, {
+      monitorContention: [{...MONITOR.monitorContention[0], side: 'owner'}],
+    });
+
+    const [hypothesis] = buildHypotheses([owner]);
+
+    expect(hypothesis.id).toBe('h-monitor-blocking');
+    expect(hypothesis.statement).toContain('utid=60 holds the Java monitor (contention row id=5) that utid=41 waits on');
+    expect(hypothesis.verificationSql).toContain('WHERE id = 5;');
+  });
+
   it('thresholds on the time clipped to the segment, not the whole event', () => {
     const shortIo = semantics({utid: 42, upid: 8}, {
       ioSignals: [{source: 'io_wait_flag', blockedFunction: null, durMs: 3, eventDurMs: 50, ioWait: true}],
@@ -192,7 +214,7 @@ describe('quantifyCriticalPath', () => {
       tp,
       'trace-1',
       TASK,
-      [{segmentKey: IO.segmentKey, durMs: 10}],
+      [{segmentKey: IO.segmentKey, durNs: 10 * MS}],
       [IO, CPU]
     );
 

@@ -2,12 +2,12 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import type {CriticalPathAnalysis} from '../criticalPathAnalyzer';
-import {buildDeterministicCriticalPathSummary} from '../criticalPathAiSummary';
-import {projectCriticalPathAnalysis} from '../criticalPathLocalization';
+import {buildDeterministicCriticalPathSummary} from '../criticalPathSummary';
+import {renderCriticalPathAnalysis} from '../criticalPathLocalization';
+import type {CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 function fixture(): CriticalPathAnalysis {
-  return {
+  return renderCriticalPathAnalysis({
     available: true,
     task: {
       threadStateId: 1,
@@ -26,7 +26,8 @@ function fixture(): CriticalPathAnalysis {
     wakeupChain: [],
     moduleBreakdown: [
       {
-        module: 'IO / 文件系统',
+        moduleId: 'io_filesystem',
+        module: '',
         durationMs: 40,
         percentage: 80,
         segmentCount: 1,
@@ -35,18 +36,22 @@ function fixture(): CriticalPathAnalysis {
     ],
     anomalies: [
       {
+        id: 'io_candidate',
         severity: 'warning',
-        title: '等待链涉及 IO/page-cache 候选',
-        detail: 'critical path 中出现 io_wait。',
-        evidence: ['io_wait=true'],
+        title: '',
+        detail: '',
+        evidenceItems: [{kind: 'text', text: 'io_wait=true'}],
+        evidence: [],
       },
     ],
-    summary: '选中 task 的外部等待占比较高。',
-    recommendations: ['排查选中区间附近的同步 I/O。'],
-    warnings: ['critical path 被截断。'],
+    summary: '',
+    recommendationIds: ['inspect_io'],
+    recommendations: [],
+    warningCodes: [],
+    warnings: [],
     rawRows: 1,
     truncated: false,
-  } as CriticalPathAnalysis;
+  }, 'zh-CN');
 }
 
 describe('criticalPathAiSummary localization', () => {
@@ -73,8 +78,11 @@ describe('criticalPathAiSummary localization', () => {
           longestSegmentDurMs: 40,
           bestCaseDurationMs: 10,
           maxSavingMs: 40,
-          upperBoundMs: 10,
-          note: 'best case',
+          longestSegmentDurNs: 40_000_000,
+          bestCaseDurationNs: 10_000_000,
+          maxSavingNs: 40_000_000,
+          noteCode: 'best_case_only',
+          note: '',
         },
         frameImpacts: [],
         hypotheses: [],
@@ -99,9 +107,11 @@ describe('criticalPathAiSummary localization', () => {
       externalBlockingPercentage: 0,
       moduleBreakdown: [],
       anomalies: [{
+        id: 'no_waiting_time',
         severity: 'info',
-        title: '选区内没有等待时间',
-        detail: '选中区间内该线程没有 Sleeping / Uninterruptible / Runnable 等待状态，没有等待链可分析。',
+        title: '',
+        detail: '',
+        evidenceItems: [],
         evidence: [],
       }],
     };
@@ -110,6 +120,6 @@ describe('criticalPathAiSummary localization', () => {
     expect(summary).toContain('Rule findings: The selection contains no waiting time.');
     expect(summary).not.toMatch(/\p{Script=Han}/u);
     // The MCP tool projects first; the projection is idempotent for English.
-    expect(buildDeterministicCriticalPathSummary(projectCriticalPathAnalysis(analysis, 'en'), 'en')).toBe(summary);
+    expect(buildDeterministicCriticalPathSummary(renderCriticalPathAnalysis(analysis, 'en'), 'en')).toBe(summary);
   });
 });

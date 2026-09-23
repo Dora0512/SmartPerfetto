@@ -2,18 +2,16 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import type {AiSummary, AiSummaryFallbackReason} from '../types/criticalPathContract';
+
 export interface FlamegraphAnalyzeOptions {
   startTs?: number | string;
   endTs?: number | string;
   packageName?: string;
   threadName?: string;
   sampleSource?: string;
-  maxDepth?: number;
   maxNodes?: number;
   minSampleCount?: number;
-  maxSampleBuckets?: number;
-  includeAi?: boolean;
-  question?: string;
 }
 
 export interface FlamegraphPerfettoSummaryRow {
@@ -117,10 +115,6 @@ export interface FlamegraphAvailability {
   warnings: string[];
 }
 
-export interface FlamegraphAiSummary {
-  generated: boolean;
-  model?: string;
-  summary: string;
-  warnings: string[];
-  redactionApplied?: boolean;
-}
+/** The flamegraph's model narrative: the same shape as every auxiliary AI summary. */
+export type FlamegraphAiSummary = AiSummary;
+export type FlamegraphAiFallbackReason = AiSummaryFallbackReason;

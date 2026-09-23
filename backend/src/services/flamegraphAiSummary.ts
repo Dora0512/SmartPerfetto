@@ -2,21 +2,15 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { type SDKMessage, type SDKResultSuccess, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { createSdkEnv, getSdkBinaryOption, hasClaudeCredentials, loadClaudeConfig } from '../agentv3/claudeConfig';
-import { redactObjectForLLM } from '../utils/llmPrivacy';
-import type { FlamegraphAiSummary, FlamegraphAnalysis } from './flamegraphTypes';
+import {loadPromptTemplate, renderTemplate, stripPromptComments} from '../agentv3/strategyLoader';
+import {redactObjectForLLM} from '../utils/llmPrivacy';
+import type {AiCapabilityPolicyV1} from './aiCapabilityPolicy';
+import type {FlamegraphAiSummary, FlamegraphAnalysis} from './flamegraphTypes';
+import {runOneShotSummary} from './oneShotModelCall';
+import type {ProviderScope} from './providerManager';
 
 function pct(value: number): string {
   return `${Math.round(value * 100) / 100}%`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isSuccessfulResultMessage(message: SDKMessage): message is SDKResultSuccess {
-  return message.type === 'result' && message.subtype === 'success';
 }
 
 export function buildDeterministicFlamegraphSummary(analysis: FlamegraphAnalysis): string {
@@ -92,105 +86,54 @@ function compactAnalysisForLLM(analysis: FlamegraphAnalysis): unknown {
   };
 }
 
+export interface FlamegraphAiSummaryOptions {
+  /** Provider Manager scope of the caller; the call follows its active profile. */
+  providerScope?: ProviderScope;
+  /** Caller cancellation, e.g. the HTTP client disconnecting. */
+  signal?: AbortSignal;
+  /** Defaults to the process-wide `SMARTPERFETTO_AI_ENABLED` policy. */
+  aiPolicy?: AiCapabilityPolicyV1;
+  /** Whether the caller may start model work (`agent:run`); false never calls a model. */
+  aiPermitted?: boolean;
+}
+
+function buildPrompt(
+  analysis: FlamegraphAnalysis,
+  question: string | undefined,
+): {prompt: string; redactionApplied: boolean} | undefined {
+  const template = loadPromptTemplate('prompt-flamegraph-summary');
+  if (!template) return undefined;
+  const redacted = redactObjectForLLM(compactAnalysisForLLM(analysis));
+  const prompt = renderTemplate(stripPromptComments(template), {
+    questionBlock: question ? `\n\n用户问题：${question.slice(0, 500)}` : '',
+    statsJson: JSON.stringify(redacted.value),
+  });
+  return {prompt, redactionApplied: redacted.stats.applied};
+}
+
+/**
+ * Optional model narrative over the flamegraph statistics. Every path that
+ * does not produce a model answer returns the rule summary with a
+ * `fallbackReason` and a warning; this never throws for policy, permission,
+ * provider or model failures. The flamegraph surface (its static page and rule
+ * summary) is Chinese only.
+ */
 export async function summarizeFlamegraphWithAi(
   analysis: FlamegraphAnalysis,
-  question?: string
+  question?: string,
+  options: FlamegraphAiSummaryOptions = {},
 ): Promise<FlamegraphAiSummary> {
-  const fallback = buildDeterministicFlamegraphSummary(analysis);
-  if (!hasClaudeCredentials()) {
-    return {
-      generated: false,
-      summary: fallback,
-      warnings: ['AI 模型未配置，已返回规则兜底总结。'],
-    };
-  }
-
-  const config = loadClaudeConfig();
-  const redacted = redactObjectForLLM(compactAnalysisForLLM(analysis));
-  const prompt = [
-    '你是 Android 性能分析专家，请基于下面的 Perfetto CPU 火焰图统计做中文解释。',
-    '要求：',
-    '1. 明确区分 self_count（函数自身耗 CPU）和 cumulative_count（调用链累计热度），不要混为一谈。',
-    '2. 不要编造 trace 中没有的数据；如果证据不足，直接说证据不足。',
-    '3. 输出结构：结论、证据、下一步排查建议。',
-    '4. 结合 category/categoryLabel 判断热点更像业务代码、Android Framework、ART/JIT、Native、图形渲染、Kernel 还是未知符号。',
-    '5. 重点解释“为什么这个火焰图值得关注”，而不是只复述数字。',
-    question ? `用户问题：${question}` : '',
-    `火焰图统计 JSON：${JSON.stringify(redacted.value)}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  const timeoutMs = Number.parseInt(process.env.FLAMEGRAPH_AI_TIMEOUT_MS || '60000', 10);
-  const sdkEnv = createSdkEnv();
-  const stream = sdkQuery({
-    prompt,
-    options: {
-      model: config.model,
-      maxTurns: 1,
-      permissionMode: 'bypassPermissions' as const,
-      allowDangerouslySkipPermissions: true,
-      env: sdkEnv,
-      stderr: (data: string) => {
-        console.warn(`[FlamegraphAI] SDK stderr: ${data.trimEnd()}`);
-      },
-      ...getSdkBinaryOption(sdkEnv),
-    },
+  return runOneShotSummary({
+    feature: 'flamegraph_ai_summary',
+    label: {zh: '火焰图 AI 总结', en: 'flamegraph AI summary'},
+    logLabel: 'FlamegraphAI',
+    outputLanguage: 'zh-CN',
+    ruleSummary: () => buildDeterministicFlamegraphSummary(analysis),
+    buildPrompt: () => buildPrompt(analysis, question),
+    timeoutMs: Number.parseInt(process.env.FLAMEGRAPH_AI_TIMEOUT_MS || '60000', 10),
+    aiPolicy: options.aiPolicy,
+    aiPermitted: options.aiPermitted,
+    signal: options.signal,
+    providerScope: options.providerScope,
   });
-
-  let result = '';
-  let timedOut = false;
-  const timer = setTimeout(
-    () => {
-      timedOut = true;
-      try {
-        stream.close();
-      } catch {
-        /* ignore */
-      }
-    },
-    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000
-  );
-
-  try {
-    for await (const message of stream) {
-      if (timedOut) break;
-      if (isSuccessfulResultMessage(message)) {
-        result = message.result || '';
-      }
-    }
-  } catch (error: unknown) {
-    return {
-      generated: false,
-      model: config.model,
-      summary: fallback,
-      warnings: [`AI 总结失败，已返回规则兜底总结：${errorMessage(error)}`],
-      redactionApplied: redacted.stats.applied,
-    };
-  } finally {
-    clearTimeout(timer);
-    try {
-      stream.close();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  if (timedOut || !result.trim()) {
-    return {
-      generated: false,
-      model: config.model,
-      summary: fallback,
-      warnings: [timedOut ? 'AI 总结超时，已返回规则兜底总结。' : 'AI 没有返回有效内容，已返回规则兜底总结。'],
-      redactionApplied: redacted.stats.applied,
-    };
-  }
-
-  return {
-    generated: true,
-    model: config.model,
-    summary: result.trim(),
-    warnings: [],
-    redactionApplied: redacted.stats.applied,
-  };
 }

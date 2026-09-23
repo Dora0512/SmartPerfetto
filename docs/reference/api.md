@@ -685,11 +685,11 @@ legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续�
 
 ### Critical path 等待链
 
-`POST /api/critical-path/:traceId/analyze` 服务于 AI Assistant 中选中 `thread_state` 后的 Critical path 按钮。它是全局非 workspace 接口，enterprise / OIDC 部署下固定返回 410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`，目前没有 workspace 版本。Trace 必须属于调用方 workspace，且调用方需要 `trace:read`。
+`POST /api/workspaces/:workspaceId/critical-path/:traceId/analyze` 服务于 AI Assistant 中选中 `thread_state` 后的 Critical path 抽屉，路径中的 workspace 必须与调用方上下文一致（否则 404）。旧的全局接口 `POST /api/critical-path/:traceId/analyze` 行为相同，但 enterprise / OIDC 部署下固定返回 410 `ENTERPRISE_WORKSPACE_ROUTE_REQUIRED`。Trace 必须属于调用方 workspace，且调用方需要 `trace:read`。请求体与响应的类型定义在 `backend/src/types/criticalPathContract.ts`，由 `npm --prefix backend run generate:frontend-types` 生成到插件的 `generated/` 中，`npm --prefix backend run check:types` 检查二者一致。
 
 请求体为 `threadStateId`，或 `utid` + `startTs` + `dur`（可选 `endTs`），另可带 `maxSegments`、`recursionDepth`、`recursionEnabled`、`segmentBudget`、`includeAi`、`question`、`outputLanguage`。
 
-成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用。
+成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。阻塞时长、占比、模块归因和 `chainSegmentCount` / `chainWaitMs` / `waitClassTotalsMs` 覆盖完整的顶层等待链（最多 5000 个原始栈段；超过时 `truncated: true` 并在 `warnings` 中说明只覆盖截断前部分），递归子链不重复计入；`wakeupChain` 只是展示前缀（`maxSegments`）。时长先按纳秒求和再换算，外部占比不会因舍入超过 100%。结果里的模块、异常、建议、警告、原因、唤醒提示和假设都带稳定 id（`moduleIds` / `moduleId`、`anomalies[].id` + `params` + `evidenceItems`、`recommendationIds`、`warningCodes`、`reasonItems`、`directWaker.hintCodes`、`hypotheses[].params` + `noteCodes`），文字只在输出时按语言渲染：`presentationAnalysis` 按请求语言渲染；`analysis` 是同一结果的 zh-CN 渲染，已弃用（仅为兼容旧客户端保留，后续版本移除），新客户端只读 `presentationAnalysis`；`longestSegment` 给出整条链最长的外部段。新增 `totalsNs`（`blocking`、`chainWait`、`waiting`，整数纳秒；窗口即 `task.dur`，自身时间为 `task.dur - blocking`），`quantification.counterfactual` 新增 `longestSegmentDurNs`、`bestCaseDurationNs`、`maxSavingNs`；对应的 ms 字段都由这些纳秒值各自换算一次。未传 `maxSegments` / `recursionDepth` / `segmentBudget` 时使用引擎的 `CRITICAL_PATH_DEFAULTS.ui`（160 / 2 / 16）。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、调用方没有 `agent:run`（`permission_denied`，只读 trace 不足以动用模型）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。模型失败的原始错误只写入服务端日志。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用，也会取消尚未完成的 trace 查询，此时不再返回响应。
 
 失败返回 `{success: false, code, error}`，`error` 已本地化：
 
@@ -697,7 +697,11 @@ legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续�
 |---|---|---|
 | 400 | `invalid_trace_id` | traceId 含有安全字符集以外的字符 |
 | 400 | `invalid_request_body` | 请求体未通过校验，附 `issues` |
-| 400 | `invalid_thread_state_id`、`missing_selector`、`non_positive_duration`、`invalid_integer` | 选择参数不可用 |
+| 400 | `invalid_thread_state_id`、`missing_selector`、`non_positive_duration`、`invalid_integer`、`invalid_name` | 选择参数不可用 |
 | 404 | `trace_not_found` | Trace 不存在，或不属于调用方 |
 | 404 | `thread_state_not_found` | Trace 中没有该 thread_state |
 | 500 | `critical_path_failed` | 其他失败；原始错误只写入服务端日志 |
+
+### 火焰图
+
+`GET /api/flamegraph/:traceId/availability` 返回 trace 是否含 CPU 调用栈采样（Perfetto summary tree）；`POST /api/flamegraph/:traceId/analyze` 返回 `{success: true, analysis, aiSummary}`。两者都是全局非 workspace 接口（enterprise / OIDC 下 410），与 Critical path 一样先校验 traceId 和请求体、再校验 trace 属于调用方并要求 `trace:read`，然后才加载 trace。请求体可带 `startTs`、`endTs`、`packageName`、`threadName`、`sampleSource`、`maxNodes`、`minSampleCount`、`includeAi`、`question`；未声明字段会被丢弃。缺少 summary 模块或表的 trace processor 返回 `available: false`；其他查询失败重试一次后返回 500。`aiSummary`（feature `flamegraph_ai_summary`）的兜底规则与 Critical path 相同，包括 `agent:run` 要求和 `fallbackReason`；输出只有中文。客户端断开会取消未完成的查询和模型调用。失败返回 `{success: false, code, error}`，`code` 为 `invalid_trace_id`、`invalid_request_body`、`trace_not_found` 或 `flamegraph_failed`。原 `POST /api/flamegraph/:traceId/summarize`（把客户端提交的分析结果发给模型）已删除，没有调用方。

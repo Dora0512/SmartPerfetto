@@ -2,99 +2,71 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-// Thread roles are decided twice: once in SQL for every Skill that joins
-// fragments/thread_role.sql, and once in TypeScript for the critical-path
-// engine. A wait attributed to `network` in one and `worker` in the other would
-// give the same trace two different answers depending on which surface asked,
-// so the two rule sets are held equal here rather than by convention.
+// Thread roles and wake-source labels are decided once, in SQL:
+// fragments/thread_role.sql and fragments/sleep_wake_source_labels.sql. Skills join
+// them directly and the critical-path engine composes them through
+// fragments/segment_wake_sources.sql, so one trace cannot get two answers. This
+// suite executes the fragments (SQLite is the processor's SQL dialect for GLOB,
+// CASE and window functions) and pins each bucket.
 
 import fs from 'fs';
 import path from 'path';
 
-import {
-  THREAD_ROLE_PATTERNS,
-  classifyThreadRole,
-  __INTERNAL__ as SEMANTICS_INTERNAL,
-} from '../criticalPathSemantics';
-import type {WaitClass, WakeSource} from '../criticalPathSemantics';
+import {composeFragmentSql} from '../skillEngine/skillFragments';
+import {sqliteTraceProcessor} from '../../../tests/helpers/criticalPathTraceProcessorFixture';
+import type {WaitClass, WakeSource} from '../../types/criticalPathContract';
 
-const {classifyWaitClass, classifyWakeSource} = SEMANTICS_INTERNAL;
+const wakeFragmentPath = path.resolve(__dirname, '../../../skills/fragments/sleep_wake_source_labels.sql');
 
-const fragmentPath = path.resolve(__dirname, '../../../skills/fragments/thread_role.sql');
-const wakeFragmentPath = path.resolve(__dirname, '../../../skills/fragments/sleep_wake_source.sql');
-
-function parseSqlRolePatterns(sql: string): Array<{role: string; patterns: string[]}> {
-  // Strip comment lines first: the header explains the rules in prose and
-  // mentions patterns that are deliberately NOT applied.
-  const executable = sql
-    .split('\n')
-    .filter((line) => !line.trimStart().startsWith('--'))
-    .join('\n');
-  const rules: Array<{role: string; patterns: string[]}> = [];
-  const whenThen = /WHEN([\s\S]*?)THEN '([a-z_]+)'/g;
-  let match: RegExpExecArray | null;
-  while ((match = whenThen.exec(executable)) !== null) {
-    const patterns = [...match[1].matchAll(/GLOB\s+'([^']*)'/g)].map((glob) => glob[1]);
-    if (patterns.length === 0) continue;
-    rules.push({role: match[2], patterns});
-  }
-  return rules;
+/** The role thread_role.sql gives each named thread (pid 1000 unless noted). */
+async function rolesOf(threads: Array<{name: string; tid: number; pid?: number}>): Promise<string[]> {
+  const inserts = threads.map((thread, index) =>
+    `INSERT INTO process(upid, pid, name) VALUES (${index + 1}, ${thread.pid ?? 1000}, 'p${index}');
+     INSERT INTO thread VALUES (${index + 1}, ${thread.tid}, ${index + 1}, '${thread.name}');`).join('\n');
+  const {tp} = sqliteTraceProcessor(inserts);
+  const result = await tp.query('trace-1', composeFragmentSql({
+    leadingCtes: [], fragments: ['thread_role.sql'], select: 'SELECT role FROM thread_roles ORDER BY utid',
+  }));
+  if (result.error) throw new Error(result.error);
+  return result.rows.map((row) => String(row[0]));
 }
 
-describe('thread role contract', () => {
-  const sql = fs.readFileSync(fragmentPath, 'utf8');
-  const sqlRules = parseSqlRolePatterns(sql);
-
-  it('parses at least the name-matched roles out of the fragment', () => {
-    expect(sqlRules.length).toBeGreaterThan(0);
-    expect(sqlRules.map((rule) => rule.role)).toContain('network');
+describe('thread role fragment', () => {
+  it('resolves main from tid = pid without claiming the idle thread', async () => {
+    expect(await rolesOf([
+      {name: 'unch.aosp.heavy', tid: 21307, pid: 21307},
+      // swapper has tid 0 in a process whose pid is 0; tid = pid would otherwise
+      // report the idle thread as somebody's main thread.
+      {name: 'swapper', tid: 0, pid: 0},
+    ])).toEqual(['main', 'other']);
   });
 
-  it('declares the same roles in the same evaluation order as TypeScript', () => {
-    expect(sqlRules.map((rule) => rule.role)).toEqual(Object.keys(THREAD_ROLE_PATTERNS));
+  it('matches thread names as the kernel truncates them to 15 characters', async () => {
+    expect(await rolesOf([
+      {name: 'ReferenceQueueD', tid: 4321},
+      {name: 'pool-10-thread-', tid: 4322},
+      {name: 'RxCachedWorkerP', tid: 4323},
+    ])).toEqual(['gc', 'worker', 'worker']);
   });
 
-  it('declares the same GLOB patterns per role as TypeScript', () => {
-    for (const {role, patterns} of sqlRules) {
-      expect({role, patterns}).toEqual({
-        role,
-        patterns: [...(THREAD_ROLE_PATTERNS[role] ?? [])],
-      });
-    }
+  it('classifies binder pool threads in both kernel spellings', async () => {
+    expect(await rolesOf([
+      {name: 'binder:21307_2', tid: 24744},
+      {name: 'Binder:3826_E', tid: 4000},
+    ])).toEqual(['binder', 'binder']);
   });
 
-  it('resolves main from tid = pid without claiming the idle thread', () => {
-    expect(classifyThreadRole('unch.aosp.heavy', 21307, 21307)).toBe('main');
-    // swapper has tid 0 in a process whose pid is 0; tid = pid would otherwise
-    // report the idle thread as somebody's main thread.
-    expect(classifyThreadRole('swapper', 0, 0)).toBe('other');
-  });
-
-  it('matches thread names as the kernel truncates them to 15 characters', () => {
-    expect(classifyThreadRole('ReferenceQueueD', 4321, 1000)).toBe('gc');
-    expect(classifyThreadRole('pool-10-thread-', 4322, 1000)).toBe('worker');
-    expect(classifyThreadRole('RxCachedWorkerP', 4323, 1000)).toBe('worker');
-  });
-
-  it('classifies binder pool threads in both kernel spellings', () => {
-    expect(classifyThreadRole('binder:21307_2', 24744, 21307)).toBe('binder');
-    expect(classifyThreadRole('Binder:3826_E', 4000, 3826)).toBe('binder');
-  });
-
-  it('keeps network threads out of the worker bucket', () => {
-    expect(classifyThreadRole('OkHttp Dispatch', 5000, 1000)).toBe('network');
-    expect(classifyThreadRole('ChromiumNet0', 5001, 1000)).toBe('network');
-    expect(classifyThreadRole('NetworkSchedule', 5002, 1000)).toBe('network');
-    expect(classifyThreadRole('pool-3-thread-1', 5003, 1000)).toBe('worker');
+  it('keeps network threads out of the worker bucket', async () => {
+    expect(await rolesOf([
+      {name: 'OkHttp Dispatch', tid: 5000},
+      {name: 'ChromiumNet0', tid: 5001},
+      {name: 'NetworkSchedule', tid: 5002},
+      {name: 'pool-3-thread-1', tid: 5003},
+    ])).toEqual(['network', 'network', 'network', 'worker']);
   });
 });
 
-// The two wake labels are decided twice as well: once by the `wake_source` and
-// `wait_class` CASE expressions in fragments/sleep_wake_source.sql, and once by
-// classifyWakeSource/classifyWaitClass for the critical-path engine. A Skill
-// that reported `binder_reply` while the wait-chain tool reported
-// `worker_handoff` for the same sleep would give one trace two root causes.
-describe('wake source contract', () => {
+describe('sleep wake-source fragment', () => {
   const wakeSql = fs.readFileSync(wakeFragmentPath, 'utf8');
 
   /**
@@ -134,6 +106,34 @@ describe('wake source contract', () => {
     sleeperUpid: 7 as number | null,
     wakerProcessName: 'com.other.app' as string | null,
   };
+
+  const SLEEPER_NAMES: Record<string, string> = {worker: 'pool-1-thread-1', network: 'OkHttp Dispatch'};
+
+  /** Build the case as trace rows and read the labels the fragment derives. */
+  async function labels(row: typeof sleeper): Promise<{wakeSource: string; waitClass: string}> {
+    const quote = (value: string | null) => (value === null ? 'NULL' : `'${value.replace(/'/g, "''")}'`);
+    const wakerUpid = row.wakerUpid ?? 99;
+    const processName = wakerUpid === 7 ? 'com.demo' : row.wakerProcessName;
+    const setup = `
+      INSERT INTO process(upid, pid, name) VALUES (7, 1000, 'com.demo');
+      ${wakerUpid === 7 ? '' : `INSERT INTO process(upid, pid, name) VALUES (${wakerUpid}, 2000, ${quote(processName)});`}
+      INSERT INTO thread VALUES (1, 1017, 7, '${SLEEPER_NAMES[row.threadRole]}');
+      ${row.wakerUtid === null ? '' : `INSERT INTO thread VALUES (${row.wakerUtid}, ${row.wakerTid ?? 'NULL'}, ${wakerUpid}, ${quote(row.wakerThreadName)});`}
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, irq_context) VALUES
+        (1, 1, 1000, 500, '${row.state}', NULL, NULL),
+        (2, 1, 1500, 100, 'R', ${row.wakerUtid ?? 'NULL'}, ${row.irqContext ? 1 : 0});
+    `;
+    const {tp} = sqliteTraceProcessor(setup);
+    const result = await tp.query('trace-1', composeFragmentSql({
+      leadingCtes: ['wake_source_scope AS (SELECT 1 AS utid)'],
+      fragments: ['thread_role.sql', 'sleep_wake_source.sql', 'sleep_wake_source_labels.sql'],
+      numbers: {start_ts: 0, end_ts: 10_000},
+      select: 'SELECT wake_source, wait_class FROM sleep_wake_source',
+    }));
+    if (result.error) throw new Error(result.error);
+    const [wakeSource, waitClass] = result.rows[0] as string[];
+    return {wakeSource, waitClass};
+  }
 
   const cases: Array<{
     name: string;
@@ -225,10 +225,8 @@ describe('wake source contract', () => {
     },
   ];
 
-  it.each(cases)('labels $name the same way the SQL CASE does', ({input, wakeSource, waitClass}) => {
-    const row = {...sleeper, ...input};
-    expect(classifyWakeSource(row)).toBe(wakeSource);
-    expect(classifyWaitClass(row)).toBe(waitClass);
+  it.each(cases)('labels $name', async ({input, wakeSource, waitClass}) => {
+    expect(await labels({...sleeper, ...input})).toEqual({wakeSource, waitClass});
   });
 
   it('covers every bucket the SQL wake_source CASE can produce, and no other', () => {
@@ -241,14 +239,9 @@ describe('wake source contract', () => {
       [...new Set(cases.map((entry) => entry.waitClass))].sort());
   });
 
-  it('treats a swapper-prefixed waker as idle, exactly as the fragment GLOB does', () => {
-    // fragments/sleep_wake_source.sql tests `thread_name GLOB 'swapper*'`, so a
-    // spelling other than `swapper/N` must not fall through to same-process.
-    expect(sqlCaseLabels(wakeSql, 'wake_source')).toContain('swapper');
-    expect(wakeSql).toContain("GLOB 'swapper*'");
+  it('treats any swapper-prefixed waker as idle', async () => {
     for (const wakerThreadName of ['swapper', 'swapper/0', 'swapper/11', 'swapperd']) {
-      expect(classifyWakeSource({...sleeper, wakerThreadName, wakerTid: 4000, wakerUpid: 7}))
-        .toBe('swapper');
+      expect((await labels({...sleeper, wakerThreadName, wakerTid: 4000, wakerUpid: 7})).wakeSource).toBe('swapper');
     }
   });
 });

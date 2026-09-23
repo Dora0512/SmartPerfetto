@@ -18,7 +18,163 @@
 
 import ts from 'typescript';
 
-const TRACE_TIMESTAMP_ALIAS = /export type TraceTimestampNs = string \| number;\n\n/;
+type ContractDeclaration = ts.InterfaceDeclaration | ts.TypeAliasDeclaration;
+
+interface ContractFragmentOptions {
+  /** Type names written as another type (e.g. backend-only imports as `Record<string, unknown>`). */
+  replaceTypes?: Readonly<Record<string, string>>;
+  /** Declarations another fragment of the generated module already emits. */
+  omit?: readonly string[];
+}
+
+const isExported = (declaration: ContractDeclaration): boolean =>
+  Boolean(declaration.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword));
+
+/** A const's value with `as` / `satisfies` / parentheses stripped. */
+function unwrapExpression(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isParenthesizedExpression(current)) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function stringList(node: ts.Expression): string[] | undefined {
+  const list = unwrapExpression(node);
+  if (!ts.isArrayLiteralExpression(list) || !list.elements.every(ts.isStringLiteral)) return undefined;
+  return list.elements.map(element => (element as ts.StringLiteral).text);
+}
+
+/** The string-literal lists and list tables a type in the module may read with `typeof`. */
+function literalConstants(source: ts.SourceFile): {
+  lists: Map<string, string[]>;
+  tables: Map<string, Map<string, string[]>>;
+} {
+  const lists = new Map<string, string[]>();
+  const tables = new Map<string, Map<string, string[]>>();
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+      const list = stringList(declaration.initializer);
+      if (list) {
+        lists.set(declaration.name.text, list);
+        continue;
+      }
+      const table = unwrapExpression(declaration.initializer);
+      if (!ts.isObjectLiteralExpression(table)) continue;
+      const entries = new Map<string, string[]>();
+      for (const property of table.properties) {
+        if (!ts.isPropertyAssignment(property)) break;
+        const key = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : undefined;
+        const values = key === undefined ? undefined : stringList(property.initializer);
+        if (!values) break;
+        entries.set(key!, values);
+      }
+      if (entries.size === table.properties.length) tables.set(declaration.name.text, entries);
+    }
+  }
+  return {lists, tables};
+}
+
+const literalUnion = (values: Iterable<string>): string =>
+  [...new Set(values)].map(value => `'${value}'`).join(' | ');
+
+const unwrapType = (node: ts.TypeNode): ts.TypeNode =>
+  ts.isParenthesizedTypeNode(node) ? unwrapType(node.type) : node;
+
+/**
+ * A contract module as it appears in the generated frontend types: its type
+ * declarations only (never imports, parsers or runtime code), each kept in its
+ * source text. Worked out on the syntax tree, never on text:
+ *   - exported declarations, plus the module-private ones they reference
+ *     (the frontend compiles with unused-local checks);
+ *   - `(typeof LIST)[number]`, `keyof typeof TABLE` and
+ *     `typeof TABLE[K][number]` spelled out from the const's string literals,
+ *     since the frontend gets no runtime lists; any other `typeof` fails;
+ *   - `replaceTypes` references rewritten.
+ */
+function contractFragment(content: string, options: ContractFragmentOptions = {}): string {
+  const source = ts.createSourceFile('contract.ts', content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const {lists, tables} = literalConstants(source);
+  const omit = new Set(options.omit ?? []);
+  const declarations = source.statements.filter(
+    (statement): statement is ContractDeclaration =>
+      (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) && !omit.has(statement.name.text));
+  const byName = new Map(declarations.map(declaration => [declaration.name.text, declaration]));
+
+  const included = new Set<ContractDeclaration>();
+  const pending = declarations.filter(isExported);
+  while (pending.length > 0) {
+    const declaration = pending.pop()!;
+    if (included.has(declaration)) continue;
+    included.add(declaration);
+    const visit = (node: ts.Node): void => {
+      const name = ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) ? node.typeName.text
+        : ts.isExpressionWithTypeArguments(node) && ts.isIdentifier(node.expression) ? node.expression.text
+          : undefined;
+      const referenced = name === undefined ? undefined : byName.get(name);
+      if (referenced && !included.has(referenced)) pending.push(referenced);
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(declaration, visit);
+  }
+
+  const known = <T>(map: Map<string, T>, name: string): T => {
+    const value = map.get(name);
+    if (value === undefined) throw new Error(`${name} is not a declared string list or table`);
+    return value;
+  };
+  const typeQueryName = (node: ts.TypeNode): string | undefined => {
+    const inner = unwrapType(node);
+    return ts.isTypeQueryNode(inner) && ts.isIdentifier(inner.exprName) ? inner.exprName.text : undefined;
+  };
+
+  return declarations.filter(declaration => included.has(declaration)).map(declaration => {
+    const start = declaration.getFullStart();
+    const edits: Array<{start: number; end: number; text: string}> = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIndexedAccessTypeNode(node) && unwrapType(node.indexType).kind === ts.SyntaxKind.NumberKeyword) {
+        const object = unwrapType(node.objectType);
+        const listName = typeQueryName(object);
+        if (listName !== undefined) {
+          edits.push({start: node.getStart(source), end: node.end, text: literalUnion(known(lists, listName))});
+          return;
+        }
+        if (ts.isIndexedAccessTypeNode(object)) {
+          const tableName = typeQueryName(object.objectType);
+          if (tableName !== undefined) {
+            edits.push({start: node.getStart(source), end: node.end,
+              text: literalUnion([...known(tables, tableName).values()].flat())});
+            return;
+          }
+        }
+      }
+      if (ts.isTypeOperatorNode(node) && node.operator === ts.SyntaxKind.KeyOfKeyword) {
+        const tableName = typeQueryName(node.type);
+        if (tableName !== undefined) {
+          edits.push({start: node.getStart(source), end: node.end, text: literalUnion(known(tables, tableName).keys())});
+          return;
+        }
+      }
+      if (ts.isTypeQueryNode(node)) {
+        throw new Error(`unsupported type query in ${declaration.name.text}: ${node.getText(source)}`);
+      }
+      if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)
+        && options.replaceTypes?.[node.typeName.text] !== undefined) {
+        edits.push({start: node.getStart(source), end: node.end, text: options.replaceTypes[node.typeName.text]});
+        return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(declaration, visit);
+    let text = declaration.getFullText(source);
+    for (const edit of edits.sort((a, b) => b.start - a.start)) {
+      text = text.slice(0, edit.start - start) + edit.text + text.slice(edit.end - start);
+    }
+    return text.trim();
+  }).join('\n\n');
+}
 
 /**
  * `conclusionContract.ts` as it appears in the generated frontend types.
@@ -29,24 +185,16 @@ const TRACE_TIMESTAMP_ALIAS = /export type TraceTimestampNs = string \| number;\
  * into the UI bundle.
  */
 export function conclusionContractFragment(content: string): string {
-  return typeDeclarations(content)
-    .replace(/SourceUseDecisionV1/g, 'Record<string, unknown>')
-    .replace(/SourceReferenceV1/g, 'Record<string, unknown>')
-    .replace(/SourceClaimBindingV1/g, 'Record<string, unknown>');
-}
-
-/** Emit declarations, never backend imports, parsers or proof-producing code. */
-function typeDeclarations(content: string): string {
-  const source = ts.createSourceFile('contract.ts', content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  return source.statements
-    .filter(statement => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
-    .map(statement => statement.getFullText(source).trim())
-    .join('\n\n');
+  return contractFragment(content, {replaceTypes: {
+    SourceUseDecisionV1: 'Record<string, unknown>',
+    SourceReferenceV1: 'Record<string, unknown>',
+    SourceClaimBindingV1: 'Record<string, unknown>',
+  }});
 }
 
 /** Referenced contract types are concatenated into the same generated module. */
 export function verbatimContractFragment(content: string): string {
-  return typeDeclarations(content);
+  return contractFragment(content);
 }
 
 /**
@@ -54,7 +202,7 @@ export function verbatimContractFragment(content: string): string {
  * and the generated frontend types concatenate both into one file.
  */
 export function identityContractFragment(content: string): string {
-  return typeDeclarations(content).replace(TRACE_TIMESTAMP_ALIAS, '');
+  return contractFragment(content, {omit: ['TraceTimestampNs']});
 }
 
 /** Per-file SPDX headers are emitted once at the top of the generated file. */
@@ -64,6 +212,45 @@ export function externalIssueReportingFragment(content: string): string {
     .replace(/^\/\/ SPDX-License-Identifier:[^\n]*\n/, '')
     .replace(/^\/\/ Copyright[^\n]*\n/, '')
     .replace(/^\/\/ This file[^\n]*\n\n/, '');
+}
+
+/** `criticalPathContract.ts` in the generated frontend types; its id unions are spelled out. */
+export function criticalPathContractFragment(content: string): string {
+  return contractFragment(content);
+}
+
+/**
+ * The contract modules the generated frontend types carry, each with the
+ * transform that produces its fragment. The generator emits these and the sync
+ * check compares them: one list, so the two cannot disagree on what is
+ * generated from where.
+ */
+export const FRONTEND_CONTRACT_SOURCES = {
+  conclusion: {path: 'backend/src/agent/core/conclusionContract.ts', fragment: conclusionContractFragment},
+  evidence: {path: 'backend/src/types/evidenceContract.ts', fragment: verbatimContractFragment},
+  claimVerification: {path: 'backend/src/types/claimVerification.ts', fragment: verbatimContractFragment},
+  identity: {path: 'backend/src/types/identityContract.ts', fragment: identityContractFragment},
+  externalIssueReporting: {path: 'backend/src/types/externalIssueReporting.ts', fragment: externalIssueReportingFragment},
+  criticalPath: {path: 'backend/src/types/criticalPathContract.ts', fragment: criticalPathContractFragment},
+} as const satisfies Record<string, {path: string; fragment: (content: string) => string}>;
+
+export type FrontendContractSourceName = keyof typeof FRONTEND_CONTRACT_SOURCES;
+
+/** Every contract module's raw source, read from `projectRoot`. */
+export function readFrontendContractSources(
+  projectRoot: string,
+  readFile: (filePath: string) => string,
+): Record<FrontendContractSourceName, string> {
+  return Object.fromEntries(Object.entries(FRONTEND_CONTRACT_SOURCES).map(([name, source]) =>
+    [name, readFile(`${projectRoot}/${source.path}`)])) as Record<FrontendContractSourceName, string>;
+}
+
+/** Every contract module's generated fragment. */
+export function frontendContractFragments(
+  sources: Record<FrontendContractSourceName, string>,
+): Record<FrontendContractSourceName, string> {
+  return Object.fromEntries(Object.entries(FRONTEND_CONTRACT_SOURCES).map(([name, source]) =>
+    [name, source.fragment(sources[name as FrontendContractSourceName])])) as Record<FrontendContractSourceName, string>;
 }
 
 /** Sources needed by the serialized fields on AnalysisCompletedEvent. */

@@ -165,10 +165,12 @@ for (const forbidden of [
   }
 }
 
+// The critical-path response renders its presentation in the requested
+// output language (the engine's own result stays zh-CN in `analysis`).
 const criticalPathRoute = 'backend/src/routes/criticalPathRoutes.ts';
 expectIncludes(criticalPathRoute, read(criticalPathRoute), [
   'analysis: rawAnalysis',
-  'presentationAnalysis: projectCriticalPathAnalysis(',
+  'presentationAnalysis: renderCriticalPathAnalysis(rawAnalysis, outputLanguage)',
 ]);
 
 const skillControllerPath = 'backend/src/controllers/skillController.ts';

@@ -11,6 +11,7 @@ import {
   generateAiComparisonConclusion,
 } from '../comparisonAiConclusionService';
 import { buildDeterministicComparisonResult } from '../comparisonResultService';
+import { AI_CAPABILITY_ENV_KEY, resolveAiCapabilityPolicy } from '../aiCapabilityPolicy';
 
 function snapshot(
   id: string,
@@ -361,4 +362,62 @@ test('keeps saved producer rows out of the bounded prompt without losing the sto
   expect(prompt).toContain('investigationAssessment');
   expect(prompt).not.toContain('large-original-row-marker');
   expect(captured.investigationAssessment.evidenceRecords?.[0].value).toBe('large-original-row-marker');
+});
+
+describe('AI policy and runtime routing of the comparison conclusion', () => {
+  const envKeys = ['SMARTPERFETTO_COMPARISON_AI_DISABLED', 'SMARTPERFETTO_AGENT_RUNTIME'] as const;
+  const originalEnv = new Map(envKeys.map(key => [key, process.env[key]]));
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      const originalValue = originalEnv.get(key);
+      if (originalValue === undefined) delete process.env[key];
+      else process.env[key] = originalValue;
+    }
+  });
+
+  function neverCalledClient() {
+    return {complete: jest.fn(async () => ({text: 'not json'}))};
+  }
+
+  test('the global AI switch returns the deterministic conclusion without asking any client', async () => {
+    const client = neverCalledClient();
+    const conclusion = await generateAiComparisonConclusion({
+      result: comparisonResult(),
+      query: 'compare startup',
+      client,
+      aiPolicy: resolveAiCapabilityPolicy({[AI_CAPABILITY_ENV_KEY]: 'false'}),
+    });
+
+    expect(conclusion.source).toBe('deterministic');
+    expect(conclusion.uncertainty.join('\n')).toContain(`disabled by ${AI_CAPABILITY_ENV_KEY}`);
+    expect(client.complete).not.toHaveBeenCalled();
+  });
+
+  test('the comparison-only switch is honoured alongside the global policy', async () => {
+    process.env.SMARTPERFETTO_COMPARISON_AI_DISABLED = 'true';
+    const client = neverCalledClient();
+    const conclusion = await generateAiComparisonConclusion({
+      result: comparisonResult(),
+      query: 'compare startup',
+      client,
+      aiPolicy: resolveAiCapabilityPolicy({[AI_CAPABILITY_ENV_KEY]: 'true'}),
+    });
+
+    expect(conclusion.source).toBe('deterministic');
+    expect(conclusion.uncertainty.join('\n')).toContain('SMARTPERFETTO_COMPARISON_AI_DISABLED');
+    expect(client.complete).not.toHaveBeenCalled();
+  });
+
+  test('a runtime other than Claude or OpenAI degrades instead of being sent to Claude', async () => {
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'pi-agent-core';
+    const conclusion = await generateAiComparisonConclusion({
+      result: comparisonResult(),
+      query: 'compare startup',
+      providerId: null,
+    });
+
+    expect(conclusion.source).toBe('deterministic');
+    expect(conclusion.uncertainty.join('\n')).toContain('pi-agent-core runtime');
+  });
 });

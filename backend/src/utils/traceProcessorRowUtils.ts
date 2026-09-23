@@ -4,11 +4,14 @@
 
 // Shared coercion helpers for trace_processor query result handling.
 // Multiple services (criticalPathSemantics, criticalPathWakerChain,
-// criticalPathQuantify, criticalPathAnalyzer, perfettoSqlSkill, ...) had
-// hand-rolled byte-identical clones — this module centralizes them.
-// flamegraphAnalyzer still carries a private, non-throwing copy.
+// criticalPathQuantify, criticalPathAnalyzer, flamegraphAnalyzer, ...) had
+// hand-rolled clones — this module centralizes them.
 
-import type {QueryResult, TraceProcessorService} from '../services/traceProcessorService';
+import type {
+  QueryResult,
+  TraceProcessorService,
+  TraceProcessorServiceQueryOptions,
+} from '../services/traceProcessorService';
 
 export type QueryRow = Record<string, unknown>;
 
@@ -35,12 +38,17 @@ export function assertQuerySucceeded(result: QueryResult): QueryResult {
   return result;
 }
 
+/**
+ * Rows of a query that must succeed. `options.signal` cancels the statement
+ * while it waits in, or runs on, the processor's worker.
+ */
 export async function queryRows(
   tp: TraceProcessorService,
   traceId: string,
-  sql: string
+  sql: string,
+  options?: TraceProcessorServiceQueryOptions
 ): Promise<QueryRow[]> {
-  return rowsToObjects(assertQuerySucceeded(await tp.query(traceId, sql)));
+  return rowsToObjects(assertQuerySucceeded(await tp.query(traceId, sql, options)));
 }
 
 export function toNumber(value: unknown, fallback = 0): number {

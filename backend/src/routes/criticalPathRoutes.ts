@@ -4,20 +4,22 @@
 
 import express from 'express';
 import {z} from 'zod';
-import {requireRequestContext} from '../middleware/auth';
 import {localize, type OutputLanguage, parseOutputLanguage} from '../agentv3/outputLanguage';
+import {providerScopeFromRequestContext} from '../agentRuntime/runtimeScopes';
 import {summarizeCriticalPathWithAi} from '../services/criticalPathAiSummary';
-import {
-  analyzeCriticalPath,
-  CriticalPathInputError,
-  type CriticalPathAnalyzeOptions,
-  type CriticalPathInputErrorCode,
-} from '../services/criticalPathAnalyzer';
-import {projectCriticalPathAnalysis} from '../services/criticalPathLocalization';
-import {sendResourceNotFound} from '../services/resourceOwnership';
-import {isSafeTraceId, readTraceMetadataForContext} from '../services/traceMetadataStore';
+import {analyzeCriticalPath, CriticalPathInputError, type CriticalPathAnalyzeOptions} from '../services/criticalPathAnalyzer';
+import {renderCriticalPathAnalysis} from '../services/criticalPathLocalization';
+import {hasRbacPermission} from '../services/rbac';
+import {isTraceProcessorQueryCancelledError} from '../services/traceProcessorCancellation';
 import {getTraceProcessorService} from '../services/traceProcessorService';
+import type {
+  CriticalPathAnalyzeRequest,
+  CriticalPathAnalyzeResponse,
+  CriticalPathErrorResponse,
+  CriticalPathInputErrorCode,
+} from '../types/criticalPathContract';
 import {clientDisconnectSignal} from './clientDisconnect';
+import {checkTraceId, parseRequestBody, readableTraceContext} from './traceRouteGuards';
 
 const router = express.Router();
 
@@ -44,6 +46,13 @@ const AnalyzeBodySchema = z.object({
   outputLanguage: z.enum(['zh-CN', 'en']).optional(),
 });
 
+/** True only when two types accept exactly the same values. */
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+// The schema is what the route accepts; the contract is what the frontend is
+// told it may send. A field added to one and not the other is a type error.
+const bodyMatchesContract: SameType<z.infer<typeof AnalyzeBodySchema>, CriticalPathAnalyzeRequest> = true;
+void bodyMatchesContract;
+
 /**
  * Caller-input failures the engine reports. They become 4xx bodies carrying
  * the code; every other failure stays an opaque 500.
@@ -55,6 +64,7 @@ const CRITICAL_PATH_INPUT_ERROR_STATUS = {
   missing_selector: 400,
   non_positive_duration: 400,
   invalid_integer: 400,
+  invalid_name: 400,
 } satisfies Record<CriticalPathInputErrorCode, 400 | 404>;
 
 function inputErrorMessage(code: CriticalPathInputErrorCode, language: OutputLanguage): string {
@@ -77,15 +87,17 @@ function inputErrorMessage(code: CriticalPathInputErrorCode, language: OutputLan
       return localize(language, '选中 task 的时长必须大于 0', 'The selected task duration must be positive');
     case 'invalid_integer':
       return localize(language, '数值参数必须是整数', 'Numeric parameters must be integers');
+    case 'invalid_name':
+      return localize(
+        language,
+        '名称不能含控制字符，且最多 200 个字符',
+        'Names must contain no control characters and be at most 200 characters',
+      );
   }
 }
 
-function traceNotFound(res: express.Response, language: OutputLanguage, traceId: string) {
-  return sendResourceNotFound(
-    res,
-    localize(language, `未找到 Trace ${traceId}`, `Trace ${traceId} not found`),
-    'trace_not_found',
-  );
+function sendError(res: express.Response, status: number, body: CriticalPathErrorResponse): express.Response {
+  return res.status(status).json(body);
 }
 
 router.post('/:traceId/analyze', async (req, res) => {
@@ -99,41 +111,16 @@ router.post('/:traceId/analyze', async (req, res) => {
   const clientGone = clientDisconnectSignal(res);
 
   const {traceId} = req.params;
-  if (!traceId || !isSafeTraceId(traceId)) {
-    return res.status(400).json({
-      success: false,
-      code: 'invalid_trace_id',
-      error: localize(outputLanguage, 'traceId 无效', 'traceId is invalid'),
-    });
-  }
-
+  if (!checkTraceId(res, traceId, outputLanguage)) return;
   // Validate before touching the trace: a bad request must not load a trace
   // processor.
-  const parsed = AnalyzeBodySchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({
-      success: false,
-      code: 'invalid_request_body',
-      error: localize(outputLanguage, '请求体无效', 'Invalid request body'),
-      issues: parsed.error.issues.map((issue) => ({
-        path: issue.path.join('.'),
-        message: issue.message,
-      })),
-    });
-  }
-  const body = parsed.data;
+  const body = parseRequestBody(res, AnalyzeBodySchema, req.body, outputLanguage);
+  if (!body) return;
 
   try {
-    const requestContext = requireRequestContext(req);
-    // Same ownership check as the Agent routes: the trace must belong to the
-    // caller's workspace and the caller needs trace:read.
-    if (!(await readTraceMetadataForContext(traceId, requestContext))) {
-      return traceNotFound(res, outputLanguage, traceId);
-    }
+    const requestContext = await readableTraceContext(req, res, traceId, outputLanguage);
+    if (!requestContext) return;
     const traceProcessorService = getTraceProcessorService();
-    if (!(await traceProcessorService.getOrLoadTrace(traceId))) {
-      return traceNotFound(res, outputLanguage, traceId);
-    }
 
     const analyzeOptions: CriticalPathAnalyzeOptions = {
       threadStateId: body.threadStateId,
@@ -145,6 +132,7 @@ router.post('/:traceId/analyze', async (req, res) => {
       recursionDepth: body.recursionDepth,
       recursionEnabled: body.recursionEnabled,
       segmentBudget: body.segmentBudget,
+      signal: clientGone,
     };
     const rawAnalysis = await analyzeCriticalPath(traceProcessorService, traceId, analyzeOptions);
     const aiSummary =
@@ -152,31 +140,34 @@ router.post('/:traceId/analyze', async (req, res) => {
         ? undefined
         : await summarizeCriticalPathWithAi(rawAnalysis, body.question, outputLanguage, {
             signal: clientGone,
-            providerScope: {
-              tenantId: requestContext.tenantId,
-              workspaceId: requestContext.workspaceId,
-              userId: requestContext.userId,
-            },
+            // Reading the trace is not enough to spend the workspace's model:
+            // the summary needs the same permission as an Agent run.
+            aiPermitted: hasRbacPermission(requestContext, 'agent:run'),
+            providerScope: providerScopeFromRequestContext(requestContext),
           });
-    return res.json({
+    const response: CriticalPathAnalyzeResponse = {
       success: true,
       analysis: rawAnalysis,
-      presentationAnalysis: projectCriticalPathAnalysis(
-        rawAnalysis,
-        outputLanguage,
-      ),
-      aiSummary,
-    });
+      presentationAnalysis: renderCriticalPathAnalysis(rawAnalysis, outputLanguage),
+      ...(aiSummary ? {aiSummary} : {}),
+    };
+    return res.json(response);
   } catch (error: unknown) {
+    // The client is gone and the engine stopped because of it: nobody is
+    // left to answer.
+    if (clientGone.aborted && isTraceProcessorQueryCancelledError(error)) {
+      console.info('[CriticalPath] Analysis cancelled: client disconnected');
+      return;
+    }
     if (error instanceof CriticalPathInputError) {
-      return res.status(CRITICAL_PATH_INPUT_ERROR_STATUS[error.code]).json({
+      return sendError(res, CRITICAL_PATH_INPUT_ERROR_STATUS[error.code], {
         success: false,
         code: error.code,
         error: inputErrorMessage(error.code, outputLanguage),
       });
     }
     console.error('[CriticalPath] Analyze error:', error);
-    return res.status(500).json({
+    return sendError(res, 500, {
       success: false,
       code: 'critical_path_failed',
       error: localize(

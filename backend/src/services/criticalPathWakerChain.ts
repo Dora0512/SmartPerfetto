@@ -19,28 +19,19 @@ import {
   toNullableNumber,
   toOptionalString,
 } from '../utils/traceProcessorRowUtils';
+import {errorLine, hintText} from './criticalPathText';
+import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
-
-export type WakerKind = 'irq' | 'swapper' | 'thread' | 'unknown';
-
-export interface WakerHop {
-  threadStateId: number | null;
-  utid: number | null;
-  tid: number | null;
-  threadName: string | null;
-  processName: string | null;
-  state: string | null;
-  cpu: number | null;
-  irqContext: boolean;
-  kind: WakerKind;
-  // Co-occurring semantic hints around the wakeup ts (best-effort).
-  hints: string[];
-}
+import type {
+  CriticalPathHintCode,
+  CriticalPathWarning,
+  WakerHop,
+  WakerKind,
+} from '../types/criticalPathContract';
 
 export interface WakerChainResult {
-  available: boolean;
   hop: WakerHop | null;
-  warnings: string[];
+  warnings: CriticalPathWarning[];
 }
 
 export function classifyWaker(
@@ -49,12 +40,10 @@ export function classifyWaker(
   irqContext: boolean
 ): WakerKind {
   if (irqContext) return 'irq';
-  // Kernel idle threads: tid=0, or a `swapper`-prefixed comm. The prefix is the
-  // rule, not `swapper/N` exactly, because fragments/sleep_wake_source.sql tests
-  // `thread_name GLOB 'swapper*'` — an anchored `swapper(/\d+)?` here would put
-  // any other spelling into `same_process_thread` in TypeScript while SQL called
-  // the same wake `swapper`, and the two surfaces would answer differently about
-  // one trace.
+  // Kernel idle threads: tid=0, or a `swapper`-prefixed comm. L2 resolves one
+  // waker in TypeScript, so this is the one rule kept on both sides: the prefix
+  // matches fragments/sleep_wake_source.sql (`thread_name GLOB 'swapper*'`), which
+  // labels the chain's wake sources, so the direct waker and the chain agree.
   if (tid === 0) return 'swapper';
   if (threadName && /^swapper/.test(threadName)) return 'swapper';
   if (threadName) return 'thread';
@@ -63,33 +52,40 @@ export function classifyWaker(
 
 export interface ResolveWakerOptions {
   threadStateId: number;
+  signal?: AbortSignal;
 }
 
-const IRQ_WAKEUP_HINT = 'woken in IRQ context (irq_context=1 on the wakeup row)';
+function withHints(hintCodes: CriticalPathHintCode[]): Pick<WakerHop, 'hintCodes' | 'hints'> {
+  return {hintCodes, hints: hintCodes.map((code) => hintText(code, 'zh-CN'))};
+}
 
 /**
  * Resolve the direct waker for a given thread_state row id. Returns a single
  * hop (NOT a recursive chain) annotated with IRQ/swapper context.
  *
  * Perfetto records `waker_utid`, `waker_id` and `irq_context` on the first
- * R/R+ row after a sleep, never on the S/D row itself. A waiting row is
- * therefore resolved through its successor at `ts + dur` (same join and MAX
- * collapse as blocking_chain_analysis.skill.yaml); a selected R/R+ row is the
- * wakeup row and is read directly.
+ * R/R+ row after a sleep, never on the S/D row itself nor on the Running row
+ * that follows. The wakeup row is therefore found by position:
+ *  - a waiting row: its successor at `ts + dur` (same join and MAX collapse
+ *    as blocking_chain_analysis.skill.yaml);
+ *  - a Running row: the R/R+ row that ends where it starts. A predecessor
+ *    without a waker is a preemption, not a wakeup, and reports no waker;
+ *  - an R/R+ row: itself.
  *
- * Failure modes:
- *  - thread_state row missing → available=false, warning
- *  - wakeup row carries no waker_utid (no recorded waker) → available=true, hop=null
- *  - SQL error → available=false, warning
+ * Failure modes (each returns hop=null with a warning):
+ *  - thread_state row missing
+ *  - wakeup row carries no waker_utid (no recorded waker)
+ *  - SQL error
+ * Cancellation is rethrown, never reported as a failed lookup.
  */
 export async function resolveDirectWaker(
   tp: TraceProcessorService,
   traceId: string,
   options: ResolveWakerOptions
 ): Promise<WakerChainResult> {
-  const {threadStateId} = options;
+  const {threadStateId, signal} = options;
   if (!Number.isInteger(threadStateId) || threadStateId < 0) {
-    return {available: false, hop: null, warnings: ['invalid threadStateId']};
+    return {hop: null, warnings: [{code: 'invalid_thread_state_id'}]};
   }
 
   const sql = `
@@ -102,16 +98,19 @@ export async function resolveDirectWaker(
       SELECT
         target.id AS target_id,
         target.ts AS target_ts,
-        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_utid ELSE MAX(nxt.waker_utid) END AS waker_utid,
-        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_id ELSE MAX(nxt.waker_id) END AS waker_id,
-        CASE WHEN target.state IN ('R', 'R+') THEN target.irq_context ELSE MAX(nxt.irq_context) END AS irq_context
+        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_utid ELSE MAX(adj.waker_utid) END AS waker_utid,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_id ELSE MAX(adj.waker_id) END AS waker_id,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.irq_context ELSE MAX(adj.irq_context) END AS irq_context
       FROM target
-      LEFT JOIN thread_state AS nxt
+      LEFT JOIN thread_state AS adj
         ON target.state NOT IN ('R', 'R+')
-       AND nxt.utid = target.utid
-       AND nxt.ts = target.ts + target.dur
-       AND nxt.state IN ('R', 'R+')
-       AND nxt.waker_utid IS NOT NULL
+       AND adj.utid = target.utid
+       AND adj.state IN ('R', 'R+')
+       AND adj.waker_utid IS NOT NULL
+       AND (
+         (target.state = 'Running' AND adj.ts + adj.dur = target.ts)
+         OR (target.state != 'Running' AND adj.ts = target.ts + target.dur)
+       )
       GROUP BY target.id
     )
     SELECT
@@ -134,21 +133,14 @@ export async function resolveDirectWaker(
 
   let result;
   try {
-    result = assertQuerySucceeded(await tp.query(traceId, sql));
+    result = assertQuerySucceeded(await tp.query(traceId, sql, {signal}));
   } catch (error: unknown) {
-    return {
-      available: false,
-      hop: null,
-      warnings: [`waker query failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`],
-    };
+    rethrowIfTraceProcessorQueryCancelled(error);
+    return {hop: null, warnings: [{code: 'waker_query_failed', params: {message: errorLine(error)}}]};
   }
 
   if (result.rows.length === 0) {
-    return {
-      available: false,
-      hop: null,
-      warnings: [`thread_state ${threadStateId} not found`],
-    };
+    return {hop: null, warnings: [{code: 'thread_state_not_found', params: {id: threadStateId}}]};
   }
 
   const row = rowObject(result.columns, result.rows[0]);
@@ -162,7 +154,6 @@ export async function resolveDirectWaker(
   if (wakerUtid === null) {
     if (irqContext) {
       return {
-        available: true,
         hop: {
           threadStateId: null,
           utid: null,
@@ -173,28 +164,23 @@ export async function resolveDirectWaker(
           cpu: null,
           irqContext: true,
           kind: 'irq',
-          hints: [IRQ_WAKEUP_HINT],
+          ...withHints(['irq_wakeup']),
         },
         warnings: [],
       };
     }
-    return {
-      available: true,
-      hop: null,
-      warnings: ['no recorded waker on the wakeup row (waker_utid is NULL)'],
-    };
+    return {hop: null, warnings: [{code: 'no_recorded_waker'}]};
   }
 
   const wakerThreadName = toOptionalString(row.waker_thread_name);
   const wakerTid = toNullableNumber(row.waker_tid);
   const kind = classifyWaker(wakerThreadName, wakerTid, irqContext);
 
-  const hints: string[] = [];
-  if (irqContext) hints.push(IRQ_WAKEUP_HINT);
-  if (kind === 'swapper') hints.push('woken by idle/swapper — no upstream wait chain to chase');
+  const hintCodes: CriticalPathHintCode[] = [];
+  if (irqContext) hintCodes.push('irq_wakeup');
+  if (kind === 'swapper') hintCodes.push('swapper_wakeup');
 
   return {
-    available: true,
     hop: {
       threadStateId: toNullableNumber(row.waker_id),
       utid: wakerUtid,
@@ -205,12 +191,8 @@ export async function resolveDirectWaker(
       cpu: toNullableNumber(row.waker_cpu),
       irqContext,
       kind,
-      hints,
+      ...withHints(hintCodes),
     },
     warnings: [],
   };
 }
-
-export const __INTERNAL__ = {
-  classifyWaker,
-};
