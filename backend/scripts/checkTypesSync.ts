@@ -21,28 +21,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  conclusionContractFragment,
-  criticalPathContractFragment,
-  externalIssueReportingFragment,
-  identityContractFragment,
-  verbatimContractFragment,
   ANALYSIS_COMPLETED_PUBLIC_TYPE_PATHS,
   analysisCompletedPublicTypeFragment,
   analysisCompletedContractFragment,
+  FRONTEND_CONTRACT_SOURCES,
+  frontendContractFragments,
+  readFrontendContractSources,
 } from './frontendContractFragments';
 
 // Paths
 const projectRoot = path.resolve(__dirname, '../..');
 const backendContractPath = path.join(projectRoot, 'backend/src/types/dataContract.ts');
-const conclusionContractPath = path.join(projectRoot, 'backend/src/agent/core/conclusionContract.ts');
-const evidenceContractPath = path.join(projectRoot, 'backend/src/types/evidenceContract.ts');
-const claimVerificationPath = path.join(projectRoot, 'backend/src/types/claimVerification.ts');
-const identityContractPath = path.join(projectRoot, 'backend/src/types/identityContract.ts');
-const externalIssueReportingPath = path.join(
-  projectRoot,
-  'backend/src/types/externalIssueReporting.ts',
-);
-const criticalPathContractPath = path.join(projectRoot, 'backend/src/types/criticalPathContract.ts');
 const frontendTypesPath = path.join(
   projectRoot,
   'perfetto/ui/src/plugins/com.smartperfetto.AIAssistant/generated/data_contract.types.ts'
@@ -281,34 +270,18 @@ async function checkTypesSync(): Promise<boolean> {
     process.exit(1);
   }
 
-  if (!fs.existsSync(conclusionContractPath)) {
-    console.error(`❌ Conclusion contract file not found: ${conclusionContractPath}`);
-    process.exit(2);
-  }
-  for (const filePath of [
-    evidenceContractPath,
-    claimVerificationPath,
-    identityContractPath,
-    externalIssueReportingPath,
-    criticalPathContractPath,
-  ]) {
+  for (const source of Object.values(FRONTEND_CONTRACT_SOURCES)) {
+    const filePath = path.join(projectRoot, source.path);
     if (!fs.existsSync(filePath)) {
-      console.error(`❌ Analysis quality contract file not found: ${filePath}`);
+      console.error(`❌ Frontend contract source not found: ${filePath}`);
       process.exit(2);
     }
   }
 
   // Read files
   const backendContent = fs.readFileSync(backendContractPath, 'utf-8');
-  const conclusionContractContent = fs.readFileSync(conclusionContractPath, 'utf-8');
-  const evidenceContractContent = fs.readFileSync(evidenceContractPath, 'utf-8');
-  const claimVerificationContent = fs.readFileSync(claimVerificationPath, 'utf-8');
-  const identityContractContent = fs.readFileSync(identityContractPath, 'utf-8');
-  const externalIssueReportingContent = fs.readFileSync(
-    externalIssueReportingPath,
-    'utf-8',
-  );
-  const criticalPathContractContent = fs.readFileSync(criticalPathContractPath, 'utf-8');
+  const contractSources = readFrontendContractSources(projectRoot, (filePath) => fs.readFileSync(filePath, 'utf-8'));
+  const conclusionContractContent = contractSources.conclusion;
   const frontendContent = fs.readFileSync(frontendTypesPath, 'utf-8');
 
   // Extract and compare type definitions
@@ -378,15 +351,8 @@ async function checkTypesSync(): Promise<boolean> {
     {name: 'AnalysisCompletedEvent public dependencies', content: analysisCompletedPublicTypeFragment(backendContent,
       ANALYSIS_COMPLETED_PUBLIC_TYPE_PATHS.map(sourcePath =>
         fs.readFileSync(path.join(projectRoot, 'backend/src', sourcePath), 'utf-8')))},
-    { name: 'conclusionContract.ts', content: conclusionContractFragment(conclusionContractContent) },
-    { name: 'evidenceContract.ts', content: verbatimContractFragment(evidenceContractContent) },
-    { name: 'claimVerification.ts', content: verbatimContractFragment(claimVerificationContent) },
-    { name: 'identityContract.ts', content: identityContractFragment(identityContractContent) },
-    {
-      name: 'externalIssueReporting.ts',
-      content: externalIssueReportingFragment(externalIssueReportingContent),
-    },
-    {name: 'criticalPathContract.ts', content: criticalPathContractFragment(criticalPathContractContent)},
+    ...Object.entries(frontendContractFragments(contractSources)).map(([name, content]) =>
+      ({name: FRONTEND_CONTRACT_SOURCES[name as keyof typeof FRONTEND_CONTRACT_SOURCES].path, content})),
   ]);
   if (outOfSyncFragments.length > 0) {
     console.log('❌ Analysis quality contract source fragments are OUT OF SYNC!\n');

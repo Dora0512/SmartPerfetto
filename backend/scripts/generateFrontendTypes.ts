@@ -15,28 +15,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  conclusionContractFragment,
-  criticalPathContractFragment,
-  externalIssueReportingFragment,
-  identityContractFragment,
-  verbatimContractFragment,
   ANALYSIS_COMPLETED_PUBLIC_TYPE_PATHS,
   analysisCompletedPublicTypeFragment,
   analysisCompletedContractFragment,
+  frontendContractFragments,
+  readFrontendContractSources,
 } from './frontendContractFragments';
 
 // Paths
 const projectRoot = path.resolve(__dirname, '../..');
 const backendContractPath = path.join(projectRoot, 'backend/src/types/dataContract.ts');
-const conclusionContractPath = path.join(projectRoot, 'backend/src/agent/core/conclusionContract.ts');
-const evidenceContractPath = path.join(projectRoot, 'backend/src/types/evidenceContract.ts');
-const claimVerificationPath = path.join(projectRoot, 'backend/src/types/claimVerification.ts');
-const identityContractPath = path.join(projectRoot, 'backend/src/types/identityContract.ts');
-const externalIssueReportingPath = path.join(
-  projectRoot,
-  'backend/src/types/externalIssueReporting.ts',
-);
-const criticalPathContractPath = path.join(projectRoot, 'backend/src/types/criticalPathContract.ts');
 const frontendOutputPath = path.join(
   projectRoot,
   'perfetto/ui/src/plugins/com.smartperfetto.AIAssistant/generated/data_contract.types.ts'
@@ -93,24 +81,15 @@ const backendContent = fs.readFileSync(backendContractPath, 'utf-8');
 const analysisCompletedPublicTypes = analysisCompletedPublicTypeFragment(backendContent,
   ANALYSIS_COMPLETED_PUBLIC_TYPE_PATHS.map(sourcePath =>
     fs.readFileSync(path.join(projectRoot, 'backend/src', sourcePath), 'utf-8')));
-const conclusionContractContent = conclusionContractFragment(
-  fs.readFileSync(conclusionContractPath, 'utf-8'),
+const contractFragments = frontendContractFragments(
+  readFrontendContractSources(projectRoot, (filePath) => fs.readFileSync(filePath, 'utf-8')),
 );
-const evidenceContractContent = verbatimContractFragment(
-  fs.readFileSync(evidenceContractPath, 'utf-8'),
-);
-const claimVerificationContent = verbatimContractFragment(
-  fs.readFileSync(claimVerificationPath, 'utf-8'),
-);
-const identityContractContent = identityContractFragment(
-  fs.readFileSync(identityContractPath, 'utf-8'),
-);
-const externalIssueReportingContent = externalIssueReportingFragment(
-  fs.readFileSync(externalIssueReportingPath, 'utf-8'),
-);
-const criticalPathContractContent = criticalPathContractFragment(
-  fs.readFileSync(criticalPathContractPath, 'utf-8'),
-);
+const conclusionContractContent = contractFragments.conclusion;
+const evidenceContractContent = contractFragments.evidence;
+const claimVerificationContent = contractFragments.claimVerification;
+const identityContractContent = contractFragments.identity;
+const externalIssueReportingContent = contractFragments.externalIssueReporting;
+const criticalPathContractContent = contractFragments.criticalPath;
 
 // Transform content for frontend
 console.log('Transforming for frontend compatibility...');
