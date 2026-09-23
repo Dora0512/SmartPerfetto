@@ -138,6 +138,9 @@ should use WSL2; native Windows users should use the portable package.
    ```bash
    gh workflow run npm-publish.yml --ref main -f release_id=<numeric-release-id>
    ```
+   If only the `propagation` job timed out, the publish already succeeded;
+   use `gh run rerun <run-id> --failed` instead, which reruns the wait and
+   smoke without re-entering the publish job.
    Interactive WebAuthn publishing is an emergency fallback only. When it is
    required, publish from `backend/` with `npm publish --access public`; never
    use `npm --prefix backend publish`, which can resolve the private root
@@ -191,6 +194,12 @@ should use WSL2; native Windows users should use the portable package.
 - An already-published version is idempotent only when npm registry
   `dist.integrity` exactly equals the generated tarball SRI. A mismatch is a
   hard failure, never a skip.
+- The publish job ends when `npm publish` returns. A separate credential-free
+  `propagation` job waits for registry `dist.integrity` to equal the tarball
+  SRI, with capped backoff inside the `REGISTRY_WAIT_*` sleep budget and a job
+  timeout; registry propagation has taken minutes. A failed `npm view` is
+  retried within that budget. A different integrity, or output that is not a
+  single SRI, fails immediately.
 - Post-publish smoke must install the public exact version without user npm
   credentials and verify the supported Node boundary, CLI bins, Knowledge
   Pack, and packaged `trace_processor_shell`.

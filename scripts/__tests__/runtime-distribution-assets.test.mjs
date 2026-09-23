@@ -15,6 +15,7 @@ import {
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
+import {load as loadYaml} from 'js-yaml';
 
 const root = resolve(import.meta.dirname, '../..');
 
@@ -431,14 +432,8 @@ test('npm trusted publishing isolates release packaging from the OIDC publish cr
   });
 
   const workflow = readFileSync(workflowPath, 'utf8');
-  const packageStart = workflow.indexOf('  package:');
-  const publishStart = workflow.indexOf('  publish:');
-  const smokeStart = workflow.indexOf('  smoke:');
-  assert.ok(packageStart >= 0 && publishStart > packageStart && smokeStart > publishStart);
-
-  const packageJob = workflow.slice(packageStart, publishStart);
-  const publishJob = workflow.slice(publishStart, smokeStart);
-  const smokeJob = workflow.slice(smokeStart);
+  const {packageJob, publishJob, propagationJob, smokeJob} =
+    splitNpmPublishJobs(workflow);
 
   assert.match(workflow, /release:\s+types:\s+\[published\]/);
   assert.match(workflow, /workflow_dispatch:[\s\S]*?release_id:/);
@@ -469,6 +464,17 @@ test('npm trusted publishing isolates release packaging from the OIDC publish cr
   assert.match(publishJob, /PACKAGE_INTEGRITY/);
   assert.match(publishJob, /npm publish "\$\{PACKAGE_PATH\}" --access public/);
   assert.doesNotMatch(publishJob, /actions\/checkout|npm ci|npm run|scripts\//);
+  // The OIDC window ends with the publish; registry propagation is awaited by a
+  // credential-free job so a slow registry never holds or re-enters it.
+  assert.doesNotMatch(publishJob, /Wait for matching registry integrity|sleep/);
+
+  assert.match(propagationJob, /needs:\s+- package\s+- publish\n/);
+  assert.match(propagationJob, /permissions:\s+contents: read\n/);
+  assert.doesNotMatch(propagationJob, /id-token|actions\/checkout|secrets\./);
+  assert.match(propagationJob, /NPM_CONFIG_USERCONFIG:\s*\/dev\/null/);
+  assert.match(propagationJob, /REGISTRY_WAIT_SECONDS: 900\n/);
+  assert.match(propagationJob, /timeout-minutes: 25\n/);
+  assert.match(smokeJob, /needs:\s+- package\s+- propagation\n/);
 
   assert.match(smokeJob, /NPM_CONFIG_USERCONFIG:\s*\/dev\/null/);
   assert.match(smokeJob, /npm install --no-audit --no-fund "@gracker\/smartperfetto@\$\{VERSION\}"/);
@@ -496,6 +502,189 @@ test('npm trusted publishing isolates release packaging from the OIDC publish cr
     workflow,
     /NPM_TOKEN|NODE_AUTH_TOKEN|_authToken|secrets\.|npm --prefix backend publish/,
   );
+});
+
+function splitNpmPublishJobs(workflow) {
+  const starts = ['  package:', '  publish:', '  propagation:', '  smoke:'].map(
+    (header) => workflow.indexOf(`\n${header}\n`),
+  );
+  starts.forEach((start, index) => {
+    assert.ok(start > (index === 0 ? -1 : starts[index - 1]), 'npm publish job order');
+  });
+  const [packageJob, publishJob, propagationJob, smokeJob] = starts.map(
+    (start, index) => workflow.slice(start, starts[index + 1]),
+  );
+  return {packageJob, publishJob, propagationJob, smokeJob};
+}
+
+let npmPublishWorkflow;
+function loadNpmPublishWorkflow() {
+  npmPublishWorkflow ??= loadYaml(
+    readFileSync(join(root, '.github/workflows/npm-publish.yml'), 'utf8'),
+  );
+  return npmPublishWorkflow;
+}
+
+// Runs one registry step of npm-publish.yml with `npm view` replaying the
+// queued responses in order (repeating the last) and `sleep` only recording.
+function runRegistryStep(jobName, findStep, responses) {
+  const workflow = loadNpmPublishWorkflow();
+  const job = workflow.jobs[jobName];
+  const step = job.steps.find(findStep);
+  assert.ok(step?.run, `missing ${jobName} registry step`);
+
+  const dir = mkdtempSync(join(tmpdir(), 'npm-registry-step-'));
+  try {
+    const bin = join(dir, 'bin');
+    const replies = join(dir, 'replies');
+    mkdirSync(bin);
+    mkdirSync(replies);
+    responses.forEach(({status, stdout = '', stderr = ''}, index) => {
+      writeFileSync(join(replies, `${index}.out`), stdout);
+      writeFileSync(join(replies, `${index}.err`), stderr);
+      writeFileSync(join(replies, `${index}.status`), String(status));
+    });
+    writeFileSync(
+      join(bin, 'npm'),
+      `#!/bin/sh
+n=$(cat "${dir}/count" 2>/dev/null || echo 0)
+echo $((n + 1)) > "${dir}/count"
+echo "$*" >> "${dir}/argv.log"
+[ "$n" -lt ${responses.length} ] || n=${responses.length - 1}
+cat "${replies}/$n.out"
+cat "${replies}/$n.err" >&2
+exit "$(cat "${replies}/$n.status")"
+`,
+      {mode: 0o755},
+    );
+    writeFileSync(join(bin, 'sleep'), `#!/bin/sh\necho "$1" >> "${dir}/sleep.log"\n`, {
+      mode: 0o755,
+    });
+    writeFileSync(join(dir, 'step.sh'), step.run);
+    writeFileSync(join(dir, 'github-output'), '');
+    // GitHub runs a `run:` block without an explicit shell as `bash -e {0}`.
+    const result = spawnSync('bash', ['-e', join(dir, 'step.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...workflow.env,
+        ...job.env,
+        GITHUB_OUTPUT: join(dir, 'github-output'),
+        GITHUB_RUN_ID: '4242',
+        PACKAGE_INTEGRITY: WAIT_INTEGRITY,
+        PATH: `${bin}:${process.env.PATH}`,
+        RUNNER_TEMP: dir,
+        VERSION: '9.9.9',
+      },
+    });
+    const readLines = (name) => existsSync(join(dir, name))
+      ? readFileSync(join(dir, name), 'utf8').split('\n').filter(Boolean)
+      : [];
+    return {
+      ...result,
+      githubOutput: readLines('github-output'),
+      npmCalls: readLines('argv.log'),
+      sleeps: readLines('sleep.log').map(Number),
+    };
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+}
+
+const runRegistryWait = (responses) => runRegistryStep(
+  'propagation',
+  (step) => step.name === 'Wait for matching registry integrity',
+  responses,
+);
+const runPublishPrecheck = (responses) => runRegistryStep(
+  'publish',
+  (step) => step.id === 'registry',
+  responses,
+);
+
+const WAIT_INTEGRITY = 'sha512-expected==';
+const E404 = {
+  status: 1,
+  stdout: '{"error":{"code":"E404","summary":"No match found for version 9.9.9"}}\n',
+  stderr: 'npm error code E404\n',
+};
+const MATCHING_OUTPUTS = [
+  `"${WAIT_INTEGRITY}"\n`, // npm 11
+  `[\n  "${WAIT_INTEGRITY}"\n]\n`, // npm 12
+];
+const UNRECOGNISED_OUTPUTS = ['{}\n', '[]\n', '["a","b"]\n', ''];
+
+test('npm registry wait backs off until the matching integrity appears', () => {
+  const result = runRegistryWait([
+    E404,
+    E404,
+    {status: 1, stderr: 'npm error code ECONNRESET\n'},
+    E404,
+    {status: 0, stdout: MATCHING_OUTPUTS[0]},
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.sleeps, [5, 10, 20, 30]);
+  assert.equal(result.npmCalls.length, 5);
+  assert.equal(result.npmCalls[0], 'view @gracker/smartperfetto@9.9.9 dist.integrity --json');
+  assert.match(result.stderr, /ECONNRESET/);
+});
+
+test('npm registry reads accept npm 11 and npm 12 integrity output', () => {
+  for (const stdout of MATCHING_OUTPUTS) {
+    const wait = runRegistryWait([{status: 0, stdout}]);
+    assert.equal(wait.status, 0, wait.stderr);
+    assert.deepEqual(wait.sleeps, []);
+    const precheck = runPublishPrecheck([{status: 0, stdout}]);
+    assert.equal(precheck.status, 0, precheck.stderr);
+    assert.deepEqual(precheck.githubOutput, ['already_published=true']);
+  }
+});
+
+test('npm registry reads fail on a different published integrity', () => {
+  for (const stdout of ['"sha512-other=="\n', '["sha512-other=="]\n']) {
+    const wait = runRegistryWait([E404, {status: 0, stdout}]);
+    assert.equal(wait.status, 1);
+    assert.deepEqual(wait.sleeps, [5]);
+    assert.equal(wait.npmCalls.length, 2);
+    assert.match(wait.stderr, /Registry integrity mismatch/);
+    const precheck = runPublishPrecheck([{status: 0, stdout}]);
+    assert.equal(precheck.status, 1);
+    assert.deepEqual(precheck.githubOutput, []);
+    assert.match(precheck.stderr, /Registry integrity mismatch/);
+  }
+});
+
+test('npm registry reads fail closed on unrecognised npm view output', () => {
+  for (const stdout of UNRECOGNISED_OUTPUTS) {
+    const wait = runRegistryWait([{status: 0, stdout}]);
+    assert.equal(wait.status, 1, `wait accepted ${JSON.stringify(stdout)}`);
+    assert.deepEqual(wait.sleeps, []);
+    const precheck = runPublishPrecheck([{status: 0, stdout}]);
+    assert.equal(precheck.status, 1, `pre-check accepted ${JSON.stringify(stdout)}`);
+    assert.deepEqual(precheck.githubOutput, []);
+  }
+});
+
+test('npm publish pre-check publishes only an unknown version', () => {
+  const missing = runPublishPrecheck([E404]);
+  assert.equal(missing.status, 0, missing.stderr);
+  assert.deepEqual(missing.githubOutput, ['already_published=false']);
+
+  const broken = runPublishPrecheck([{status: 7, stderr: 'npm error code E403\n'}]);
+  assert.equal(broken.status, 7);
+  assert.deepEqual(broken.githubOutput, []);
+  assert.match(broken.stderr, /E403/);
+});
+
+test('npm registry wait is bounded by its sleep budget', () => {
+  const result = runRegistryWait([E404]);
+  const budget = Number(loadNpmPublishWorkflow().jobs.propagation.env.REGISTRY_WAIT_SECONDS);
+  assert.equal(result.status, 1);
+  assert.equal(result.sleeps.reduce((sum, value) => sum + value, 0), budget);
+  assert.ok(result.sleeps.every((value) => value > 0 && value <= 30));
+  // One final check runs after the last sleep.
+  assert.equal(result.npmCalls.length, result.sleeps.length + 1);
+  assert.match(result.stderr, new RegExp(`within ${budget}s`));
+  assert.match(result.stderr, /gh run rerun 4242 --failed/);
 });
 
 test('backend gate installs every dependency tree consumed by verify:pr', () => {

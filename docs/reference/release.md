@@ -95,8 +95,18 @@ npm view @gracker/smartperfetto@<version> version dist.integrity --json
 
 workflow 只接受 public、非 prerelease、完整 target SHA 的稳定 SemVer release；tag、
 target、四个版本字段和 `main` 祖先关系必须一致。已有版本只有 registry
-`dist.integrity` 与本次 tarball 完全一致时才会幂等跳过。最后在空目录、Node.js 24
-下做无凭证真实安装 smoke：
+`dist.integrity` 与本次 tarball 完全一致时才会幂等跳过。
+
+`npm publish` 成功后，registry 可能要几分钟才返回新版本。这段等待放在无凭证的
+`propagation` job 里，按 workflow 中 `REGISTRY_WAIT_*` 设定的上限退避重试；
+registry 返回的 integrity 与 tarball 不一致时立即失败。若等待超时，publish 已经
+成功，只重跑失败的 job 即可，不会重新进入 publish job：
+
+```bash
+gh run rerun <run-id> --failed
+```
+
+最后在空目录、Node.js 24 下做无凭证真实安装 smoke：
 
 ```bash
 npm install @gracker/smartperfetto@<version>

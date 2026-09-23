@@ -103,8 +103,21 @@ npm view @gracker/smartperfetto@<version> version dist.integrity --json
 The workflow accepts only a public, non-prerelease stable SemVer release with a
 full target SHA. Its tag, target, all four version fields, and `main` ancestry
 must agree. An existing version is an idempotent skip only when registry
-`dist.integrity` exactly matches the generated tarball. Finally, run a
-credential-free install smoke in an empty directory under Node.js 24:
+`dist.integrity` exactly matches the generated tarball.
+
+After `npm publish` succeeds, the registry can take minutes to serve the new
+version. That wait runs in the credential-free `propagation` job and backs off
+within the `REGISTRY_WAIT_*` bounds set in the workflow. A registry integrity
+that differs from the tarball fails immediately. If the wait times out, the
+publish has already succeeded; rerun only the failed jobs, which does not
+re-enter the publish job:
+
+```bash
+gh run rerun <run-id> --failed
+```
+
+Finally, run a credential-free install smoke in an empty directory under
+Node.js 24:
 
 ```bash
 npm install @gracker/smartperfetto@<version>

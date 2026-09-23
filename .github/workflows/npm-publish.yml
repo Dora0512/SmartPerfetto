@@ -13,6 +13,18 @@ on:
 permissions:
   contents: read
 
+env:
+  # Reads `npm view <pkg>@<version> dist.integrity --json` stdout. npm 11 prints
+  # a JSON string for an exact version and npm 12 a one-element array; any
+  # other shape fails closed. Shared by the publish pre-check and the wait.
+  READ_REGISTRY_INTEGRITY_JS: |
+    const value = JSON.parse(process.argv[1]);
+    const integrity = Array.isArray(value) && value.length === 1 ? value[0] : value;
+    if (typeof integrity !== "string") {
+      throw new Error("unexpected npm view output: " + process.argv[1]);
+    }
+    process.stdout.write(integrity);
+
 concurrency:
   group: npm-publish-${{ github.event.release.id || inputs.release_id }}
   cancel-in-progress: false
@@ -216,45 +228,92 @@ jobs:
       - name: Check immutable registry state
         id: registry
         run: |
-          set +e
-          REGISTRY_RESULT="$(npm view "@gracker/smartperfetto@${VERSION}" dist.integrity --json 2>&1)"
-          REGISTRY_STATUS=$?
-          set -e
-          if [ "${REGISTRY_STATUS}" -eq 0 ]; then
-            REGISTRY_INTEGRITY="$(node -e "process.stdout.write(JSON.parse(process.argv[1]))" "${REGISTRY_RESULT}")"
+          ERR_FILE="${RUNNER_TEMP}/npm-view.err"
+          STATUS=0
+          RESULT="$(npm view "@gracker/smartperfetto@${VERSION}" dist.integrity --json 2>"${ERR_FILE}")" || STATUS=$?
+          if [ "${STATUS}" -eq 0 ]; then
+            REGISTRY_INTEGRITY="$(node -e "${READ_REGISTRY_INTEGRITY_JS}" "${RESULT}")"
             if [ "${REGISTRY_INTEGRITY}" != "${PACKAGE_INTEGRITY}" ]; then
               echo "Registry integrity mismatch for @gracker/smartperfetto@${VERSION}" >&2
               exit 1
             fi
             echo "already_published=true" >> "${GITHUB_OUTPUT}"
-          elif printf '%s' "${REGISTRY_RESULT}" | grep -q 'E404'; then
+          elif printf '%s\n' "${RESULT}" | cat - "${ERR_FILE}" | grep -q 'E404'; then
             echo "already_published=false" >> "${GITHUB_OUTPUT}"
           else
-            printf '%s\n' "${REGISTRY_RESULT}" >&2
-            exit "${REGISTRY_STATUS}"
+            printf '%s\n' "${RESULT}" | cat - "${ERR_FILE}" >&2
+            exit "${STATUS}"
           fi
 
       - name: Publish the immutable tarball
         if: ${{ steps.registry.outputs.already_published == 'false' }}
         run: npm publish "${PACKAGE_PATH}" --access public
 
+  propagation:
+    # npm can accept a publish minutes before the registry serves the new
+    # version (465 s for v1.14.0). Wait here, without the OIDC permission, so
+    # the credential window ends with the publish and a timeout can be retried
+    # with `gh run rerun --failed` without re-entering the publish job.
+    name: Wait for the published integrity on the public registry
+    needs:
+      - package
+      - publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      NPM_CONFIG_USERCONFIG: /dev/null
+      PACKAGE_INTEGRITY: ${{ needs.package.outputs.package_integrity }}
+      REGISTRY_WAIT_SECONDS: 900
+      REGISTRY_WAIT_INITIAL_DELAY_SECONDS: 5
+      REGISTRY_WAIT_MAX_DELAY_SECONDS: 30
+      VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
       - name: Wait for matching registry integrity
         run: |
-          for ATTEMPT in $(seq 1 12); do
-            REGISTRY_INTEGRITY="$(npm view "@gracker/smartperfetto@${VERSION}" dist.integrity --json 2>/dev/null | sed -e 's/^"//' -e 's/"$//' || true)"
-            if [ "${REGISTRY_INTEGRITY}" = "${PACKAGE_INTEGRITY}" ]; then
-              exit 0
+          ERR_FILE="${RUNNER_TEMP}/npm-view.err"
+          WAITED=0
+          DELAY="${REGISTRY_WAIT_INITIAL_DELAY_SECONDS}"
+          while :; do
+            STATUS=0
+            RESULT="$(npm view "@gracker/smartperfetto@${VERSION}" dist.integrity --json 2>"${ERR_FILE}")" || STATUS=$?
+            if [ "${STATUS}" -eq 0 ]; then
+              REGISTRY_INTEGRITY="$(node -e "${READ_REGISTRY_INTEGRITY_JS}" "${RESULT}")"
+              if [ "${REGISTRY_INTEGRITY}" = "${PACKAGE_INTEGRITY}" ]; then
+                echo "Registry serves the matching ${VERSION} integrity after ${WAITED}s"
+                exit 0
+              fi
+              # A published version is immutable: different bytes never converge.
+              echo "Registry integrity mismatch for @gracker/smartperfetto@${VERSION}: ${REGISTRY_INTEGRITY}" >&2
+              exit 1
             fi
-            sleep 5
+            # E404 until the version propagates; transient registry errors also retry.
+            echo "npm view exited ${STATUS} after ${WAITED}s; retrying" >&2
+            printf '%s\n' "${RESULT}" | cat - "${ERR_FILE}" >&2
+            REMAINING=$((REGISTRY_WAIT_SECONDS - WAITED))
+            if [ "${REMAINING}" -le 0 ]; then
+              echo "npm registry did not serve the matching ${VERSION} integrity within ${REGISTRY_WAIT_SECONDS}s." >&2
+              echo "The publish job succeeded; retry only this wait and the smoke with: gh run rerun ${GITHUB_RUN_ID} --failed" >&2
+              exit 1
+            fi
+            SLEEP=$((DELAY < REMAINING ? DELAY : REMAINING))
+            sleep "${SLEEP}"
+            WAITED=$((WAITED + SLEEP))
+            DELAY=$((DELAY * 2 < REGISTRY_WAIT_MAX_DELAY_SECONDS ? DELAY * 2 : REGISTRY_WAIT_MAX_DELAY_SECONDS))
           done
-          echo "npm registry did not expose the matching ${VERSION} integrity" >&2
-          exit 1
 
   smoke:
     name: Smoke the public npm package without credentials
     needs:
       - package
-      - publish
+      - propagation
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
