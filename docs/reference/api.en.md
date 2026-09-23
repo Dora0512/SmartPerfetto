@@ -774,6 +774,13 @@ Blocking time, shares, module attribution and `chainSegmentCount` /
 cover only the part before the cut); recursion children are not counted again.
 `wakeupChain` is only the displayed prefix (`maxSegments`). Durations are summed
 in ns before conversion, so the external share cannot exceed 100% by rounding.
+Modules, anomalies, recommendations, warnings, reasons, waker hints and
+hypotheses carry stable ids (`moduleIds` / `moduleId`, `anomalies[].id` +
+`params` + `evidenceItems`, `recommendationIds`, `warningCodes`, `reasonItems`,
+`directWaker.hintCodes`, `hypotheses[].params` + `noteCodes`); text is rendered
+only at the edge: `analysis` is the zh-CN rendering (compatible legacy fields)
+and `presentationAnalysis` the requested language. `longestSegment` names the
+longest external segment of the whole chain.
 `aiSummary` falls back to the deterministic rule summary (`generated: false`)
 with a `fallbackReason` and localized `warnings` when AI is disabled (feature
 `critical_path_ai_summary`), the active provider is not on the Claude Agent SDK

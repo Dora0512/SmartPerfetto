@@ -19,6 +19,12 @@ import {
   toNullableNumber,
   toOptionalString,
 } from '../utils/traceProcessorRowUtils';
+import {
+  errorLine,
+  hintText,
+  type CriticalPathHintCode,
+  type CriticalPathWarning,
+} from './criticalPathText';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
 
@@ -34,13 +40,15 @@ export interface WakerHop {
   cpu: number | null;
   irqContext: boolean;
   kind: WakerKind;
-  // Co-occurring semantic hints around the wakeup ts (best-effort).
+  /** What the wakeup says about the chain upstream of it. */
+  hintCodes: CriticalPathHintCode[];
+  /** `hintCodes` rendered (zh-CN until a projection renders another language). */
   hints: string[];
 }
 
 export interface WakerChainResult {
   hop: WakerHop | null;
-  warnings: string[];
+  warnings: CriticalPathWarning[];
 }
 
 export function classifyWaker(
@@ -64,7 +72,9 @@ export interface ResolveWakerOptions {
   signal?: AbortSignal;
 }
 
-const IRQ_WAKEUP_HINT = 'woken in IRQ context (irq_context=1 on the wakeup row)';
+function withHints(hintCodes: CriticalPathHintCode[]): Pick<WakerHop, 'hintCodes' | 'hints'> {
+  return {hintCodes, hints: hintCodes.map((code) => hintText(code, 'zh-CN'))};
+}
 
 /**
  * Resolve the direct waker for a given thread_state row id. Returns a single
@@ -89,7 +99,7 @@ export async function resolveDirectWaker(
 ): Promise<WakerChainResult> {
   const {threadStateId, signal} = options;
   if (!Number.isInteger(threadStateId) || threadStateId < 0) {
-    return {hop: null, warnings: ['invalid threadStateId']};
+    return {hop: null, warnings: [{code: 'invalid_thread_state_id'}]};
   }
 
   const sql = `
@@ -137,17 +147,11 @@ export async function resolveDirectWaker(
     result = assertQuerySucceeded(await tp.query(traceId, sql, {signal}));
   } catch (error: unknown) {
     rethrowIfTraceProcessorQueryCancelled(error);
-    return {
-      hop: null,
-      warnings: [`waker query failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`],
-    };
+    return {hop: null, warnings: [{code: 'waker_query_failed', params: {message: errorLine(error)}}]};
   }
 
   if (result.rows.length === 0) {
-    return {
-      hop: null,
-      warnings: [`thread_state ${threadStateId} not found`],
-    };
+    return {hop: null, warnings: [{code: 'thread_state_not_found', params: {id: threadStateId}}]};
   }
 
   const row = rowObject(result.columns, result.rows[0]);
@@ -171,24 +175,21 @@ export async function resolveDirectWaker(
           cpu: null,
           irqContext: true,
           kind: 'irq',
-          hints: [IRQ_WAKEUP_HINT],
+          ...withHints(['irq_wakeup']),
         },
         warnings: [],
       };
     }
-    return {
-      hop: null,
-      warnings: ['no recorded waker on the wakeup row (waker_utid is NULL)'],
-    };
+    return {hop: null, warnings: [{code: 'no_recorded_waker'}]};
   }
 
   const wakerThreadName = toOptionalString(row.waker_thread_name);
   const wakerTid = toNullableNumber(row.waker_tid);
   const kind = classifyWaker(wakerThreadName, wakerTid, irqContext);
 
-  const hints: string[] = [];
-  if (irqContext) hints.push(IRQ_WAKEUP_HINT);
-  if (kind === 'swapper') hints.push('woken by idle/swapper — no upstream wait chain to chase');
+  const hintCodes: CriticalPathHintCode[] = [];
+  if (irqContext) hintCodes.push('irq_wakeup');
+  if (kind === 'swapper') hintCodes.push('swapper_wakeup');
 
   return {
     hop: {
@@ -201,7 +202,7 @@ export async function resolveDirectWaker(
       cpu: toNullableNumber(row.waker_cpu),
       irqContext,
       kind,
-      hints,
+      ...withHints(hintCodes),
     },
     warnings: [],
   };

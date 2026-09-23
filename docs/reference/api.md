@@ -689,7 +689,7 @@ legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续�
 
 请求体为 `threadStateId`，或 `utid` + `startTs` + `dur`（可选 `endTs`），另可带 `maxSegments`、`recursionDepth`、`recursionEnabled`、`segmentBudget`、`includeAi`、`question`、`outputLanguage`。
 
-成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。阻塞时长、占比、模块归因和 `chainSegmentCount` / `chainWaitMs` / `waitClassTotalsMs` 覆盖完整的顶层等待链（最多 5000 个原始栈段；超过时 `truncated: true` 并在 `warnings` 中说明只覆盖截断前部分），递归子链不重复计入；`wakeupChain` 只是展示前缀（`maxSegments`）。时长先按纳秒求和再换算，外部占比不会因舍入超过 100%。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用，也会取消尚未完成的 trace 查询，此时不再返回响应。
+成功返回 `{success: true, analysis, presentationAnalysis, aiSummary}`。阻塞时长、占比、模块归因和 `chainSegmentCount` / `chainWaitMs` / `waitClassTotalsMs` 覆盖完整的顶层等待链（最多 5000 个原始栈段；超过时 `truncated: true` 并在 `warnings` 中说明只覆盖截断前部分），递归子链不重复计入；`wakeupChain` 只是展示前缀（`maxSegments`）。时长先按纳秒求和再换算，外部占比不会因舍入超过 100%。结果里的模块、异常、建议、警告、原因、唤醒提示和假设都带稳定 id（`moduleIds` / `moduleId`、`anomalies[].id` + `params` + `evidenceItems`、`recommendationIds`、`warningCodes`、`reasonItems`、`directWaker.hintCodes`、`hypotheses[].params` + `noteCodes`），文字只在输出时按语言渲染：`analysis` 是 zh-CN 渲染（兼容旧字段），`presentationAnalysis` 按请求语言渲染；`longestSegment` 给出整条链最长的外部段。以下情况 `aiSummary` 返回规则兜底总结（`generated: false`），并附 `fallbackReason` 和本地化的 `warnings`：AI 被关闭（feature `critical_path_ai_summary`）、当前 Provider 不是 Claude Agent SDK runtime、凭证缺失、超时、客户端断开。AI 关闭不会让该接口返回 403。客户端断开会取消进行中的模型调用，也会取消尚未完成的 trace 查询，此时不再返回响应。
 
 失败返回 `{success: false, code, error}`，`error` 已本地化：
 

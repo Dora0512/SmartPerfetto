@@ -290,8 +290,8 @@ describe('criticalPathSemantics source status and warnings', () => {
       wakeSource: 'empty',
     });
     expect(enrichment.warnings).toEqual([
-      'INCLUDE android.binder failed',
-      'schema mismatch: no such column: blocked_utid',
+      {code: 'include_failed', params: {module: 'android.binder'}},
+      {code: 'schema_mismatch', params: {message: 'no such column: blocked_utid'}},
     ]);
   });
 
@@ -306,7 +306,7 @@ describe('criticalPathSemantics source status and warnings', () => {
 
     const enrichment = await enrichSegmentsWithSemantics(tp, 'trace-1', [segment, other]);
 
-    expect(enrichment.warnings).toEqual(['query failed: interrupted']);
+    expect(enrichment.warnings).toEqual([{code: 'query_failed', params: {message: 'interrupted'}}]);
     expect(enrichment.sources).toMatchObject({io: 'sql_error', gc: 'sql_error', binder: 'empty'});
   });
 
@@ -331,8 +331,8 @@ describe('criticalPathSemantics source status and warnings', () => {
     expect(sources.monitor).toBe('stdlib_missing');
     expect(warnings).toEqual(
       expect.arrayContaining([
-        'INCLUDE android.binder failed',
-        expect.stringMatching(/^stdlib table missing: no such table: android_monitor_contention/),
+        {code: 'include_failed', params: {module: 'android.binder'}},
+        {code: 'stdlib_table_missing', params: {message: 'no such table: android_monitor_contention'}},
       ])
     );
   });
@@ -451,6 +451,6 @@ describe('criticalPathSemantics loader ceiling', () => {
 
     expect(sources.io).toBe('present');
     expect([...result.values()].reduce((sum, sem) => sum + sem.ioSignals.length, 0)).toBe(4000);
-    expect(warnings).toContain('io evidence reached the 4000-row limit; the shortest segments may lack it');
+    expect(warnings).toContainEqual({code: 'loader_row_cap', params: {source: 'io', cap: 4000}});
   });
 });

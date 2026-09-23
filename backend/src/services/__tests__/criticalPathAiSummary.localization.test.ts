@@ -4,10 +4,10 @@
 
 import type {CriticalPathAnalysis} from '../criticalPathAnalyzer';
 import {buildDeterministicCriticalPathSummary} from '../criticalPathAiSummary';
-import {projectCriticalPathAnalysis} from '../criticalPathLocalization';
+import {projectCriticalPathAnalysis, renderCriticalPathAnalysis} from '../criticalPathLocalization';
 
 function fixture(): CriticalPathAnalysis {
-  return {
+  return renderCriticalPathAnalysis({
     available: true,
     task: {
       threadStateId: 1,
@@ -26,7 +26,8 @@ function fixture(): CriticalPathAnalysis {
     wakeupChain: [],
     moduleBreakdown: [
       {
-        module: 'IO / 文件系统',
+        moduleId: 'io_filesystem',
+        module: '',
         durationMs: 40,
         percentage: 80,
         segmentCount: 1,
@@ -35,18 +36,22 @@ function fixture(): CriticalPathAnalysis {
     ],
     anomalies: [
       {
+        id: 'io_candidate',
         severity: 'warning',
-        title: '等待链涉及 IO/page-cache 候选',
-        detail: 'critical path 中出现 io_wait。',
-        evidence: ['io_wait=true'],
+        title: '',
+        detail: '',
+        evidenceItems: [{kind: 'text', text: 'io_wait=true'}],
+        evidence: [],
       },
     ],
-    summary: '选中 task 的外部等待占比较高。',
-    recommendations: ['排查选中区间附近的同步 I/O。'],
-    warnings: ['critical path 被截断。'],
+    summary: '',
+    recommendationIds: ['inspect_io'],
+    recommendations: [],
+    warningCodes: [],
+    warnings: [],
     rawRows: 1,
     truncated: false,
-  } as CriticalPathAnalysis;
+  }, 'zh-CN');
 }
 
 describe('criticalPathAiSummary localization', () => {
@@ -74,7 +79,8 @@ describe('criticalPathAiSummary localization', () => {
           bestCaseDurationMs: 10,
           maxSavingMs: 40,
           upperBoundMs: 10,
-          note: 'best case',
+          noteCode: 'best_case_only',
+          note: '',
         },
         frameImpacts: [],
         hypotheses: [],
@@ -99,9 +105,11 @@ describe('criticalPathAiSummary localization', () => {
       externalBlockingPercentage: 0,
       moduleBreakdown: [],
       anomalies: [{
+        id: 'no_waiting_time',
         severity: 'info',
-        title: '选区内没有等待时间',
-        detail: '选中区间内该线程没有 Sleeping / Uninterruptible / Runnable 等待状态，没有等待链可分析。',
+        title: '',
+        detail: '',
+        evidenceItems: [],
         evidence: [],
       }],
     };

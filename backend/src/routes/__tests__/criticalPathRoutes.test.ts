@@ -16,6 +16,7 @@ import {summarizeCriticalPathWithAi} from '../../services/criticalPathAiSummary'
 import {CriticalPathInputError, analyzeCriticalPath, type CriticalPathAnalysis} from '../../services/criticalPathAnalyzer';
 import {readTraceMetadataForContext} from '../../services/traceMetadataStore';
 import {getTraceProcessorService} from '../../services/traceProcessorService';
+import {renderCriticalPathAnalysis} from '../../services/criticalPathLocalization';
 
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: jest.fn(),
@@ -79,7 +80,7 @@ function makeApp(): express.Express {
 }
 
 function analysisFixture(): CriticalPathAnalysis {
-  return {
+  return renderCriticalPathAnalysis({
     available: true,
     task: {
       threadStateId: 1,
@@ -98,8 +99,10 @@ function analysisFixture(): CriticalPathAnalysis {
     wakeupChain: [],
     moduleBreakdown: [],
     anomalies: [],
-    summary: '选中 task 的外部等待占比较高。',
+    summary: '',
+    recommendationIds: [],
     recommendations: [],
+    warningCodes: [],
     warnings: [],
     rawRows: 1,
     truncated: false,
@@ -110,13 +113,14 @@ function analysisFixture(): CriticalPathAnalysis {
         bestCaseDurationMs: 20,
         maxSavingMs: 30,
         upperBoundMs: 20,
+        noteCode: 'best_case_only',
         note: '',
       },
       frameImpacts: [],
       hypotheses: [],
       warnings: [],
     },
-  } as unknown as CriticalPathAnalysis;
+  }, 'zh-CN');
 }
 
 function codedError(message: string, code: string): Error {

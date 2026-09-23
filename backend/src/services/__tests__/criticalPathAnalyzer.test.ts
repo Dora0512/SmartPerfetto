@@ -159,7 +159,8 @@ describe('critical path analyzer', () => {
     expect(analysis.unavailableReason).toBe('no_critical_path_stack');
     expect(analysis.anomalies[0].title).toBe('没有取到 critical path 等待链');
     expect(analysis.directWaker).toBeNull();
-    expect(analysis.warnings).toContain('no recorded waker on the wakeup row (waker_utid is NULL)');
+    expect(analysis.warningCodes).toContainEqual({code: 'no_recorded_waker'});
+    expect(analysis.warnings).toContain('唤醒行上没有记录 waker（waker_utid 为 NULL）');
   });
 
   it('takes IRQ context from the wakeup row only', async () => {
@@ -180,7 +181,7 @@ describe('critical path analyzer', () => {
     );
     const irqAnalysis = await analyzeCriticalPath(irq.tp, 'trace-1', {threadStateId: 104});
     expect(irqAnalysis.directWaker).toMatchObject({irqContext: true, kind: 'irq', utid: 5});
-    expect(irqAnalysis.directWaker?.hints).toContain('woken in IRQ context (irq_context=1 on the wakeup row)');
+    expect(irqAnalysis.directWaker?.hintCodes).toContain('irq_wakeup');
     expect(irqAnalysis.task.waker?.interruptContext).toBe(true);
 
     // The waker's own row carries irq_context=1; the wakeup itself was not in IRQ context.
@@ -253,7 +254,7 @@ describe('critical path analyzer', () => {
     expect(stackCalls(sqls)[0]).toContain('_critical_path_stack(1, 6000000000, 44000000, 1, 1, 0, 1)');
     // waker_id is NULL on the wakeup row; the waker is still named through waker_utid.
     expect(analysis.directWaker).toMatchObject({utid: 2, threadName: 'binder:system', kind: 'thread'});
-    expect(analysis.directWaker?.hints).toContain('resolved for the longest waiting slice in the window');
+    expect(analysis.directWaker?.hintCodes).toContain('range_longest_waiting_slice');
     expect(analysis.task.waker?.threadName).toBe('binder:system');
   });
 
@@ -321,7 +322,8 @@ describe('critical path analyzer', () => {
     expect(counterfactual?.bestCaseDurationMs).toBeCloseTo(8, 1);
     expect(counterfactual?.maxSavingMs).toBeCloseTo(22, 1);
     expect(counterfactual?.upperBoundMs).toBeCloseTo(8, 1);
-    expect(counterfactual?.note).toMatch(/BEST CASE/);
+    expect(counterfactual?.noteCode).toBe('best_case_only');
+    expect(counterfactual?.note).toMatch(/仅为最好情况/);
   });
 });
 
@@ -650,7 +652,7 @@ describe('critical path analyzer truncation and recursion', () => {
     const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 151, maxSegments: 20, recursionDepth: 1});
 
     expect(analysis.wakeupChain[0].children).toHaveLength(20);
-    expect(analysis.warnings).toContain('critical path recursion for utid 100 was cut at 20 segments');
+    expect(analysis.warningCodes).toContainEqual({code: 'recursion_cut', params: {utid: 100, cap: 20}});
   });
 
   it('warns when the recursion budget stops an expansion and when a recursion stack query fails', async () => {
@@ -678,9 +680,7 @@ describe('critical path analyzer truncation and recursion', () => {
 
     const budgetAnalysis = await analyzeCriticalPath(budget.tp, 'trace-1', {threadStateId: 160, segmentBudget: 4});
 
-    expect(budgetAnalysis.warnings).toContain(
-      'critical path recursion stopped at the segment budget (4); some long segments were not expanded'
-    );
+    expect(budgetAnalysis.warningCodes).toContainEqual({code: 'recursion_budget', params: {budget: 4}});
 
     const failing = sqliteTraceProcessor(taskSetup(161, 50000, 40), {rules: [
       {
@@ -695,7 +695,8 @@ describe('critical path analyzer truncation and recursion', () => {
     const failingAnalysis = await analyzeCriticalPath(failing.tp, 'trace-1', {threadStateId: 161});
 
     expect(failingAnalysis.available).toBe(true);
-    expect(failingAnalysis.warnings).toContain('critical path recursion failed for utid 100: stack exploded');
+    expect(failingAnalysis.warningCodes).toContainEqual(
+      {code: 'recursion_failed', params: {utid: 100, message: 'stack exploded'}});
   });
 });
 
@@ -726,7 +727,9 @@ describe('critical path analyzer warnings and input errors', () => {
     expect(sqls.some((sql) => /FROM thread WHERE utid IN/.test(sql))).toBe(false);
     expect(analysis.semanticSources?.gc).toBe('empty');
     expect(analysis.semanticSources?.monitor).toBe('sql_error');
-    expect(analysis.warnings.filter((warning) => warning === 'schema mismatch: no such column: mc.bogus')).toHaveLength(1);
+    expect(analysis.warningCodes.filter((warning) => warning.code === 'schema_mismatch')).toEqual([
+      {code: 'schema_mismatch', params: {message: 'no such column: mc.bogus'}},
+    ]);
   });
 
   it('stops at the next stage when the signal aborts, and rethrows the cancellation', async () => {
@@ -815,14 +818,14 @@ describe('resolveDirectWaker', () => {
     for (const threadStateId of [1, 3, 5]) {
       const result = await resolveDirectWaker(tp, 'trace-1', {threadStateId});
       expect(result.hop).toBeNull();
-      expect(result.warnings).toEqual(['no recorded waker on the wakeup row (waker_utid is NULL)']);
+      expect(result.warnings).toEqual([{code: 'no_recorded_waker'}]);
     }
   });
 
   it('reports a missing row as unavailable', async () => {
     const result = await resolveDirectWaker(service(`(1, 1, 100, 50, 'S', NULL, NULL, NULL)`), 'trace-1', {threadStateId: 42});
 
-    expect(result).toEqual({hop: null, warnings: ['thread_state 42 not found']});
+    expect(result).toEqual({hop: null, warnings: [{code: 'thread_state_not_found', params: {id: 42}}]});
   });
 });
 

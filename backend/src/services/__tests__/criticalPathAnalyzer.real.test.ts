@@ -11,7 +11,6 @@
 
 import {afterEach, describe, expect, it, jest} from '@jest/globals';
 import fs from 'fs';
-import path from 'path';
 import {randomUUID} from 'crypto';
 import {WorkingTraceProcessor} from '../workingTraceProcessor';
 import type {TraceProcessorService} from '../traceProcessorService';
@@ -21,6 +20,7 @@ import {
   CriticalPathInputError,
   type CriticalPathAnalysis,
 } from '../criticalPathAnalyzer';
+import {CRITICAL_PATH_HYPOTHESIS_IDS} from '../criticalPathText';
 
 jest.setTimeout(120_000);
 const processors: WorkingTraceProcessor[] = [];
@@ -52,7 +52,6 @@ const UNPRODUCIBLE_HYPOTHESES = [
 // nothing; every other hypothesis re-selects the evidence that produced it.
 const CLAIM_ONLY_HYPOTHESES = new Set(['h-binder-server-gc']);
 const UNAVAILABLE_REASONS = ['task_state_running', 'no_critical_path_stack', 'no_waiting_time'];
-const RANGE_WAKER_HINT = 'resolved for the longest waiting slice in the window';
 // Names a stdlib_missing warning must mention: `INCLUDE <module> failed` or
 // `stdlib table missing: ... <table> ...`.
 const SOURCE_STDLIB_NAMES: Record<string, string[]> = {
@@ -266,7 +265,7 @@ async function runRange(ctx: TraceContext, candidate: Candidate): Promise<void> 
   if (!analysis.available && !UNAVAILABLE_REASONS.includes(analysis.unavailableReason ?? '')) {
     ctx.problems.push(`${ctx.selector} ${where}: unavailable without a C5 reason (${analysis.unavailableReason})`);
   }
-  if (analysis.directWaker && !analysis.directWaker.hints.includes(RANGE_WAKER_HINT)) {
+  if (analysis.directWaker && !analysis.directWaker.hintCodes.includes('range_longest_waiting_slice')) {
     ctx.problems.push(`${ctx.selector} ${where}: range waker lacks the longest-waiting-slice hint`);
   }
   await checkAnalysis(ctx, analysis, where);
@@ -337,9 +336,9 @@ describe('critical-path engine on the pinned trace processor', () => {
 
   it('produces every hypothesis id the corpus supports and names the missing input for the rest', () => {
     expect([...observed.traces].sort()).toEqual(TRACES.map(trace => trace.selector).sort());
-    const source = fs.readFileSync(path.resolve(__dirname, '../criticalPathQuantify.ts'), 'utf8');
-    const emitted = [...source.matchAll(/\bid: '(h-[a-z-]+)'/g)].map(match => match[1]).sort();
-    expect(emitted).toEqual([...REQUIRED_HYPOTHESES, ...UNPRODUCIBLE_HYPOTHESES].sort());
+    // Every id the engine can emit is either required from the corpus or
+    // named with the input no trace carries.
+    expect([...CRITICAL_PATH_HYPOTHESIS_IDS].sort()).toEqual([...REQUIRED_HYPOTHESES, ...UNPRODUCIBLE_HYPOTHESES].sort());
 
     const produced = [...observed.produced.keys()].sort();
     expect(produced).toEqual(REQUIRED_HYPOTHESES);

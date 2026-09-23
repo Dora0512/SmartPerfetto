@@ -29,6 +29,7 @@ import {
   toOptionalString,
   type QueryRow,
 } from '../utils/traceProcessorRowUtils';
+import {errorLine, type CriticalPathWarning} from './criticalPathText';
 import {composeFragmentSql} from './skillEngine/skillFragments';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
@@ -185,13 +186,13 @@ export interface SemanticEnrichment {
   segments: Map<string, SegmentSemantics>;
   sources: SemanticSources;
   /** Each loader warning once. */
-  warnings: string[];
+  warnings: CriticalPathWarning[];
 }
 
 interface QueryAttempt<T> {
   status: SemanticSourceStatus;
   rows: T[];
-  warning?: string;
+  warning?: CriticalPathWarning;
 }
 
 const STDLIB_MODULES = {
@@ -210,24 +211,24 @@ const STDLIB_MODULES = {
 const ROWS_PER_SEGMENT = {binder: 8, monitor: 6, io: 4, gc: 3, cpu: 6, wakeSource: 6} as const;
 export const LOADER_ROW_CEILING = 4000;
 
-function classifyError(error: unknown, module?: string): {status: SemanticSourceStatus; warning: string} {
-  const message = error instanceof Error ? error.message : String(error);
+function classifyError(error: unknown, module?: string): {status: SemanticSourceStatus; warning: CriticalPathWarning} {
+  const message = errorLine(error);
   // Only an unknown module means the stdlib lacks it; any other INCLUDE
   // failure (a table or column the module needs) is classified like a query.
   if (module !== undefined && /unknown module/i.test(message)) {
-    return {status: 'stdlib_missing', warning: `INCLUDE ${module} failed`};
+    return {status: 'stdlib_missing', warning: {code: 'include_failed', params: {module}}};
   }
   // Perfetto trace_processor returns "no such table: X" / "no such column: Y"
   if (/no such table/i.test(message)) {
-    return {status: 'stdlib_missing', warning: `stdlib table missing: ${message.split('\n')[0]}`};
+    return {status: 'stdlib_missing', warning: {code: 'stdlib_table_missing', params: {message}}};
   }
   if (/no such column|no such function/i.test(message)) {
-    return {status: 'sql_error', warning: `schema mismatch: ${message.split('\n')[0]}`};
+    return {status: 'sql_error', warning: {code: 'schema_mismatch', params: {message}}};
   }
-  return {status: 'sql_error', warning: `query failed: ${message.split('\n')[0]}`};
+  return {status: 'sql_error', warning: {code: 'query_failed', params: {message}}};
 }
 
-type IncludeResult = {ok: true} | {ok: false; status: SemanticSourceStatus; warning: string};
+type IncludeResult = {ok: true} | {ok: false; status: SemanticSourceStatus; warning: CriticalPathWarning};
 
 async function includeModule(
   tp: TraceProcessorService,
@@ -528,11 +529,12 @@ export async function enrichSegmentsWithSemantics(
   const sources = Object.fromEntries(
     Object.entries(loaders).map(([name, loader]) => [name, loader.status])
   ) as SemanticSources;
-  const warnings = Array.from(new Set([
+  // Each distinct warning once (loaders can fail the same way).
+  const warnings = [...new Map([
     ...Object.values(loaders).flatMap((loader) => (loader.warning ? [loader.warning] : [])),
-    ...Object.entries(loaders).flatMap(([name, loader]) =>
-      loader.capped ? [`${name} evidence reached the ${LOADER_ROW_CEILING}-row limit; the shortest segments may lack it`] : []),
-  ]));
+    ...Object.entries(loaders).flatMap(([name, loader]): CriticalPathWarning[] =>
+      loader.capped ? [{code: 'loader_row_cap', params: {source: name, cap: LOADER_ROW_CEILING}}] : []),
+  ].map((warning) => [JSON.stringify(warning), warning])).values()];
 
   const distribute = <T>(rows: Attributed<T>[], list: (sem: SegmentSemantics) => T[]): void => {
     for (const {segmentIdx, summary} of rows) {
