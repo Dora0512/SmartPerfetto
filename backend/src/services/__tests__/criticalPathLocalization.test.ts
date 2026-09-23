@@ -98,7 +98,7 @@ describe('criticalPathLocalization', () => {
     const fixture: CriticalPathAnalysis = {
       ...structuredClone(analysis),
       warnings: [
-        'critical path 超过 2000 个链路段上限，已截断为前 170 个链路段（展示前 160 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。',
+        'critical path 超过 5000 个原始链路段上限，已截断（合并后 170 段，展示前 160 段）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。',
         'critical path 共 180 个链路段，仅展示前 160 个；阻塞时长、模块占比与反事实估计按完整链路计算。',
         'no recorded waker on the wakeup row (waker_utid is NULL)',
         'critical path recursion stopped at the segment budget (16); some long segments were not expanded',
@@ -141,7 +141,7 @@ describe('criticalPathLocalization', () => {
 
     const en = projectCriticalPathAnalysis(fixture, 'en');
     expect(en.warnings.slice(0, 2)).toEqual([
-      'The critical path exceeded the 2000-segment limit and was cut to the first 170 chain segments (160 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
+      'The critical path exceeded the 5000 stack-segment limit and was cut (170 segments once merged, 160 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
       'The critical path has 180 chain segments; only the first 160 are shown. Blocking time, module shares and the counterfactual cover the full chain.',
     ]);
     for (const value of [...en.warnings, ...(en.directWaker?.hints ?? [])]) {

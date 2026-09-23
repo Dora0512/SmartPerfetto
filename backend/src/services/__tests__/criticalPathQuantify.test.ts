@@ -46,7 +46,7 @@ const BINDER = semantics({utid: 40, upid: 8}, {
 });
 const MONITOR = semantics({utid: 41, upid: 8}, {
   monitorContention: [{
-    rowId: 5, shortBlockedMethod: 'a()', shortBlockingMethod: 'b()', blockedThreadName: 'worker',
+    rowId: 5, side: 'blocked', shortBlockedMethod: 'a()', shortBlockingMethod: 'b()', blockedThreadName: 'worker',
     blockingThreadName: 'other', blockedTid: 1041, blockingTid: 1060, blockedUtid: 41, blockingUtid: 60,
     durMs: 3, eventDurMs: 12, isBlockedThreadMain: false,
   }],
@@ -163,6 +163,18 @@ describe('criticalPathQuantify hypotheses', () => {
       expect(hypothesis.statement).toContain('clipped to the segment');
       expect(hypothesis.statement).toContain(`[${100 * MS}, ${110 * MS})`);
     }
+  });
+
+  it('names the owner and its waiter when the contention was attached from the owner side', () => {
+    const owner = semantics({utid: 60, upid: 8}, {
+      monitorContention: [{...MONITOR.monitorContention[0], side: 'owner'}],
+    });
+
+    const [hypothesis] = buildHypotheses([owner]);
+
+    expect(hypothesis.id).toBe('h-monitor-blocking');
+    expect(hypothesis.statement).toContain('utid=60 holds the Java monitor (contention row id=5) that utid=41 waits on');
+    expect(hypothesis.verificationSql).toContain('WHERE id = 5;');
   });
 
   it('thresholds on the time clipped to the segment, not the whole event', () => {

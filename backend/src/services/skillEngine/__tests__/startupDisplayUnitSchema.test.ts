@@ -672,7 +672,7 @@ describe('nullable thread-state evidence', () => {
     const db = fixture();
     try {
       const skill = loadSkill('atomic/startup_main_thread_states_in_range.skill.yaml');
-      const rows = db.prepare(render(skill.sql, common)).all() as Array<Record<string, any>>;
+      const rows = db.prepare(render(withFragments(skill), common)).all() as Array<Record<string, any>>;
       expectStateRows(rows, 'blocked_functions');
     } finally { db.close(); }
   });
@@ -681,7 +681,7 @@ describe('nullable thread-state evidence', () => {
     const db = fixture();
     try {
       const skill = loadSkill('atomic/main_thread_states_in_range.skill.yaml');
-      const rows = db.prepare(render(skill.sql, common)).all() as Array<Record<string, any>>;
+      const rows = db.prepare(render(withFragments(skill), common)).all() as Array<Record<string, any>>;
       expectStateRows(rows, 'blocked_function');
     } finally { db.close(); }
   });
@@ -826,6 +826,9 @@ describe('startup primitive unit authority', () => {
     const columns = skill.display.columns.map((item: any) => item.name);
     const row = skill.display.columns.map((item: any) => item.type === 'string' ? 'observed' : 2);
     const executor = createSkillExecutor({query: async () => ({columns, rows: [row], durationMs: 1})});
+    // The Skill's own fragments, as the registry would supply them.
+    executor.setFragmentRegistry(new Map((skill.sql_fragments ?? []).map((fragment: string) =>
+      [fragment, fs.readFileSync(path.join(process.cwd(), 'skills', fragment), 'utf8').trim()])));
     executor.registerSkill(normalizeSkillDefinition(skill, `${name}.skill.yaml`)!);
     const params = {package: 'example.app', startup_id: 1, startup_type: 'cold', start_ts: 0, end_ts: 10000000, min_dur_ns: 0, top_k: 15};
     let executedSkill = name;

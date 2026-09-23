@@ -249,6 +249,7 @@ steps:
     sql_fragments:
       - fragments/thread_role.sql
       - fragments/sleep_wake_source.sql
+      - fragments/sleep_wake_source_labels.sql
     sql: |
       -- Perfetto 只把 waker_utid 记录在唤醒后的第一个 R/R+ 行上；S/D 等待行自身的
       -- waker_utid 为 NULL。回连后继行解析唤醒者的逻辑现在由

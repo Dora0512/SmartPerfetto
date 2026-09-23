@@ -456,6 +456,34 @@ describe('critical path analyzer module classification', () => {
     expect(analysis.moduleBreakdown.reduce((sum, item) => sum + item.segmentCount, 0)).toBe(2);
   });
 
+  it('produces h-monitor-blocking when the chain runs through the lock owner of the task\'s wait', async () => {
+    // The task (thread 1) waits [13000, 13010) for a monitor thread 2 holds;
+    // the chain is thread 2 running while it holds the lock. Thread 3 waits on
+    // the same owner and must not be attached.
+    const {tp} = sqliteTraceProcessor(
+      `${BASE_THREADS}
+      INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (135, 1, ${13000 * MS}, ${10 * MS}, 'S');
+      INSERT INTO android_monitor_contention VALUES
+        (77, ${13000 * MS}, ${10 * MS}, 1, 2, 1001, 3001, 'main', 'binder:system', 'wait()', 'hold()', 1),
+        (78, ${13001 * MS}, ${8 * MS}, 3, 2, 1003, 3001, 'RenderThread', 'binder:system', 'other()', 'hold()', 0);
+      `,
+      {rules: [{
+        match: /FROM _critical_path_stack/i,
+        responder: () => stackResult([
+          {ts: 13000 * MS, dur: 10 * MS, utid: 2, tid: 3001, upid: 8, state: 'Running', thread: 'binder:system', process: 'system_server'},
+        ]),
+      }]}
+    );
+
+    const analysis = await analyzeCriticalPath(tp, 'trace-1', {threadStateId: 135, recursionEnabled: false});
+
+    expect(analysis.wakeupChain[0].semantics?.monitorContention).toEqual([
+      expect.objectContaining({rowId: 77, side: 'owner', blockedUtid: 1, durMs: 10}),
+    ]);
+    expect(analysis.quantification?.hypotheses.map((hypothesis) => hypothesis.id)).toContain('h-monitor-blocking');
+    expect(analysis.anomalies.map((anomaly) => anomaly.title)).toContain('等待链涉及 Java 锁竞争');
+  });
+
   it('raises the CPU-contention anomaly only from typed competition, not from a Running blocker', async () => {
     const running = sqliteTraceProcessor(
       `${BASE_THREADS}
@@ -480,6 +508,7 @@ describe('critical path analyzer module classification', () => {
         (132, 2, ${12000 * MS}, ${10 * MS}, 'R', NULL),
         (133, 2, ${12010 * MS}, ${5 * MS}, 'Running', 3),
         (134, 3, ${12002 * MS}, ${7 * MS}, 'Running', 3);
+      INSERT INTO sched(ts, dur, cpu, utid) VALUES (${12002 * MS}, ${7 * MS}, 3, 3), (${12010 * MS}, ${5 * MS}, 3, 2);
       `,
       {rules: [
         {
@@ -553,7 +582,7 @@ describe('critical path analyzer truncation and recursion', () => {
     expect(analysis.chainSegmentCount).toBe(100);
     expect(analysis.blockingMs).toBeCloseTo(100, 2);
     expect(analysis.warnings).toContain(
-      'critical path 超过 100 个链路段上限，已截断为前 100 个链路段（展示前 20 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。'
+      'critical path 超过 100 个原始链路段上限，已截断（合并后 100 段，展示前 20 段）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。'
     );
   });
 

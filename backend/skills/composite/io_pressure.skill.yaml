@@ -98,6 +98,8 @@ steps:
     type: atomic
     name: "数据检测"
     display: false
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       SELECT
         CASE WHEN EXISTS (
@@ -105,19 +107,7 @@ steps:
           WHERE ts.state IN ('D', 'DK')
             AND (
               COALESCE(ts.io_wait, 0) = 1
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+              OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
             )
             AND ts.dur > ${min_duration_ms|1} * 1e6
             AND (${start_ts} IS NULL OR ts.ts + ts.dur > ${start_ts})
@@ -129,19 +119,7 @@ steps:
           WHERE ts.state IN ('D', 'DK')
             AND (
               COALESCE(ts.io_wait, 0) = 1
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-              OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+              OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
             )
             AND ts.dur > ${long_io_threshold_ms|10} * 1e6
             AND (${start_ts} IS NULL OR ts.ts + ts.dur > ${start_ts})
@@ -223,6 +201,8 @@ steps:
         - name: severity
           label: "严重度"
           type: string
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       WITH io_wait_states AS (
         SELECT
@@ -231,19 +211,7 @@ steps:
         WHERE ts.state IN ('D', 'DK')
           AND (
             COALESCE(ts.io_wait, 0) = 1
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+            OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
           )
           AND ts.dur > ${min_duration_ms|1} * 1e6
           AND (${start_ts} IS NULL OR ts.ts + ts.dur > ${start_ts})
@@ -313,6 +281,8 @@ steps:
         - name: pct_of_total
           label: "占比(%)"
           type: percentage
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       WITH io_by_process AS (
         SELECT
@@ -326,19 +296,7 @@ steps:
         WHERE ts.state IN ('D', 'DK')
           AND (
             COALESCE(ts.io_wait, 0) = 1
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+            OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
           )
           AND ts.dur > ${min_duration_ms|1} * 1e6
           AND ('${package}' = '' OR ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*'))
@@ -410,6 +368,8 @@ steps:
         - name: category
           label: "分类"
           type: string
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       SELECT
         COALESCE(blocked_function, 'unknown') as blocked_function,
@@ -428,19 +388,7 @@ steps:
       WHERE state IN ('D', 'DK')
         AND (
           COALESCE(io_wait, 0) = 1
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%filemap%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%page_fault%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%wait_on_page%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%folio_wait%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%io_schedule%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%submit_bio%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%blk_%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%ext4%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%f2fs%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%erofs%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%ufshcd%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%mmc_%'
-          OR LOWER(COALESCE(blocked_function, '')) LIKE '%dm_%'
+          OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(blocked_function, '')) GLOB f.pattern)
         )
         AND dur > ${min_duration_ms|1} * 1e6
         AND blocked_function IS NOT NULL
@@ -487,6 +435,8 @@ steps:
           type: duration
           format: duration_ms
           unit: ms
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       SELECT
         t.name as thread_name,
@@ -502,19 +452,7 @@ steps:
       WHERE ts.state IN ('D', 'DK')
         AND (
           COALESCE(ts.io_wait, 0) = 1
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+          OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
         )
         AND ts.dur > ${min_duration_ms|1} * 1e6
         AND ('${package}' = '' OR ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*'))
@@ -556,6 +494,8 @@ steps:
         - name: blocked_function
           label: "阻塞函数"
           type: string
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       SELECT
         printf('%d', ts.ts) as ts,
@@ -570,19 +510,7 @@ steps:
       WHERE ts.state IN ('D', 'DK')
         AND (
           COALESCE(ts.io_wait, 0) = 1
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-          OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+          OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
         )
         AND ts.dur > ${long_io_threshold_ms|10} * 1e6
         AND ('${package}' = '' OR ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*'))
@@ -644,6 +572,8 @@ steps:
         - name: suggestion
           label: "建议"
           type: string
+    sql_fragments:
+      - fragments/io_blocked_function_families.sql
     sql: |
       WITH io_wait_states AS (
         SELECT
@@ -654,19 +584,7 @@ steps:
         WHERE ts.state IN ('D', 'DK')
           AND (
             COALESCE(ts.io_wait, 0) = 1
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%filemap%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%page_fault%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%wait_on_page%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%folio_wait%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%io_schedule%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%submit_bio%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%blk_%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ext4%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%f2fs%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%erofs%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%ufshcd%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%mmc_%'
-            OR LOWER(COALESCE(ts.blocked_function, '')) LIKE '%dm_%'
+            OR EXISTS (SELECT 1 FROM io_blocked_function_families f WHERE LOWER(COALESCE(ts.blocked_function, '')) GLOB f.pattern)
           )
           AND ts.dur > ${min_duration_ms|1} * 1e6
           AND (${start_ts} IS NULL OR ts.ts + ts.dur > ${start_ts})

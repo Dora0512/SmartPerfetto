@@ -20,7 +20,6 @@ import {
   analyzeCriticalPath,
   CriticalPathInputError,
   type CriticalPathAnalysis,
-  type CriticalPathSegment,
 } from '../criticalPathAnalyzer';
 
 jest.setTimeout(120_000);
@@ -39,21 +38,16 @@ const TRACES = [
 // listed with the input no available trace carries; the final test enforces
 // both. If an "unproducible" id starts appearing, the corpus now carries its
 // input: move it to REQUIRED_HYPOTHESES.
-const REQUIRED_HYPOTHESES = ['h-binder-server-gc', 'h-cpu-competition', 'h-gc-stall'];
+// h-monitor-blocking is produced from the lock owner's side: while a thread
+// waits for a monitor the chain follows the owner, whose segment now carries
+// the contention of the wait it explains.
+const REQUIRED_HYPOTHESES = ['h-binder-server-gc', 'h-cpu-competition', 'h-gc-stall', 'h-monitor-blocking'];
 const UNPRODUCIBLE_HYPOTHESES = [
   // Missing input: a D/DK thread_state row with io_wait = 1 or a
   // blocked_function (sched_blocked_reason). No corpus trace records either;
   // the per-trace count is asserted to be zero.
   'h-io-wait',
-  // Missing input: a monitor contention whose blocked thread is a chain
-  // segment and overlaps that segment for >= MONITOR_THRESHOLD_MS. While the
-  // blocked thread waits, the chain follows the lock owner, so the clipped
-  // overlap stays below the threshold on every run, including the runs picked
-  // because the waker was monitor-blocked; the observed maximum is asserted.
-  'h-monitor-blocking',
 ];
-// H2's threshold in criticalPathQuantify.ts.
-const MONITOR_THRESHOLD_MS = 2;
 // H1 checks a further claim (the server process ran GC), so its SQL may return
 // nothing; every other hypothesis re-selects the evidence that produced it.
 const CLAIM_ONLY_HYPOTHESES = new Set(['h-binder-server-gc']);
@@ -75,17 +69,12 @@ const SOURCE_STDLIB_NAMES: Record<string, string[]> = {
 const MAX_PROBE_SEGMENTS = 100;
 const MAX_STACK_ROWS = 3200;
 const MAX_POOL_RUNS = 8;
-// The h-monitor-blocking pool cannot produce its target (see
-// UNPRODUCIBLE_HYPOTHESES); its runs only add maxMonitorOverlapMs samples from
-// monitor-blocked wakers, so it stops after this many.
-const MONITOR_SAMPLE_RUNS = 2;
 const RANGE_MARGIN_NS = 1_000_000;
 
 const observed = {
   traces: new Set<string>(),
   produced: new Map<string, Set<string>>(),
   ioInputRows: {} as Record<string, number>,
-  maxMonitorOverlapMs: 0,
 };
 
 interface Candidate {id: number; utid: number; ts: number; dur: number; wakerUtid: number}
@@ -165,7 +154,7 @@ const EVIDENCE_POOLS: Array<{target: string; module?: string; filter: string; ma
     SELECT 1 FROM android_binder_txns AS b
     WHERE b.client_utid = w.utid AND b.is_sync
       AND ${overlapAtLeast('b.client_ts', 'b.client_ts + b.client_dur', 4_000_000)})`},
-  {target: 'h-monitor-blocking', module: 'android.monitor_contention', maxRuns: MONITOR_SAMPLE_RUNS, filter: `EXISTS (
+  {target: 'h-monitor-blocking', module: 'android.monitor_contention', filter: `EXISTS (
     SELECT 1 FROM android_monitor_contention AS m
     WHERE m.blocked_utid = w.utid AND ${overlapAtLeast('m.ts', 'm.ts + m.dur', 2_000_000)})`},
 ];
@@ -191,10 +180,6 @@ async function stackFits(ctx: TraceContext, candidate: Candidate): Promise<boole
   const fits = keys >= 1 && keys <= MAX_PROBE_SEGMENTS && rows <= MAX_STACK_ROWS;
   ctx.fits.set(candidate.id, fits);
   return fits;
-}
-
-function flatten(segments: CriticalPathSegment[]): CriticalPathSegment[] {
-  return segments.flatMap(segment => [segment, ...flatten(segment.children ?? [])]);
 }
 
 async function verificationSqlProblems(processor: WorkingTraceProcessor, id: string, text: string): Promise<string[]> {
@@ -255,12 +240,6 @@ async function checkAnalysis(ctx: TraceContext, analysis: CriticalPathAnalysis, 
     if (counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs ||
       counterfactual.upperBoundMs !== counterfactual.bestCaseDurationMs) {
       problem(`counterfactual fields disagree: ${JSON.stringify(counterfactual)}`);
-    }
-  }
-
-  for (const segment of flatten(analysis.wakeupChain)) {
-    for (const contention of segment.semantics?.monitorContention ?? []) {
-      observed.maxMonitorOverlapMs = Math.max(observed.maxMonitorOverlapMs, contention.durMs);
     }
   }
 }
@@ -366,7 +345,5 @@ describe('critical-path engine on the pinned trace processor', () => {
     expect(produced).toEqual(REQUIRED_HYPOTHESES);
     // h-io-wait: no trace carries its input.
     expect(observed.ioInputRows).toEqual(Object.fromEntries(TRACES.map(trace => [trace.selector, 0])));
-    // h-monitor-blocking: no run met its threshold.
-    expect(observed.maxMonitorOverlapMs).toBeLessThan(MONITOR_THRESHOLD_MS);
   });
 });

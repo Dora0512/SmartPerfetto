@@ -770,7 +770,7 @@ The body takes `threadStateId`, or `utid` + `startTs` + `dur` (optional
 Success returns `{success: true, analysis, presentationAnalysis, aiSummary}`.
 Blocking time, shares, module attribution and `chainSegmentCount` /
 `chainWaitMs` / `waitClassTotalsMs` cover the whole top-level wait chain (up to
-2000 segments; beyond that `truncated` is true and `warnings` says the totals
+5000 stack segments; beyond that `truncated` is true and `warnings` says the totals
 cover only the part before the cut); recursion children are not counted again.
 `wakeupChain` is only the displayed prefix (`maxSegments`). Durations are summed
 in ns before conversion, so the external share cannot exceed 100% by rounding.

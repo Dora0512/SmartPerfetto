@@ -98,6 +98,33 @@ sql_fragments:
   backend/skills/fragments/sleep_wake_source.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/sleep_wake_source.sql
+  backend/skills/fragments/sleep_wake_source_labels.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/sleep_wake_source_labels.sql
+  backend/skills/fragments/io_blocked_function_families.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/io_blocked_function_families.sql
+  backend/skills/fragments/segment_binder_txns.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_monitor_contention.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_io_signals.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_gc_events.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_cpu_competition.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_cpu_frequency.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
+  backend/skills/fragments/segment_wake_sources.sql:
+    disposition: product-only
+    reason: SmartPerfetto critical-path engine attribution over its product-specific segment_windows input
   backend/skills/fragments/thread_states_quadrant.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/thread_states_quadrant.sql

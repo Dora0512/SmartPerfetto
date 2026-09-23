@@ -56,8 +56,9 @@ export interface CriticalPathAnalyzeOptions {
   recursionEnabled?: boolean;
   segmentBudget?: number;
   /**
-   * Most external segments read for the whole chain (totals, breakdown,
-   * anomalies). Beyond it the analysis is marked truncated and says so.
+   * Most critical-path stack segments (before adjacent rows of one thread are
+   * merged) read for the whole chain that totals, breakdown and anomalies use.
+   * Beyond it the analysis is marked truncated and says so.
    */
   maxChainSegments?: number;
   /** Cancels every query the analysis issues; checked between stages too. */
@@ -1224,8 +1225,13 @@ interface RecursionContext {
 /** Slice names kept per segment; the analysis shows at most this many. */
 const MAX_SLICES_PER_SEGMENT = 8;
 
-/** Default `maxChainSegments`: whole-chain segments read before the analysis is marked truncated. */
-const DEFAULT_MAX_CHAIN_SEGMENTS = 2000;
+/**
+ * Default `maxChainSegments`. Measured on the customer scroll trace: a 3 s main
+ * thread window has more than 5000 stack segments (911 once merged) and takes
+ * about 0.8 s end to end, most of it in `_critical_path_stack` itself, which
+ * does not depend on the cap.
+ */
+const DEFAULT_MAX_CHAIN_SEGMENTS = 5000;
 
 interface CriticalPathStack {
   rows: CriticalPathStackRow[];
@@ -1506,7 +1512,7 @@ export async function analyzeCriticalPath(
   const truncated = stack.truncated || chain.length > maxSegments;
   if (stack.truncated) {
     warnings.push(
-      `critical path 超过 ${maxChainSegments} 个链路段上限，已截断为前 ${chain.length} 个链路段（展示前 ${segments.length} 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。`
+      `critical path 超过 ${maxChainSegments} 个原始链路段上限，已截断（合并后 ${chain.length} 段，展示前 ${segments.length} 段）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。`
     );
   } else if (chain.length > maxSegments) {
     warnings.push(
@@ -1543,21 +1549,24 @@ export async function analyzeCriticalPath(
   // L3 — Semantic enrichment for ALL segments (whole top-level chain +
   // recursed children of the displayed prefix). tid/upid come from the stack
   // query's own thread join.
+  // Each segment explains a wait of the thread above it: the task for the
+  // top-level chain, the expanded segment's thread for its children.
   const flatSegments: CriticalPathSegment[] = [];
-  const collectFlat = (list: CriticalPathSegment[]): void => {
+  const semanticInputs: SemanticSegmentInput[] = [];
+  const collectFlat = (list: CriticalPathSegment[], waiterUtid: number): void => {
     for (const segment of list) {
       flatSegments.push(segment);
-      if (segment.children) collectFlat(segment.children);
+      semanticInputs.push({
+        ...segmentWindow(segment),
+        tid: segment.tid ?? null,
+        upid: segment.upid ?? null,
+        state: segment.state ?? null,
+        waiterUtid,
+      });
+      if (segment.children) collectFlat(segment.children, segment.utid);
     }
   };
-  collectFlat(chain);
-
-  const semanticInputs: SemanticSegmentInput[] = flatSegments.map((segment) => ({
-    ...segmentWindow(segment),
-    tid: segment.tid ?? null,
-    upid: segment.upid ?? null,
-    state: segment.state ?? null,
-  }));
+  collectFlat(chain, task.utid);
 
   throwIfTraceProcessorQueryCancelled(signal);
   const enrichment = await enrichSegmentsWithSemantics(

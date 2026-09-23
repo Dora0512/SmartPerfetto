@@ -28,9 +28,10 @@
 -- are lowercase, so a `Binder:*`-only rule classifies almost all of them as
 -- `other` and makes every binder wake read as an ordinary worker hand-off.
 --
--- Mirrored in TypeScript by THREAD_ROLE_PATTERNS in
--- backend/src/services/criticalPathSemantics.ts; the two are held equal by
--- backend/src/services/__tests__/threadRoleContract.test.ts.
+-- This is the only definition of the rules: the critical-path engine reads the
+-- roles through fragments/segment_wake_sources.sql rather than a copy, and
+-- backend/src/services/__tests__/threadRoleContract.test.ts executes the
+-- fragment to pin each role.
 thread_roles AS (
   SELECT t.utid, t.tid, t.name AS thread_name, t.upid,
     p.pid AS process_pid, p.name AS process_name,

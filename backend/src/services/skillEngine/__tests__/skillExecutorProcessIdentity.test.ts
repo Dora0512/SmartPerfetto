@@ -632,7 +632,7 @@ describe('SkillExecutor trusted exact UPID execution', () => {
 
   it('declares executable scope bindings on the migrated real YAML and fragment paths', () => {
     const skillsDir = path.resolve(__dirname, '../../../../skills');
-    const realFragments = new Map(['effective_target_processes.sql', 'target_threads.sql']
+    const realFragments = new Map(['effective_target_processes.sql', 'target_threads.sql', 'io_blocked_function_families.sql']
       .map(name => [`fragments/${name}`, fs.readFileSync(path.join(skillsDir, 'fragments', name), 'utf8')]));
     for (const name of ['process_slice_cpu_hotspots', 'main_thread_slices_in_range', 'main_thread_states_in_range',
       'app_frame_production', 'frame_pipeline_variance', 'process_identity_resolver']) {

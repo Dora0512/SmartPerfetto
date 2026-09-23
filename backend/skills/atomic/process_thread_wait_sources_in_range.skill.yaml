@@ -311,6 +311,7 @@ steps:
     sql_fragments:
       - fragments/thread_role.sql
       - fragments/sleep_wake_source.sql
+      - fragments/sleep_wake_source_labels.sql
     sql: |
       -- wait_class 是候选标签，不是根因：timer_or_device_wake 与
       -- network_receive_candidate 共享同一个 irq_context=1 信号，只靠线程角色区分。
@@ -412,6 +413,7 @@ steps:
     sql_fragments:
       - fragments/thread_role.sql
       - fragments/sleep_wake_source.sql
+      - fragments/sleep_wake_source_labels.sql
     sql: |
       -- 按原始等待时长排序；窗口只用来筛选重叠行，不改写 ts/dur，
       -- 否则跳转区间会与 trace 上的真实等待段不一致。
@@ -533,6 +535,7 @@ steps:
     sql_fragments:
       - fragments/thread_role.sql
       - fragments/sleep_wake_source.sql
+      - fragments/sleep_wake_source_labels.sql
     sql: |
       -- 只有"网络角色线程 + irq 唤醒 + 唤醒前 2ms 内本进程有 rx 包"三者同时成立，
       -- 才把候选升级为 trace_direct:packet_activity。时间相关仍然不是因果证明：

@@ -219,18 +219,24 @@ function buildHypotheses(semantics: SegmentSemantics[]): CriticalPathHypothesis[
     });
   }
 
-  // H2: Java monitor lock contention is the proximate cause.
+  // H2: Java monitor lock contention is the proximate cause. A chain segment
+  // usually carries it from the owner's side: while a thread waits for a lock
+  // the path follows the thread holding it.
   const longMonitor = rankBy(semantics, (sem) => sem.monitorContention, (mc) => mc.durMs).find(
     ({item: mc}) => mc.durMs >= 2
   );
   if (longMonitor) {
     const {sem, item: mc} = longMonitor;
+    const clipped =
+      `(clipped to the segment; the whole contention lasts ${mc.eventDurMs} ms); ` +
+      `verify the blocking thread's call chain via android_monitor_contention_chain.`;
     hypotheses.push({
       id: 'h-monitor-blocking',
-      statement:
-        `A Java monitor contention (row id=${mc.rowId}) blocks utid=${sem.utid} for ${mc.durMs} ms of its ` +
-        `critical-path segment ${window(sem)} (clipped to the segment; the whole contention lasts ${mc.eventDurMs} ms); ` +
-        `verify the blocking thread's call chain via android_monitor_contention_chain.`,
+      statement: mc.side === 'owner'
+        ? `utid=${sem.utid} holds the Java monitor (contention row id=${mc.rowId}) that utid=${mc.blockedUtid} waits ` +
+          `on for ${mc.durMs} ms of the owner's critical-path segment ${window(sem)} ${clipped}`
+        : `A Java monitor contention (row id=${mc.rowId}) blocks utid=${sem.utid} for ${mc.durMs} ms of its ` +
+          `critical-path segment ${window(sem)} ${clipped}`,
       strength: mc.isBlockedThreadMain ? 'strong' : 'weak',
       verificationSql:
         `INCLUDE PERFETTO MODULE android.monitor_contention;\n` +

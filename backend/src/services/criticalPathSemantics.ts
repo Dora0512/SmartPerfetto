@@ -11,6 +11,13 @@
 // attribution reads thread_state; `criticalPathAnalyzer.real.test.ts` runs
 // every query here on the pinned binary, so a renamed column fails a gate
 // rather than a comment.
+//
+// The attribution SQL itself lives in backend/skills/fragments/segment_*.sql
+// (plus the I/O family, thread-role and sleep wake-source fragments Skills
+// share): this module only binds the segment windows, composes the fragments
+// and maps rows. Every loader attaches an event to a segment on the half-open
+// overlap and reports it clipped to the segment (`durMs`), with the whole event
+// as `eventDurMs`.
 
 import {
   queryRows,
@@ -22,7 +29,7 @@ import {
   toOptionalString,
   type QueryRow,
 } from '../utils/traceProcessorRowUtils';
-import {classifyWaker} from './criticalPathWakerChain';
+import {composeFragmentSql} from './skillEngine/skillFragments';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
 
@@ -33,6 +40,13 @@ export interface SegmentInput {
   startTs: number;
   endTs: number;
   state?: string | null;
+  /**
+   * The thread whose wait this segment explains: the task for a top-level
+   * segment, the parent segment's thread for a recursion child. Monitor
+   * contention is attached from the owner's side only when its waiter is this
+   * thread.
+   */
+  waiterUtid?: number | null;
 }
 
 export type SemanticSourceStatus =
@@ -69,6 +83,8 @@ export interface BinderTxnSummary {
 
 export interface MonitorContentionSummary {
   rowId: number;
+  /** `blocked`: the segment's thread waited for the lock; `owner`: it held the lock its waiter waited for. */
+  side: 'blocked' | 'owner';
   shortBlockedMethod: string | null;
   shortBlockingMethod: string | null;
   blockedThreadName: string | null;
@@ -90,49 +106,9 @@ export interface IoSignal {
   ioWait: boolean;
 }
 
-// Android's common kernel emits sched_blocked_reason only for
-// TASK_UNINTERRUPTIBLE (android14-6.1 try_to_wake_up, android16-6.12
-// __schedule), so thread_state.blocked_function is NULL on every S row and the
-// I/O signals above can say nothing about an interruptible wait. Socket receive
-// and epoll waits are S. What is left for them is the wake source, which
-// Perfetto records on the first R/R+ row after the sleep.
-//
-// THREAD_ROLE_PATTERNS mirrors backend/skills/fragments/thread_role.sql rule for
-// rule; threadRoleContract.test.ts parses the SQL and fails if the two drift.
-// The `main` role is resolved from tid = pid (pid > 0) and is deliberately not
-// a name pattern, and anything unmatched is `other`.
-export const THREAD_ROLE_PATTERNS: Readonly<Record<string, readonly string[]>> = {
-  render: ['RenderThread*'],
-  gc: ['HeapTaskDaemon*', 'FinalizerDaemon*', 'ReferenceQueueD*'],
-  jit: ['Jit thread pool*', 'Profile Saver*'],
-  binder: ['Binder:*', 'binder:*', 'HwBinder:*', 'hwbinder:*'],
-  network: ['OkHttp*', 'Okio*', 'Cronet*', 'ChromiumNet*', 'NetworkThread*', '*Network*'],
-  image: ['glide*', 'Glide*', 'Coil*', 'Fresco*', '*decode*', '*Decode*'],
-  worker: [
-    'pool-*',
-    'AsyncTask*',
-    'arch_disk_io*',
-    'RxCached*',
-    'DefaultDispatcher*',
-    'Dispatchers.Default*',
-    '*Dispatcher*',
-    '*Executor*',
-    '*Worker*',
-  ],
-  flutter_ui: ['1.ui'],
-  flutter_raster: ['1.raster'],
-  webview: ['CrRendererMain*'],
-  system: ['Signal Catcher*'],
-};
-
-// Evaluation order must match the SQL CASE: `network` before `worker` keeps an
-// OkHttp dispatcher out of the worker bucket, and `image` before `worker` keeps
-// a Glide executor out of it. It is the declaration order of the object above
-// rather than a second list, because a separate order array is a third rule set
-// that can drift from both SQL and the patterns it orders — `threadRoleContract`
-// would still see the SQL and the patterns agree while evaluation used another
-// sequence entirely.
-
+// Wake-source labels, produced in SQL by fragments/sleep_wake_source_labels.sql:
+// Android emits sched_blocked_reason only for D-state waits, so an S wait's
+// only kernel signal is who woke it. Both labels are candidates, never causes.
 export type WaitClass =
   | 'network_receive_candidate'
   | 'timer_or_device_wake'
@@ -163,104 +139,6 @@ export interface WakeSourceSummary {
   waitClass: WaitClass;
 }
 
-// SQLite GLOB is case-sensitive and understands `*` and `?` only; the patterns
-// above use `*`, and `.` is a literal there as it is here.
-function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp(`^${escaped}$`);
-}
-
-const THREAD_ROLE_MATCHERS: ReadonlyArray<{role: string; matchers: RegExp[]}> = Object.entries(
-  THREAD_ROLE_PATTERNS
-).map(([role, patterns]) => ({role, matchers: patterns.map(globToRegExp)}));
-
-export function classifyThreadRole(
-  threadName: string | null,
-  tid: number | null,
-  processPid: number | null
-): string {
-  if (processPid !== null && processPid > 0 && tid !== null && tid === processPid) return 'main';
-  if (threadName === null) return 'other';
-  for (const {role, matchers} of THREAD_ROLE_MATCHERS) {
-    if (matchers.some((matcher) => matcher.test(threadName))) return role;
-  }
-  return 'other';
-}
-
-// Conservative list, mirroring the fragment: a platform service, the compositor,
-// the network daemon, or a vendor HAL.
-function isSystemProcessName(name: string | null): boolean {
-  if (!name) return false;
-  return (
-    name === 'system_server' ||
-    name.endsWith('surfaceflinger') ||
-    name.endsWith('netd') ||
-    name.startsWith('vendor.') ||
-    name.startsWith('android.hardware.') ||
-    name.startsWith('/vendor/bin/')
-  );
-}
-
-/**
- * Who ended the wait. Mirrors the `wake_source` CASE in
- * fragments/sleep_wake_source.sql; `threadRoleContract.test.ts` holds the two
- * equal bucket by bucket.
- *
- * The idle and null-waker tests are ordered the other way round from SQL, which
- * is safe only because a NULL `waker_utid` comes from a LEFT JOIN that also
- * leaves the waker's name and tid NULL: `classifyWaker` then answers `unknown`,
- * never `swapper`.
- */
-function classifyWakeSource(input: {
-  irqContext: boolean;
-  wakerUtid: number | null;
-  wakerTid: number | null;
-  wakerThreadName: string | null;
-  wakerRole: string;
-  wakerUpid: number | null;
-  sleeperUpid: number | null;
-  wakerProcessName: string | null;
-}): WakeSource {
-  // classifyWaker already separates an IRQ/softirq wake from an idle-thread
-  // wake; only the remaining `thread` case needs a process-level decision.
-  const wakerKind = classifyWaker(input.wakerThreadName, input.wakerTid, input.irqContext);
-  if (wakerKind === 'irq') return 'irq_or_softirq';
-  if (wakerKind === 'swapper') return 'swapper';
-  if (input.wakerUtid === null) return 'unknown';
-  if (input.wakerRole === 'binder') return 'binder_thread';
-  if (input.wakerUpid !== null && input.wakerUpid === input.sleeperUpid) return 'same_process_thread';
-  if (isSystemProcessName(input.wakerProcessName)) return 'system_process';
-  return 'unknown';
-}
-
-/**
- * What the wait plausibly was. Mirrors the `wait_class` CASE in the same
- * fragment, and is a CANDIDATE label: an IRQ-context wake is equally a NET_RX
- * softirq and a timer expiry, which is why only the sleeping thread's role
- * narrows it at all.
- */
-function classifyWaitClass(input: {
-  state: string | null;
-  irqContext: boolean;
-  threadRole: string;
-  wakerUtid: number | null;
-  wakerRole: string;
-  wakerUpid: number | null;
-  sleeperUpid: number | null;
-  wakerProcessName: string | null;
-}): WaitClass {
-  const interruptible = input.state === 'S' || input.state === 'I';
-  if (input.irqContext && input.threadRole === 'network' && interruptible) {
-    return 'network_receive_candidate';
-  }
-  if (input.irqContext) return 'timer_or_device_wake';
-  if (input.wakerUtid === null) return 'unknown';
-  if (input.wakerRole === 'binder') return 'binder_reply';
-  if (input.wakerUpid !== null && input.wakerUpid === input.sleeperUpid) return 'worker_handoff';
-  if (isSystemProcessName(input.wakerProcessName)) return 'system_service';
-  return 'unknown';
-}
-
 export interface GcEventSummary {
   gcType: string | null;
   isMarkCompact: boolean | null;
@@ -277,7 +155,7 @@ export interface CpuCompetitionSummary {
   competingUtid: number | null;
   competingThread: string | null;
   competingProcess: string | null;
-  competingState: string | null; // R / Running / R+
+  competingState: string | null;
   competingDurMs: number;
   eventDurMs: number;
   cpuMaxFreqKhz: number | null;
@@ -323,6 +201,15 @@ const STDLIB_MODULES = {
   frequency: 'linux.cpu.frequency',
 } as const;
 
+/**
+ * Rows each loader keeps per segment (longest clipped first), and the most rows
+ * one loader returns for the whole chain. A loader that reaches the ceiling
+ * keeps its longest rows and says so in a warning; per-segment ranking means a
+ * long chain no longer starves its shortest segments of evidence.
+ */
+const ROWS_PER_SEGMENT = {binder: 8, monitor: 6, io: 4, gc: 3, cpu: 6, wakeSource: 6} as const;
+export const LOADER_ROW_CEILING = 4000;
+
 function classifyError(error: unknown, module?: string): {status: SemanticSourceStatus; warning: string} {
   const message = error instanceof Error ? error.message : String(error);
   // Only an unknown module means the stdlib lacks it; any other INCLUDE
@@ -338,26 +225,6 @@ function classifyError(error: unknown, module?: string): {status: SemanticSource
     return {status: 'sql_error', warning: `schema mismatch: ${message.split('\n')[0]}`};
   }
   return {status: 'sql_error', warning: `query failed: ${message.split('\n')[0]}`};
-}
-
-async function tryQuery<T>(
-  tp: TraceProcessorService,
-  traceId: string,
-  sql: string,
-  mapRow: (row: QueryRow) => T
-): Promise<QueryAttempt<T>> {
-  try {
-    const rows = await queryRows(tp, traceId, sql);
-    if (rows.length === 0) {
-      return {status: 'empty', rows: []};
-    }
-    return {status: 'present', rows: rows.map(mapRow)};
-  } catch (error: unknown) {
-    // A cancelled analysis is not a missing table: let it stop the analysis.
-    rethrowIfTraceProcessorQueryCancelled(error);
-    const {status, warning} = classifyError(error);
-    return {status, rows: [], warning};
-  }
 }
 
 type IncludeResult = {ok: true} | {ok: false; status: SemanticSourceStatus; warning: string};
@@ -380,25 +247,22 @@ export function segmentKeyOf(segment: {utid: number; startTs: number; endTs: num
   return `${segment.utid}|${segment.startTs}|${segment.endTs}`;
 }
 
-// `idx` is each segment's position in the FULL list handed to
-// enrichSegmentsWithSemantics: distribute() resolves the `segment_idx` a query
-// returns against that same list. A loader that only wants a subset passes
-// `keep`, so rows are dropped after numbering. Never filter the list first —
-// the subset would be renumbered from zero and its rows would land on whichever
-// segment sits at that position in the full list.
-function buildSegmentValuesCte(
-  segments: SegmentInput[],
-  keep: (segment: SegmentInput) => boolean = () => true
-): string {
-  // VALUES (idx, utid, tid_or_null, upid_or_null, ts_start, ts_end)
-  // All numeric — no string injection vector.
-  return segments
-    .flatMap((segment, idx) =>
-      keep(segment)
-        ? [`(${idx}, ${segment.utid}, ${segment.tid ?? 'NULL'}, ${segment.upid ?? 'NULL'}, ${segment.startTs}, ${segment.endTs})`]
-        : []
-    )
-    .join(', ');
+const isSleeping = (segment: SegmentInput): boolean => /^(?:S|I|D|DK)$/.test(segment.state ?? '');
+const isRunnable = (segment: SegmentInput): boolean => /^R\+?$/.test(segment.state ?? '');
+
+/**
+ * The `segment_windows` input every segment fragment reads. `idx` is the
+ * segment's position in `segments`; rows come back with that `segment_idx`.
+ * Every value is numeric, so there is no string injection vector; the state is
+ * passed as two flags rather than as trace-derived text.
+ */
+function segmentWindowsCte(segments: SegmentInput[]): string {
+  const rows = segments.map((segment, idx) =>
+    `(${idx}, ${segment.utid}, ${segment.tid ?? 'NULL'}, ${segment.upid ?? 'NULL'}, ` +
+    `${segment.startTs}, ${segment.endTs}, ${isSleeping(segment) ? 1 : 0}, ${isRunnable(segment) ? 1 : 0}, ` +
+    `${segment.waiterUtid ?? 'NULL'})`
+  );
+  return `segment_windows(idx, utid, tid, upid, ts_start, ts_end, sleeping, runnable, waiter_utid) AS (VALUES ${rows.join(', ')})`;
 }
 
 /** A loader row: the summary plus the `segment_idx` the query attached it to. */
@@ -407,487 +271,196 @@ interface Attributed<T> {
   summary: T;
 }
 
-type LoaderResult<T> = QueryAttempt<Attributed<T>>;
+type LoaderResult<T> = QueryAttempt<Attributed<T>> & {capped?: boolean};
 
-// Loaders attach an event to a segment on the half-open overlap
-// `ev_start < seg_end AND ev_end > seg_start` (an event that ends exactly where
-// the segment starts belongs to the previous segment) and report `dur_ns` as
-// `MIN(ev_end, seg_end) - MAX(ev_start, seg_start)`. A thread_state row still
-// open at trace end has dur -1, so the clipped value is floored at 0.
+/** A thread_state row still open at trace end has dur -1, so clipped time is floored at 0. */
 function clippedMs(value: unknown): number {
   return nsToMs(Math.max(0, toNumber(value)));
 }
 
-async function loadBinderTxns(
-  tp: TraceProcessorService,
-  traceId: string,
-  segments: SegmentInput[]
-): Promise<LoaderResult<BinderTxnSummary>> {
-  const include = await includeModule(tp, traceId, STDLIB_MODULES.binder);
-  if (!include.ok) {
-    return {rows: [], status: include.status, warning: include.warning};
+interface LoaderContext {
+  tp: TraceProcessorService;
+  traceId: string;
+  windows: string;
+}
+
+/**
+ * Run one composed fragment query: the top `perSegment` rows of each segment,
+ * at most LOADER_ROW_CEILING rows in all (longest first).
+ */
+async function runLoader<T>(
+  ctx: LoaderContext,
+  input: {fragments: string[]; relation: string; perSegment: number; order: string; numbers?: Record<string, number>},
+  mapRow: (row: QueryRow) => T
+): Promise<LoaderResult<T>> {
+  try {
+    const sql = composeFragmentSql({
+      leadingCtes: [ctx.windows],
+      fragments: input.fragments,
+      numbers: input.numbers,
+      select: `SELECT * FROM ${input.relation} WHERE segment_rank <= ${input.perSegment} ` +
+        `ORDER BY ${input.order} DESC LIMIT ${LOADER_ROW_CEILING + 1}`,
+    });
+    const rows = await queryRows(ctx.tp, ctx.traceId, sql);
+    const capped = rows.length > LOADER_ROW_CEILING;
+    const kept = capped ? rows.slice(0, LOADER_ROW_CEILING) : rows;
+    if (kept.length === 0) return {status: 'empty', rows: []};
+    return {
+      status: 'present',
+      rows: kept.map((row) => ({segmentIdx: toNumber(row.segment_idx), summary: mapRow(row)})),
+      capped,
+    };
+  } catch (error: unknown) {
+    // A cancelled analysis is not a missing table: let it stop the analysis.
+    rethrowIfTraceProcessorQueryCancelled(error);
+    const {status, warning} = classifyError(error);
+    return {status, rows: [], warning};
   }
-  const cte = buildSegmentValuesCte(segments);
-  // Either side on the segment's thread counts. The event is that side's slice;
-  // the client wins when both match because a sync client slice encloses its
-  // server slice. binder_txn_id may be 0 for some events; we keep it for
-  // dedup/cross-reference but do not treat 0 as missing.
-  const sql = `
-    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte}),
-    hits AS (
-      SELECT
-        segs.idx AS segment_idx,
-        segs.ts_start,
-        segs.ts_end,
-        txn.binder_txn_id,
-        txn.binder_reply_id,
-        txn.interface,
-        txn.method_name,
-        txn.is_sync,
-        txn.is_main_thread,
-        txn.client_process,
-        txn.client_thread,
-        txn.server_process,
-        txn.server_thread,
-        txn.client_utid,
-        txn.server_utid,
-        txn.client_tid,
-        txn.server_tid,
-        txn.client_ts,
-        COALESCE(txn.client_dur, 0) AS client_dur,
-        txn.server_ts,
-        COALESCE(txn.server_dur, 0) AS server_dur,
-        COALESCE(
-          txn.client_utid = segs.utid
-            AND txn.client_ts < segs.ts_end
-            AND txn.client_ts + COALESCE(txn.client_dur, 0) > segs.ts_start,
-          0
-        ) AS client_hit,
-        COALESCE(
-          txn.server_utid = segs.utid
-            AND txn.server_ts < segs.ts_end
-            AND txn.server_ts + COALESCE(txn.server_dur, 0) > segs.ts_start,
-          0
-        ) AS server_hit
-      FROM segs
-      JOIN android_binder_txns AS txn
-        ON txn.client_utid = segs.utid OR txn.server_utid = segs.utid
-    ),
-    events AS (
-      SELECT
-        *,
-        CASE WHEN client_hit THEN client_ts ELSE server_ts END AS ev_ts,
-        CASE WHEN client_hit THEN client_dur ELSE server_dur END AS ev_dur
-      FROM hits
-      WHERE client_hit OR server_hit
-    )
-    SELECT
-      segment_idx,
-      binder_txn_id,
-      binder_reply_id,
-      CASE
-        WHEN client_hit AND server_hit THEN 'both'
-        WHEN client_hit THEN 'client'
-        ELSE 'server'
-      END AS side,
-      interface,
-      method_name,
-      is_sync,
-      is_main_thread,
-      client_process,
-      client_thread,
-      server_process,
-      server_thread,
-      client_utid,
-      server_utid,
-      client_tid,
-      server_tid,
-      MIN(ev_ts + ev_dur, ts_end) - MAX(ev_ts, ts_start) AS dur_ns,
-      ev_dur AS event_dur_ns
-    FROM events
-    ORDER BY dur_ns DESC
-    LIMIT ${Math.min(segments.length * 8, 200)};
-  `;
-  return tryQuery(tp, traceId, sql, (row) => ({
-    segmentIdx: toNumber(row.segment_idx),
-    summary: {
-      binderTxnId: toNullableNumber(row.binder_txn_id),
-      binderReplyId: toNullableNumber(row.binder_reply_id),
-      side: (toOptionalString(row.side) ?? 'client') as BinderTxnSummary['side'],
-      interfaceName: toOptionalString(row.interface),
-      methodName: toOptionalString(row.method_name),
-      isSync: toBool(row.is_sync),
-      isMainThread: toBool(row.is_main_thread),
-      clientProcess: toOptionalString(row.client_process),
-      clientThread: toOptionalString(row.client_thread),
-      serverProcess: toOptionalString(row.server_process),
-      serverThread: toOptionalString(row.server_thread),
-      clientUtid: toNullableNumber(row.client_utid),
-      serverUtid: toNullableNumber(row.server_utid),
-      clientTid: toNullableNumber(row.client_tid),
-      serverTid: toNullableNumber(row.server_tid),
-      durMs: clippedMs(row.dur_ns),
-      eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
-    },
+}
+
+async function loadBinderTxns(ctx: LoaderContext): Promise<LoaderResult<BinderTxnSummary>> {
+  const include = await includeModule(ctx.tp, ctx.traceId, STDLIB_MODULES.binder);
+  if (!include.ok) return {rows: [], status: include.status, warning: include.warning};
+  return runLoader(ctx, {
+    fragments: ['segment_binder_txns.sql'],
+    relation: 'segment_binder_txns',
+    perSegment: ROWS_PER_SEGMENT.binder,
+    order: 'dur_ns',
+  }, (row) => ({
+    binderTxnId: toNullableNumber(row.binder_txn_id),
+    binderReplyId: toNullableNumber(row.binder_reply_id),
+    side: (toOptionalString(row.side) ?? 'client') as BinderTxnSummary['side'],
+    interfaceName: toOptionalString(row.interface),
+    methodName: toOptionalString(row.method_name),
+    isSync: toBool(row.is_sync),
+    isMainThread: toBool(row.is_main_thread),
+    clientProcess: toOptionalString(row.client_process),
+    clientThread: toOptionalString(row.client_thread),
+    serverProcess: toOptionalString(row.server_process),
+    serverThread: toOptionalString(row.server_thread),
+    clientUtid: toNullableNumber(row.client_utid),
+    serverUtid: toNullableNumber(row.server_utid),
+    clientTid: toNullableNumber(row.client_tid),
+    serverTid: toNullableNumber(row.server_tid),
+    durMs: clippedMs(row.dur_ns),
+    eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
   }));
 }
 
-async function loadMonitorContention(
-  tp: TraceProcessorService,
-  traceId: string,
-  segments: SegmentInput[]
-): Promise<LoaderResult<MonitorContentionSummary>> {
-  const include = await includeModule(tp, traceId, STDLIB_MODULES.monitor);
-  if (!include.ok) {
-    return {rows: [], status: include.status, warning: include.warning};
-  }
-  const cte = buildSegmentValuesCte(segments);
-  // android_monitor_contention.blocked_utid is the thread that's stuck waiting
-  // for the lock. We match against the segment's utid.
-  const sql = `
-    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte})
-    SELECT
-      segs.idx AS segment_idx,
-      mc.id,
-      mc.short_blocked_method,
-      mc.short_blocking_method,
-      mc.blocked_thread_name,
-      mc.blocking_thread_name,
-      mc.blocked_thread_tid,
-      mc.blocking_tid,
-      mc.blocked_utid,
-      mc.blocking_utid,
-      MIN(mc.ts + mc.dur, segs.ts_end) - MAX(mc.ts, segs.ts_start) AS dur_ns,
-      mc.dur AS event_dur_ns,
-      mc.is_blocked_thread_main
-    FROM segs
-    JOIN android_monitor_contention AS mc
-      ON mc.blocked_utid = segs.utid
-     AND mc.ts < segs.ts_end
-     AND mc.ts + mc.dur > segs.ts_start
-    ORDER BY dur_ns DESC
-    LIMIT ${Math.min(segments.length * 6, 120)};
-  `;
-  return tryQuery(tp, traceId, sql, (row) => ({
-    segmentIdx: toNumber(row.segment_idx),
-    summary: {
-      rowId: toNumber(row.id),
-      shortBlockedMethod: toOptionalString(row.short_blocked_method),
-      shortBlockingMethod: toOptionalString(row.short_blocking_method),
-      blockedThreadName: toOptionalString(row.blocked_thread_name),
-      blockingThreadName: toOptionalString(row.blocking_thread_name),
-      blockedTid: toNullableNumber(row.blocked_thread_tid),
-      blockingTid: toNullableNumber(row.blocking_tid),
-      blockedUtid: toNullableNumber(row.blocked_utid),
-      blockingUtid: toNullableNumber(row.blocking_utid),
-      durMs: clippedMs(row.dur_ns),
-      eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
-      isBlockedThreadMain: toBool(row.is_blocked_thread_main),
-    },
+async function loadMonitorContention(ctx: LoaderContext): Promise<LoaderResult<MonitorContentionSummary>> {
+  const include = await includeModule(ctx.tp, ctx.traceId, STDLIB_MODULES.monitor);
+  if (!include.ok) return {rows: [], status: include.status, warning: include.warning};
+  return runLoader(ctx, {
+    fragments: ['segment_monitor_contention.sql'],
+    relation: 'segment_monitor_contention',
+    perSegment: ROWS_PER_SEGMENT.monitor,
+    order: 'dur_ns',
+  }, (row) => ({
+    rowId: toNumber(row.id),
+    side: toOptionalString(row.side) === 'owner' ? 'owner' : 'blocked',
+    shortBlockedMethod: toOptionalString(row.short_blocked_method),
+    shortBlockingMethod: toOptionalString(row.short_blocking_method),
+    blockedThreadName: toOptionalString(row.blocked_thread_name),
+    blockingThreadName: toOptionalString(row.blocking_thread_name),
+    blockedTid: toNullableNumber(row.blocked_thread_tid),
+    blockingTid: toNullableNumber(row.blocking_tid),
+    blockedUtid: toNullableNumber(row.blocked_utid),
+    blockingUtid: toNullableNumber(row.blocking_utid),
+    durMs: clippedMs(row.dur_ns),
+    eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
+    isBlockedThreadMain: toBool(row.is_blocked_thread_main),
   }));
 }
 
-async function loadIoSignals(
-  tp: TraceProcessorService,
-  traceId: string,
-  segments: SegmentInput[]
-): Promise<LoaderResult<IoSignal>> {
-  // No stdlib io table in v54 — use thread_state.io_wait + kernel wchan
-  // single-frame blocked_function patterns (page cache / block layer / fs /
-  // mmc / ufs) as fallback. blocked_function is not a full call stack.
-  const cte = buildSegmentValuesCte(segments);
-  const sql = `
-    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte})
-    SELECT
-      segs.idx AS segment_idx,
-      ts.blocked_function,
-      ts.io_wait,
-      MIN(ts.ts + ts.dur, segs.ts_end) - MAX(ts.ts, segs.ts_start) AS dur_ns,
-      ts.dur AS event_dur_ns
-    FROM segs
-    JOIN thread_state AS ts
-      ON ts.utid = segs.utid
-     AND ts.ts < segs.ts_end
-     AND ts.ts + ts.dur > segs.ts_start
-    WHERE ts.state IN ('D', 'DK')
-      AND (
-        ts.io_wait = 1
-        OR ts.blocked_function LIKE '%io_schedule%'
-        OR ts.blocked_function LIKE '%wait_on_buffer%'
-        OR ts.blocked_function LIKE '%wait_on_page%'
-        OR ts.blocked_function LIKE '%folio_wait%'
-        OR ts.blocked_function LIKE '%submit_bio%'
-        OR ts.blocked_function LIKE '%filemap_read%'
-        OR ts.blocked_function LIKE '%filemap_fault%'
-        OR ts.blocked_function LIKE '%do_page_fault%'
-        OR ts.blocked_function LIKE '%ext4_%'
-        OR ts.blocked_function LIKE '%f2fs_%'
-        OR ts.blocked_function LIKE '%erofs_%'
-        OR ts.blocked_function LIKE '%dm_%'
-        OR ts.blocked_function LIKE '%mmc_%'
-        OR ts.blocked_function LIKE '%ufshcd_%'
-        OR ts.blocked_function LIKE '%blk_%'
-        OR ts.blocked_function LIKE '%blk_mq_%'
-      )
-    ORDER BY dur_ns DESC
-    LIMIT ${Math.min(segments.length * 4, 80)};
-  `;
-  return tryQuery(tp, traceId, sql, (row) => {
+async function loadIoSignals(ctx: LoaderContext): Promise<LoaderResult<IoSignal>> {
+  return runLoader(ctx, {
+    fragments: ['io_blocked_function_families.sql', 'segment_io_signals.sql'],
+    relation: 'segment_io_signals',
+    perSegment: ROWS_PER_SEGMENT.io,
+    order: 'dur_ns',
+  }, (row) => {
     const ioWait = toBool(row.io_wait) === true;
     return {
-      segmentIdx: toNumber(row.segment_idx),
-      summary: {
-        source: ioWait ? 'io_wait_flag' : 'blocked_function',
-        blockedFunction: toOptionalString(row.blocked_function),
-        durMs: clippedMs(row.dur_ns),
-        eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
-        ioWait,
-      },
-    };
-  });
-}
-
-async function loadWakeSources(
-  tp: TraceProcessorService,
-  traceId: string,
-  segments: SegmentInput[]
-): Promise<LoaderResult<WakeSourceSummary>> {
-  // Only sleeping segments have a wake source worth attributing; a Runnable or
-  // Running segment was never waiting on anybody.
-  const isSleeping = (segment: SegmentInput): boolean => /^(?:S|I|D|DK)$/.test(segment.state ?? '');
-  const sleepingCount = segments.filter(isSleeping).length;
-  if (sleepingCount === 0) {
-    return {rows: [], status: 'skipped'};
-  }
-  const cte = buildSegmentValuesCte(segments, isSleeping);
-  // waker_utid and irq_context live on the first R/R+ row AFTER the sleep, so
-  // each wait is re-linked to the row starting at its end timestamp — the same
-  // successor-row join criticalPathWakerChain uses for the direct waker. A
-  // single wake can be split into R then R+, which MAX collapses back to one row.
-  const sql = `
-    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte}),
-    waits AS (
-      SELECT
-        segs.idx AS segment_idx,
-        ts.id AS state_id,
-        ts.utid AS sleeper_utid,
-        ts.state AS state,
-        MIN(ts.ts + ts.dur, segs.ts_end) - MAX(ts.ts, segs.ts_start) AS dur_ns,
-        ts.dur AS event_dur_ns,
-        MAX(nxt.waker_utid) AS waker_utid,
-        MAX(nxt.irq_context) AS irq_context
-      FROM segs
-      JOIN thread_state AS ts
-        ON ts.utid = segs.utid
-       AND ts.ts < segs.ts_end
-       AND ts.ts + ts.dur > segs.ts_start
-      LEFT JOIN thread_state AS nxt
-        ON nxt.utid = ts.utid
-       AND nxt.ts = ts.ts + ts.dur
-       AND nxt.state IN ('R', 'R+')
-       AND nxt.waker_utid IS NOT NULL
-      WHERE ts.state IN ('S', 'I', 'D', 'DK')
-        AND ts.dur > 0
-      GROUP BY segs.idx, ts.id
-    )
-    SELECT
-      w.segment_idx,
-      w.state,
-      w.dur_ns,
-      w.event_dur_ns,
-      w.irq_context,
-      w.waker_utid,
-      thr.name AS thread_name,
-      thr.tid AS thread_tid,
-      proc.pid AS process_pid,
-      proc.upid AS sleeper_upid,
-      wthr.name AS waker_thread_name,
-      wthr.tid AS waker_tid,
-      wproc.name AS waker_process_name,
-      wproc.pid AS waker_process_pid,
-      wproc.upid AS waker_upid
-    FROM waits AS w
-    LEFT JOIN thread AS thr ON thr.utid = w.sleeper_utid
-    LEFT JOIN process AS proc ON proc.upid = thr.upid
-    LEFT JOIN thread AS wthr ON wthr.utid = w.waker_utid
-    LEFT JOIN process AS wproc ON wproc.upid = wthr.upid
-    ORDER BY w.dur_ns DESC
-    LIMIT ${Math.min(sleepingCount * 6, 120)};
-  `;
-  return tryQuery(tp, traceId, sql, (row) => {
-    const irqContext = toBool(row.irq_context) === true;
-    const threadName = toOptionalString(row.thread_name);
-    const threadRole = classifyThreadRole(
-      threadName,
-      toNullableNumber(row.thread_tid),
-      toNullableNumber(row.process_pid)
-    );
-    const wakerUtid = toNullableNumber(row.waker_utid);
-    const wakerThreadName = toOptionalString(row.waker_thread_name);
-    const wakerTid = toNullableNumber(row.waker_tid);
-    const wakerProcessName = toOptionalString(row.waker_process_name);
-    const wakerRole = wakerUtid === null
-      ? 'unknown'
-      : classifyThreadRole(wakerThreadName, wakerTid, toNullableNumber(row.waker_process_pid));
-    const wakerUpid = toNullableNumber(row.waker_upid);
-    const sleeperUpid = toNullableNumber(row.sleeper_upid);
-    const state = toOptionalString(row.state);
-    return {
-      segmentIdx: toNumber(row.segment_idx),
-      summary: {
-        state,
-        durMs: clippedMs(row.dur_ns),
-        eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
-        threadName,
-        threadRole,
-        wakerThreadName,
-        wakerProcessName,
-        wakerRole,
-        irqContext,
-        wakeSource: classifyWakeSource({
-          irqContext,
-          wakerUtid,
-          wakerTid,
-          wakerThreadName,
-          wakerRole,
-          wakerUpid,
-          sleeperUpid,
-          wakerProcessName,
-        }),
-        waitClass: classifyWaitClass({
-          state,
-          irqContext,
-          threadRole,
-          wakerUtid,
-          wakerRole,
-          wakerUpid,
-          sleeperUpid,
-          wakerProcessName,
-        }),
-      },
-    };
-  });
-}
-
-async function loadGcEvents(
-  tp: TraceProcessorService,
-  traceId: string,
-  segments: SegmentInput[]
-): Promise<LoaderResult<GcEventSummary>> {
-  const include = await includeModule(tp, traceId, STDLIB_MODULES.gc);
-  if (!include.ok) {
-    return {rows: [], status: include.status, warning: include.warning};
-  }
-  const cte = buildSegmentValuesCte(segments);
-  // gc.upid OR gc.utid overlap. GC blocks the whole process, so a non-task
-  // thread's GC can stall the segment indirectly. We match on upid.
-  const sql = `
-    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte})
-    SELECT
-      segs.idx AS segment_idx,
-      gc.gc_type,
-      gc.is_mark_compact,
-      gc.reclaimed_mb,
-      MIN(gc.gc_ts + gc.gc_dur, segs.ts_end) - MAX(gc.gc_ts, segs.ts_start) AS dur_ns,
-      gc.gc_dur AS event_dur_ns,
-      gc.thread_name,
-      gc.process_name
-    FROM segs
-    JOIN android_garbage_collection_events AS gc
-      ON segs.upid IS NOT NULL
-     AND gc.upid = segs.upid
-     AND gc.gc_ts < segs.ts_end
-     AND gc.gc_ts + gc.gc_dur > segs.ts_start
-    ORDER BY dur_ns DESC
-    LIMIT ${Math.min(segments.length * 3, 60)};
-  `;
-  return tryQuery(tp, traceId, sql, (row) => ({
-    segmentIdx: toNumber(row.segment_idx),
-    summary: {
-      gcType: toOptionalString(row.gc_type),
-      isMarkCompact: toBool(row.is_mark_compact),
-      reclaimedMb: toNullableNumber(row.reclaimed_mb),
+      source: ioWait ? 'io_wait_flag' : 'blocked_function',
+      blockedFunction: toOptionalString(row.blocked_function),
       durMs: clippedMs(row.dur_ns),
       eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
-      thread: toOptionalString(row.thread_name),
-      process: toOptionalString(row.process_name),
-    },
+      ioWait,
+    };
+  });
+}
+
+async function loadWakeSources(ctx: LoaderContext, segments: SegmentInput[]): Promise<LoaderResult<WakeSourceSummary>> {
+  // Only sleeping segments have a wake source worth attributing; a Runnable or
+  // Running segment was never waiting on anybody.
+  if (!segments.some(isSleeping)) return {rows: [], status: 'skipped'};
+  return runLoader(ctx, {
+    fragments: ['thread_role.sql', 'segment_wake_sources.sql', 'sleep_wake_source_labels.sql'],
+    relation: 'segment_wake_sources',
+    perSegment: ROWS_PER_SEGMENT.wakeSource,
+    order: 'dur_ns',
+  }, (row) => ({
+    state: toOptionalString(row.state),
+    durMs: clippedMs(row.dur_ns),
+    eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
+    threadName: toOptionalString(row.thread_name),
+    threadRole: toOptionalString(row.thread_role) ?? 'other',
+    wakerThreadName: toOptionalString(row.waker_thread_name),
+    wakerProcessName: toOptionalString(row.waker_process_name),
+    wakerRole: toOptionalString(row.waker_role) ?? 'unknown',
+    irqContext: toBool(row.irq_context) === true,
+    wakeSource: (toOptionalString(row.wake_source) ?? 'unknown') as WakeSource,
+    waitClass: (toOptionalString(row.wait_class) ?? 'unknown') as WaitClass,
   }));
 }
 
-async function loadCpuCompetition(
-  tp: TraceProcessorService,
-  traceId: string,
-  segments: SegmentInput[]
-): Promise<LoaderResult<CpuCompetitionSummary>> {
+async function loadGcEvents(ctx: LoaderContext): Promise<LoaderResult<GcEventSummary>> {
+  const include = await includeModule(ctx.tp, ctx.traceId, STDLIB_MODULES.gc);
+  if (!include.ok) return {rows: [], status: include.status, warning: include.warning};
+  return runLoader(ctx, {
+    fragments: ['segment_gc_events.sql'],
+    relation: 'segment_gc_events',
+    perSegment: ROWS_PER_SEGMENT.gc,
+    order: 'dur_ns',
+  }, (row) => ({
+    gcType: toOptionalString(row.gc_type),
+    isMarkCompact: toBool(row.is_mark_compact),
+    reclaimedMb: toNullableNumber(row.reclaimed_mb),
+    durMs: clippedMs(row.dur_ns),
+    eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
+    thread: toOptionalString(row.thread_name),
+    process: toOptionalString(row.process_name),
+  }));
+}
+
+async function loadCpuCompetition(ctx: LoaderContext, segments: SegmentInput[]): Promise<LoaderResult<CpuCompetitionSummary>> {
   // Only meaningful for R/R+ states (waiting for CPU). For S/D the segment
   // wasn't on a CPU, so same-CPU competition is undefined.
-  const isRunnable = (segment: SegmentInput): boolean => /^R\+?$/.test(segment.state ?? '');
-  const runnableCount = segments.filter(isRunnable).length;
-  if (runnableCount === 0) {
-    return {rows: [], status: 'skipped'};
-  }
-  const cte = buildSegmentValuesCte(segments, isRunnable);
-
-  // Prefer freq module if available, but tolerate its absence.
-  const includeFreq = await includeModule(tp, traceId, STDLIB_MODULES.frequency);
-
-  // Two-step: 1) find the CPU the runnable thread eventually ran on (or was
-  // queued on); 2) list other Running threads on that same CPU during the
-  // overlap. We use thread_state.cpu of the matching segment row directly.
-  // target_cpu is the one end-inclusive match (`ts.ts <= segs.ts_end`): the
-  // row starting exactly at segment end is the CPU it eventually ran on.
-  const sql = `
-    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte}),
-    target_cpu AS (
-      SELECT segs.idx AS segment_idx,
-             ts.cpu,
-             segs.ts_start,
-             segs.ts_end
-      FROM segs
-      JOIN thread_state AS ts
-        ON ts.utid = segs.utid
-       AND ts.ts <= segs.ts_end
-       AND ts.ts + ts.dur > segs.ts_start
-      WHERE ts.cpu IS NOT NULL
-      GROUP BY segs.idx, ts.cpu
-    )
-    SELECT
-      tc.segment_idx,
-      tc.cpu,
-      thr.tid AS competing_tid,
-      ts.utid AS competing_utid,
-      thr.name AS competing_thread,
-      proc.name AS competing_process,
-      ts.state AS competing_state,
-      MIN(ts.ts + ts.dur, tc.ts_end) - MAX(ts.ts, tc.ts_start) AS competing_dur_ns,
-      ts.dur AS event_dur_ns
-      ${includeFreq.ok ? `,(SELECT MAX(freq) FROM cpu_frequency_counters f WHERE f.cpu = tc.cpu AND f.ts < tc.ts_end AND f.ts + f.dur > tc.ts_start) AS cpu_max_freq` : ',NULL AS cpu_max_freq'}
-    FROM target_cpu AS tc
-    JOIN thread_state AS ts
-      ON ts.cpu = tc.cpu
-     AND ts.state = 'Running'
-     AND ts.ts < tc.ts_end
-     AND ts.ts + ts.dur > tc.ts_start
-    LEFT JOIN thread AS thr ON thr.utid = ts.utid
-    LEFT JOIN process AS proc ON proc.upid = thr.upid
-    WHERE ts.utid != (SELECT utid FROM segs WHERE idx = tc.segment_idx)
-    ORDER BY competing_dur_ns DESC
-    LIMIT ${Math.min(runnableCount * 6, 120)};
-  `;
-  return tryQuery(tp, traceId, sql, (row) => ({
-    segmentIdx: toNumber(row.segment_idx),
-    summary: {
-      cpu: toNumber(row.cpu),
-      competingTid: toNullableNumber(row.competing_tid),
-      competingUtid: toNullableNumber(row.competing_utid),
-      competingThread: toOptionalString(row.competing_thread),
-      competingProcess: toOptionalString(row.competing_process),
-      competingState: toOptionalString(row.competing_state),
-      competingDurMs: clippedMs(row.competing_dur_ns),
-      eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
-      cpuMaxFreqKhz: toNullableNumber(row.cpu_max_freq),
-    },
+  if (!segments.some(isRunnable)) return {rows: [], status: 'skipped'};
+  // The frequency is an optional annotation; without the module the
+  // competition itself is still attributed.
+  const withFrequency = (await includeModule(ctx.tp, ctx.traceId, STDLIB_MODULES.frequency)).ok;
+  const relation = withFrequency
+    ? `(SELECT c.*, fq.cpu_max_freq FROM segment_cpu_competition AS c
+        LEFT JOIN segment_cpu_max_freq AS fq ON fq.segment_idx = c.segment_idx AND fq.cpu = c.cpu)`
+    : '(SELECT *, NULL AS cpu_max_freq FROM segment_cpu_competition)';
+  return runLoader(ctx, {
+    fragments: withFrequency
+      ? ['segment_cpu_competition.sql', 'segment_cpu_frequency.sql']
+      : ['segment_cpu_competition.sql'],
+    relation,
+    perSegment: ROWS_PER_SEGMENT.cpu,
+    order: 'competing_dur_ns',
+  }, (row) => ({
+    cpu: toNumber(row.cpu),
+    competingTid: toNullableNumber(row.competing_tid),
+    competingUtid: toNullableNumber(row.competing_utid),
+    competingThread: toOptionalString(row.competing_thread),
+    competingProcess: toOptionalString(row.competing_process),
+    competingState: toOptionalString(row.competing_state),
+    competingDurMs: clippedMs(row.competing_dur_ns),
+    eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
+    cpuMaxFreqKhz: toNullableNumber(row.cpu_max_freq),
   }));
 }
 
@@ -939,38 +512,27 @@ export async function enrichSegmentsWithSemantics(
   });
 
   if (unique.length === 0) {
-    return {
-      segments: result,
-      sources: skippedSources(),
-      warnings: [],
-    };
+    return {segments: result, sources: skippedSources(), warnings: []};
   }
 
-  // Run all six queries concurrently — each is independent.
-  const [binder, monitor, io, gc, cpu, wakeSource] = await Promise.all([
-    loadBinderTxns(tp, traceId, unique),
-    loadMonitorContention(tp, traceId, unique),
-    loadIoSignals(tp, traceId, unique),
-    loadGcEvents(tp, traceId, unique),
-    loadCpuCompetition(tp, traceId, unique),
-    loadWakeSources(tp, traceId, unique),
-  ]);
+  // Queries on one processor run one at a time, so the loaders run in order.
+  const ctx: LoaderContext = {tp, traceId, windows: segmentWindowsCte(unique)};
+  const binder = await loadBinderTxns(ctx);
+  const monitor = await loadMonitorContention(ctx);
+  const io = await loadIoSignals(ctx);
+  const gc = await loadGcEvents(ctx);
+  const cpu = await loadCpuCompetition(ctx, unique);
+  const wakeSource = await loadWakeSources(ctx, unique);
 
-  const sources: SemanticSources = {
-    binder: binder.status,
-    monitor: monitor.status,
-    io: io.status,
-    gc: gc.status,
-    cpu: cpu.status,
-    wakeSource: wakeSource.status,
-  };
-  const warnings = Array.from(
-    new Set(
-      [binder.warning, monitor.warning, io.warning, gc.warning, cpu.warning, wakeSource.warning].filter(
-        (warning): warning is string => Boolean(warning)
-      )
-    )
-  );
+  const loaders = {binder, monitor, io, gc, cpu, wakeSource};
+  const sources = Object.fromEntries(
+    Object.entries(loaders).map(([name, loader]) => [name, loader.status])
+  ) as SemanticSources;
+  const warnings = Array.from(new Set([
+    ...Object.values(loaders).flatMap((loader) => (loader.warning ? [loader.warning] : [])),
+    ...Object.entries(loaders).flatMap(([name, loader]) =>
+      loader.capped ? [`${name} evidence reached the ${LOADER_ROW_CEILING}-row limit; the shortest segments may lack it`] : []),
+  ]));
 
   const distribute = <T>(rows: Attributed<T>[], list: (sem: SegmentSemantics) => T[]): void => {
     for (const {segmentIdx, summary} of rows) {
@@ -994,8 +556,5 @@ export async function enrichSegmentsWithSemantics(
 export const __INTERNAL__ = {
   classifyError,
   segmentKeyOf,
-  buildSegmentValuesCte,
-  classifyWaitClass,
-  classifyWakeSource,
-  isSystemProcessName,
+  segmentWindowsCte,
 };

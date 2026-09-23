@@ -49,12 +49,10 @@ export function classifyWaker(
   irqContext: boolean
 ): WakerKind {
   if (irqContext) return 'irq';
-  // Kernel idle threads: tid=0, or a `swapper`-prefixed comm. The prefix is the
-  // rule, not `swapper/N` exactly, because fragments/sleep_wake_source.sql tests
-  // `thread_name GLOB 'swapper*'` — an anchored `swapper(/\d+)?` here would put
-  // any other spelling into `same_process_thread` in TypeScript while SQL called
-  // the same wake `swapper`, and the two surfaces would answer differently about
-  // one trace.
+  // Kernel idle threads: tid=0, or a `swapper`-prefixed comm. L2 resolves one
+  // waker in TypeScript, so this is the one rule kept on both sides: the prefix
+  // matches fragments/sleep_wake_source.sql (`thread_name GLOB 'swapper*'`), which
+  // labels the chain's wake sources, so the direct waker and the chain agree.
   if (tid === 0) return 'swapper';
   if (threadName && /^swapper/.test(threadName)) return 'swapper';
   if (threadName) return 'thread';

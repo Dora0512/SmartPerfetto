@@ -22,6 +22,7 @@ import { generateRenderingPipelineDetectionSkill } from '../renderingPipelineDet
 import logger from '../../utils/logger';
 import { validateSkillConditions, validateFragmentReferences } from './skillValidator';
 import { validateSkillBatchAnalysis } from './skillBatchAnalysis';
+import { builtInSkillsDir, readSkillFragmentFile, skillFragmentKey } from './skillFragments';
 import {
   DisplayContractIssue,
   formatDisplayContractIssue,
@@ -414,10 +415,9 @@ export class SkillRegistry {
     const files = fs.readdirSync(fragmentsDir);
     for (const file of files) {
       if (!file.endsWith('.sql')) continue;
-      const filePath = path.join(fragmentsDir, file);
       try {
-        const content = fs.readFileSync(filePath, 'utf-8').trim();
-        const key = `fragments/${file}`;
+        const content = readSkillFragmentFile(fragmentsDir, file);
+        const key = skillFragmentKey(file);
         const existing = this.fragmentCache.get(key);
         if (root?.origin === 'external_pack' && existing !== undefined && existing !== content) {
           throw new Error(`fragment_key_collision:${key}`);
@@ -1237,5 +1237,5 @@ export async function ensureSkillRegistryInitialized(): Promise<void> {
  * 获取默认的 skills 目录
  */
 export function getSkillsDir(): string {
-  return path.resolve(__dirname, '../../../skills');
+  return builtInSkillsDir();
 }

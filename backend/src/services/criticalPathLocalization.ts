@@ -115,8 +115,8 @@ function projectReason(
 // rewrites them.
 const WARNING_EN: Array<[RegExp, string]> = [
   [
-    /^critical path 超过 (\d+) 个链路段上限，已截断为前 (\d+) 个链路段（展示前 (\d+) 个）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。$/u,
-    'The critical path exceeded the $1-segment limit and was cut to the first $2 chain segments ($3 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
+    /^critical path 超过 (\d+) 个原始链路段上限，已截断（合并后 (\d+) 段，展示前 (\d+) 段）；阻塞时长、模块占比与反事实估计只覆盖截断前的部分。$/u,
+    'The critical path exceeded the $1 stack-segment limit and was cut ($2 segments once merged, $3 shown); blocking time, module shares and the counterfactual cover only the part before the cut.',
   ],
   [
     /^critical path 共 (\d+) 个链路段，仅展示前 (\d+) 个；阻塞时长、模块占比与反事实估计按完整链路计算。$/u,
@@ -143,6 +143,7 @@ const WARNING_ZH: Array<[RegExp, string]> = [
   ],
   [/^critical path recursion failed for utid (\d+):/u, 'critical path 递归查询 utid $1 失败：'],
   [/^critical path recursion for utid (\d+) was cut at (\d+) segments$/u, 'critical path 递归查询 utid $1 在 $2 个链路段处截断'],
+  [/^(\w+) evidence reached the (\d+)-row limit; the shortest segments may lack it$/u, '$1 证据达到 $2 行上限，最短的链路段可能缺少该证据'],
   [/^woken in IRQ context \(irq_context=1 on the wakeup row\)$/u, '在 IRQ 上下文中被唤醒（唤醒行 irq_context=1）'],
   [/^woken by idle\/swapper — no upstream wait chain to chase$/u, '由 idle/swapper 唤醒——没有更上游的等待链可追'],
   [/^resolved for the longest waiting slice in the window$/u, '按选区内最长的等待 slice 解析'],
