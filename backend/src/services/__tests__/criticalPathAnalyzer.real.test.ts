@@ -15,12 +15,8 @@ import {randomUUID} from 'crypto';
 import {WorkingTraceProcessor} from '../workingTraceProcessor';
 import type {TraceProcessorService} from '../traceProcessorService';
 import {resolveTraceCase} from '../../utils/traceCorpus';
-import {
-  analyzeCriticalPath,
-  CriticalPathInputError,
-  type CriticalPathAnalysis,
-} from '../criticalPathAnalyzer';
-import {CRITICAL_PATH_HYPOTHESIS_IDS} from '../criticalPathText';
+import {analyzeCriticalPath, CriticalPathInputError} from '../criticalPathAnalyzer';
+import {CRITICAL_PATH_HYPOTHESIS_IDS, type CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 jest.setTimeout(120_000);
 const processors: WorkingTraceProcessor[] = [];
@@ -237,12 +233,16 @@ async function checkAnalysis(ctx: TraceContext, analysis: CriticalPathAnalysis, 
   if (!totals) {
     problem('totalsNs missing');
   } else {
-    if (totals.window !== analysis.task.dur || totals.blocking + totals.self !== totals.window) {
-      problem(`totalsNs do not add up: ${JSON.stringify(totals)} for a ${analysis.task.dur} ns window`);
-    }
-    if (toMs(totals.blocking) !== analysis.blockingMs || toMs(totals.self) !== analysis.selfMs ||
+    if (toMs(totals.blocking) !== analysis.blockingMs ||
+      toMs(Math.max(0, analysis.task.dur - totals.blocking)) !== analysis.selfMs ||
       toMs(totals.chainWait) !== (analysis.chainWaitMs ?? 0)) {
       problem(`ms totals are not rounded from totalsNs: ${JSON.stringify(totals)}`);
+    }
+    const ownWaitNs = (analysis.slices ?? [])
+      .filter(slice => slice.kind === 'sleeping' || slice.kind === 'uninterruptible')
+      .reduce((sum, slice) => sum + slice.endTs - slice.startTs, 0);
+    if (totals.waiting !== ownWaitNs || totals.waiting > analysis.task.dur) {
+      problem(`totalsNs.waiting ${totals.waiting} != the window's own S/D time ${ownWaitNs}`);
     }
   }
 

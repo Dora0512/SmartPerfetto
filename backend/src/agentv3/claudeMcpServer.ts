@@ -53,19 +53,19 @@ import {resolveRegisteredDrillDownSkillParams} from '../agent/core/drillDownEnti
 import {findDrillDownSkillConfig} from '../agent/config/drillDownRegistry';
 import { createDataEnvelope, displayResultToEnvelope } from '../types/dataContract';
 import type { ColumnDefinition } from '../types/dataContract';
+import {nsToMs} from '../utils/traceProcessorRowUtils';
 import {
   analyzeCriticalPath,
+  chainWaitTotals,
+  classifySlice,
   CRITICAL_PATH_DEFAULTS,
   CRITICAL_PATH_ENGINE_VERSION,
-  type CriticalPathAnalysis,
-  type CriticalPathAnalyzeOptions,
-  type CriticalPathInputErrorCode,
-  type CriticalPathSegment,
   CriticalPathInputError,
+  pct,
+  type CriticalPathAnalyzeOptions,
 } from '../services/criticalPathAnalyzer';
-import { projectCriticalPathAnalysis } from '../services/criticalPathLocalization';
+import { renderCriticalPathAnalysis } from '../services/criticalPathLocalization';
 import { buildDeterministicCriticalPathSummary } from '../services/criticalPathSummary';
-import type { WakeSourceSummary } from '../services/criticalPathSemantics';
 import {
   MAX_THREAD_CANDIDATES,
   resolveCriticalPathThread,
@@ -260,6 +260,13 @@ import {
   rethrowIfTraceProcessorQueryCancelled,
   throwIfTraceProcessorQueryCancelled,
 } from '../services/traceProcessorCancellation';
+import type {
+  CriticalPathAnalysis,
+  CriticalPathInputErrorCode,
+  CriticalPathSegment,
+  SliceKind,
+  WakeSourceSummary,
+} from '../types/criticalPathContract';
 
 export function requireToolDescription(templateName: string, loaded?: string): string {
   const content = loaded === undefined ? loadPromptSegment(templateName) : stripPromptComments(loaded);
@@ -3773,18 +3780,19 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         };
         const raw = await analyzeCriticalPath(traceProcessorService, traceId, analyzeOptions);
         throwIfTraceProcessorQueryCancelled(signal);
-        const analysis = projectCriticalPathAnalysis(raw, outputLanguage);
+        const analysis = renderCriticalPathAnalysis(raw, outputLanguage);
 
         // The summary row is captured first and the projection's headline
         // numbers are read from it, so every number the model quotes is a
         // cell it can cite.
+        const flat = flattenWaitChain(analysis.wakeupChain);
         const summaryColumns = [...WAIT_CHAIN_SUMMARY_COLUMNS];
-        const summary = waitChainSummaryRow(analysis);
+        const summary = waitChainSummaryRow(analysis, flat.length);
         const summaryRows = [summaryColumns.map(column => summary[column])];
-        const projection = projectWaitChainForModel(analysis, summary, outputLanguage, identity);
+        const projection = projectWaitChainForModel(analysis, summary, flat, outputLanguage, identity);
 
         const columns = [...WAIT_CHAIN_SEGMENT_COLUMNS];
-        const rows = waitChainSegmentRows(flattenWaitChain(analysis.wakeupChain));
+        const rows = waitChainSegmentRows(flat);
         const traceProvenance = buildScopedTraceProvenance(traceId, 'current');
         const stored = storeToolTableArtifact(artifactStore, {
           toolName: 'analyze_wait_chain',
@@ -8024,21 +8032,9 @@ const WAIT_CHAIN_MAX_WARNINGS = 8;
 const WAIT_CHAIN_MAX_RECURSION = 6;
 const WAIT_CHAIN_MAX_SEGMENT_ROWS = 400;
 
-type WaitChainKind = 'sleeping' | 'uninterruptible' | 'runnable' | 'running' | 'unknown';
-
-/** Mirrors `classifySlice` in criticalPathAnalyzer; that copy is module-private. */
-function waitChainKind(state: string | null | undefined): WaitChainKind {
-  if (!state) return 'unknown';
-  if (state === 'Running') return 'running';
-  switch (state[0]) {
-    case 'S': return 'sleeping';
-    case 'D': return 'uninterruptible';
-    case 'R': return 'runnable';
-    default: return 'unknown';
-  }
-}
-
-function waitChainIsWait(kind: WaitChainKind): boolean {
+/** A sleeping or uninterruptible state, in the engine's own reading. */
+function isWaitState(state: string | null | undefined): boolean {
+  const kind = classifySlice(state);
   return kind === 'sleeping' || kind === 'uninterruptible';
 }
 
@@ -8063,9 +8059,6 @@ function dominantWakeSource(segment: CriticalPathSegment) {
     );
 }
 
-function roundMs(value: number): number {
-  return Math.round(value * 100) / 100;
-}
 
 function waitChainSegmentRows(segments: readonly CriticalPathSegment[]): unknown[][] {
   return segments.slice(0, WAIT_CHAIN_MAX_SEGMENT_ROWS).map((segment, index) => {
@@ -8094,37 +8087,35 @@ function waitChainSegmentRows(segments: readonly CriticalPathSegment[]): unknown
  * (`totalsNs`, the counterfactual, the target's own slices), and beside them
  * the rounded values the engine displays.
  */
-function waitChainSummaryRow(analysis: CriticalPathAnalysis): WaitChainSummaryRow {
+function waitChainSummaryRow(analysis: CriticalPathAnalysis, flatSegments: number): WaitChainSummaryRow {
   const totals = analysis.totalsNs;
   const counterfactual = analysis.quantification?.counterfactual ?? null;
-  const byKind = sliceKindNs(analysis);
-  const waitingNs = byKind.sleeping + byKind.uninterruptible;
   return {
     utid: analysis.task.utid,
     window_start_ts: analysis.task.startTs,
     window_end_ts: analysis.task.startTs + analysis.task.dur,
     window_dur_ns: analysis.task.dur,
     blocking_ns: totals?.blocking ?? null,
-    self_ns: totals?.self ?? null,
-    waiting_ns: waitingNs,
+    self_ns: totals ? Math.max(0, analysis.task.dur - totals.blocking) : null,
+    waiting_ns: totals?.waiting ?? null,
     chain_wait_ns: totals?.chainWait ?? null,
     best_case_ns: counterfactual?.bestCaseDurationNs ?? null,
     max_saving_ns: counterfactual?.maxSavingNs ?? null,
     window_ms: analysis.totalMs,
     blocking_ms: analysis.blockingMs,
     self_ms: analysis.selfMs,
-    waiting_ms: roundMs(waitingNs / 1e6),
+    waiting_ms: totals ? nsToMs(totals.waiting) : null,
     chain_wait_ms: analysis.chainWaitMs ?? 0,
     external_blocking_pct: analysis.externalBlockingPercentage,
     best_case_ms: counterfactual?.bestCaseDurationMs ?? null,
     max_saving_ms: counterfactual?.maxSavingMs ?? null,
-    chain_segment_count: analysis.chainSegmentCount ?? flattenWaitChain(analysis.wakeupChain).length,
+    chain_segment_count: analysis.chainSegmentCount ?? flatSegments,
   };
 }
 
 /** Exact ns of the target thread's own window, per state kind (slices are clipped to the window). */
-function sliceKindNs(analysis: CriticalPathAnalysis): Record<WaitChainKind, number> {
-  const byKind: Record<WaitChainKind, number> = {sleeping: 0, uninterruptible: 0, runnable: 0, running: 0, unknown: 0};
+function sliceKindNs(analysis: CriticalPathAnalysis): Record<SliceKind, number> {
+  const byKind: Record<SliceKind, number> = {sleeping: 0, uninterruptible: 0, runnable: 0, running: 0, unknown: 0};
   for (const slice of analysis.slices ?? []) {
     byKind[slice.kind] += Math.max(0, slice.endTs - slice.startTs);
   }
@@ -8159,13 +8150,8 @@ function waitChainRecursion(chain: readonly CriticalPathSegment[]): {entries: Wa
         omitted += 1;
         continue;
       }
-      const byClass = new Map<string, number>();
-      for (const child of children) {
-        if (!waitChainIsWait(waitChainKind(child.state))) continue;
-        const key = child.wakeSourceClass ?? 'unknown';
-        byClass.set(key, (byClass.get(key) ?? 0) + child.dur);
-      }
-      const dominant = [...byClass.entries()].sort((a, b) => b[1] - a[1])[0];
+      const dominant = Object.entries(chainWaitTotals(children).waitClassTotalsMs)
+        .sort((a, b) => b[1] - a[1])[0];
       entries.push({
         level,
         processName: segment.processName ?? null,
@@ -8173,7 +8159,7 @@ function waitChainRecursion(chain: readonly CriticalPathSegment[]): {entries: Wa
         durationMs: segment.durationMs,
         childSegments: children.length,
         dominantWaitClass: dominant?.[0] ?? null,
-        dominantWaitMs: dominant ? roundMs(dominant[1] / 1e6) : null,
+        dominantWaitMs: dominant?.[1] ?? null,
       });
     }
     current = next;
@@ -8191,6 +8177,7 @@ function waitChainRecursion(chain: readonly CriticalPathSegment[]): {entries: Wa
 function projectWaitChainForModel(
   analysis: CriticalPathAnalysis,
   summary: WaitChainSummaryRow,
+  flat: readonly CriticalPathSegment[],
   outputLanguage: OutputLanguage,
   identity?: Pick<ResolvedCriticalPathThread, 'pid' | 'processName' | 'threadName' | 'tid'>,
 ): Record<string, unknown> {
@@ -8198,11 +8185,10 @@ function projectWaitChainForModel(
   const stateBreakdown: Record<string, {ms: number; percent: number}> = {};
   for (const [kind, ns] of Object.entries(sliceKindNs(analysis))) {
     if (ns <= 0) continue;
-    stateBreakdown[kind] = {ms: roundMs(ns / 1e6), percent: windowNs > 0 ? roundMs((ns * 100) / windowNs) : 0};
+    stateBreakdown[kind] = {ms: nsToMs(ns), percent: pct(ns, windowNs)};
   }
 
-  const flat = flattenWaitChain(analysis.wakeupChain);
-  const waits = flat.filter(segment => waitChainIsWait(waitChainKind(segment.state)));
+  const waits = flat.filter(segment => isWaitState(segment.state));
 
   // Wait totals come from the engine over the whole chain. `wakeupChain`, and
   // so `waits`, holds only the displayed prefix, which still serves `topWaits`.
@@ -8217,7 +8203,7 @@ function projectWaitChainForModel(
         startTs: segment.startTs,
         durationMs: segment.durationMs,
         state: segment.state ?? null,
-        kind: waitChainKind(segment.state),
+        kind: classifySlice(segment.state),
         blockedFunction: segment.blockedFunction ?? null,
         ioWait: segment.ioWait ?? null,
         processName: segment.processName ?? null,

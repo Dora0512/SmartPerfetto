@@ -5,8 +5,9 @@
 import {describe, expect, it, jest} from '@jest/globals';
 import Database from 'better-sqlite3';
 import {__INTERNAL__, quantifyCriticalPath, type QuantifyTaskInput} from '../criticalPathQuantify';
-import {segmentKeyOf, type SegmentSemantics} from '../criticalPathSemantics';
+import {segmentKeyOf} from '../criticalPathSemantics';
 import type {QueryResult, TraceProcessorService} from '../traceProcessorService';
+import type {SegmentSemantics} from '../../types/criticalPathContract';
 
 const {buildCounterfactual, buildHypotheses} = __INTERNAL__;
 

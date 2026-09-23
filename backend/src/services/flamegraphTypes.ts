@@ -2,7 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import type {OneShotFallbackReason} from './oneShotModelCall';
+import type {AiSummary, AiSummaryFallbackReason} from '../types/criticalPathContract';
 
 export interface FlamegraphAnalyzeOptions {
   startTs?: number | string;
@@ -12,8 +12,6 @@ export interface FlamegraphAnalyzeOptions {
   sampleSource?: string;
   maxNodes?: number;
   minSampleCount?: number;
-  includeAi?: boolean;
-  question?: string;
 }
 
 export interface FlamegraphPerfettoSummaryRow {
@@ -117,15 +115,6 @@ export interface FlamegraphAvailability {
   warnings: string[];
 }
 
-/** Why the rule summary was returned instead of a model answer. */
-export type FlamegraphAiFallbackReason = OneShotFallbackReason;
-
-export interface FlamegraphAiSummary {
-  generated: boolean;
-  model?: string;
-  summary: string;
-  warnings: string[];
-  redactionApplied?: boolean;
-  /** Set whenever `generated` is false; `warnings` carries the explanation. */
-  fallbackReason?: FlamegraphAiFallbackReason;
-}
+/** The flamegraph's model narrative: the same shape as every auxiliary AI summary. */
+export type FlamegraphAiSummary = AiSummary;
+export type FlamegraphAiFallbackReason = AiSummaryFallbackReason;

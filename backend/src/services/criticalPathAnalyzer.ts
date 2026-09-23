@@ -19,26 +19,14 @@
 // them by criticalPathLocalization.ts; the engine's own result is rendered in
 // zh-CN, and a projection renders any other language from the same ids.
 
-import {
-  enrichSegmentsWithSemantics,
-  segmentKeyOf,
-  type SegmentInput as SemanticSegmentInput,
-  type SegmentSemantics,
-  type SemanticSourceStatus,
-  type WaitClass,
-  type WakeSourceSummary,
-} from './criticalPathSemantics';
+import {enrichSegmentsWithSemantics, segmentKeyOf, type SegmentInput as SemanticSegmentInput} from './criticalPathSemantics';
 import {hintText} from './criticalPathText';
-import {resolveDirectWaker, type WakerChainResult, type WakerHop} from './criticalPathWakerChain';
+import {resolveDirectWaker, type WakerChainResult} from './criticalPathWakerChain';
 import {
   rethrowIfTraceProcessorQueryCancelled,
   throwIfTraceProcessorQueryCancelled,
 } from './traceProcessorCancellation';
-import {
-  quantifyCriticalPath,
-  type CriticalPathQuantification,
-  type QuantifySegmentInput,
-} from './criticalPathQuantify';
+import {quantifyCriticalPath, type QuantifySegmentInput} from './criticalPathQuantify';
 import {
   nsToMs,
   assertQuerySucceeded,
@@ -50,46 +38,33 @@ import {
   type QueryRow,
 } from '../utils/traceProcessorRowUtils';
 import type {TraceProcessorService} from './traceProcessorService';
-import {
-  errorLine,
-  reasonKey,
-  reasonText,
-  type CriticalPathAnomalyId,
-  type CriticalPathEvidence,
-  type CriticalPathModuleId,
-  type CriticalPathReason,
-  type CriticalPathRecommendationId,
-  type CriticalPathWarning,
-  type TextParams,
-} from './criticalPathText';
+import {errorLine, reasonKey, reasonText} from './criticalPathText';
 import {renderCriticalPathAnalysis} from './criticalPathLocalization';
 import type {
   CriticalPathAnalysis,
   CriticalPathAnomaly,
+  CriticalPathAnomalyId,
+  CriticalPathEvidence,
   CriticalPathInputErrorCode,
   CriticalPathLongestSegment,
+  CriticalPathModuleId,
   CriticalPathModuleStat,
+  CriticalPathQuantification,
+  CriticalPathReason,
+  CriticalPathRecommendationId,
   CriticalPathSegment,
   CriticalPathTaskInfo,
   CriticalPathTotalsNs,
   CriticalPathUnavailableReason,
+  CriticalPathWarning,
+  SegmentSemantics,
+  SemanticSourceStatus,
   SliceFinding,
   SliceKind,
-} from '../types/criticalPathContract';
-
-// The result types are declared in the response contract.
-export type {
-  CriticalPathAnalysis,
-  CriticalPathAnomaly,
-  CriticalPathInputErrorCode,
-  CriticalPathLongestSegment,
-  CriticalPathModuleStat,
-  CriticalPathSegment,
-  CriticalPathTaskInfo,
-  CriticalPathTotalsNs,
-  CriticalPathUnavailableReason,
-  SliceFinding,
-  SliceKind,
+  TextParams,
+  WaitClass,
+  WakeSourceSummary,
+  WakerHop,
 } from '../types/criticalPathContract';
 
 /**
@@ -210,12 +185,14 @@ function normalizePositiveInt(value: unknown, fallback: number, min: number, max
   return Math.min(Math.max(Math.floor(parsed), min), max);
 }
 
-function pct(value: number, total: number): number {
+/** `value` as a percentage of `total`, to two decimals. */
+export function pct(value: number, total: number): number {
   if (!total) return 0;
   return Math.round((value * 10_000) / total) / 100;
 }
 
-function classifySlice(state: string | null): SliceKind {
+/** The one reading of a thread_state state the engine and its consumers share. */
+export function classifySlice(state: string | null | undefined): SliceKind {
   if (!state) return 'unknown';
   if (state === 'Running') return 'running';
   const first = state[0];
@@ -749,10 +726,18 @@ const EMPTY_ANALYSIS_RECOMMENDATION: Record<CriticalPathUnavailableReason, Criti
   no_critical_path_stack: 'record_sched_events',
 };
 
+/** The thread's own S/D time in the window, exact (slices are clipped to it). */
+function sliceWaitNs(slices: readonly SliceFinding[]): number {
+  return slices
+    .filter((slice) => slice.kind === 'sleeping' || slice.kind === 'uninterruptible')
+    .reduce((sum, slice) => sum + Math.max(0, slice.endTs - slice.startTs), 0);
+}
+
 function buildEmptyAnalysis(
   task: CriticalPathTaskInfo,
   warnings: CriticalPathWarning[],
-  reason: CriticalPathUnavailableReason
+  reason: CriticalPathUnavailableReason,
+  slices: SliceFinding[]
 ): CriticalPathAnalysis {
   return {
     available: false,
@@ -783,7 +768,8 @@ function buildEmptyAnalysis(
     chainSegmentCount: 0,
     chainWaitMs: 0,
     waitClassTotalsMs: {},
-    totalsNs: {window: task.dur, blocking: 0, self: task.dur, chainWait: 0},
+    slices,
+    totalsNs: {blocking: 0, chainWait: 0, waiting: sliceWaitNs(slices)},
   };
 }
 
@@ -792,17 +778,17 @@ function uniqueWarnings(warnings: CriticalPathWarning[]): CriticalPathWarning[] 
   return [...new Map(warnings.map((warning) => [JSON.stringify(warning), warning])).values()];
 }
 
-// Waiting means an S or D state, the same reading the MCP tool applies to
+// Waiting means an S or D state (`classifySlice`), the same reading applied to
 // `slices`; each wait is credited to its wake-source class or to `unknown`.
-// Callers pass the top-level chain only (see `CriticalPathAnalysis`).
-function chainWaitTotals(
+// The engine passes the top-level chain only (see `CriticalPathAnalysis`).
+export function chainWaitTotals(
   segments: readonly CriticalPathSegment[]
 ): {chainWaitNs: number; chainWaitMs: number; waitClassTotalsMs: Record<string, number>} {
   const classNs: Record<string, number> = {};
   let waitNs = 0;
   for (const segment of segments) {
-    const state = segment.state ?? '';
-    if (!(state.startsWith('S') || state.startsWith('D'))) continue;
+    const kind = classifySlice(segment.state);
+    if (kind !== 'sleeping' && kind !== 'uninterruptible') continue;
     const key = segment.wakeSourceClass ?? 'unknown';
     classNs[key] = (classNs[key] ?? 0) + segment.dur;
     waitNs += segment.dur;
@@ -1336,10 +1322,10 @@ export async function analyzeCriticalPath(
   // longest slice is Running can still spend most of its time waiting.
   if (typeof task.threadStateId === 'number') {
     if (slices.every((slice) => slice.kind === 'running')) {
-      return render({...buildEmptyAnalysis(task, warnings, 'task_state_running'), slices});
+      return render(buildEmptyAnalysis(task, warnings, 'task_state_running', slices));
     }
   } else if (longestWaitingSlice(slices) === null) {
-    return render({...buildEmptyAnalysis(task, warnings, 'no_waiting_time'), slices});
+    return render(buildEmptyAnalysis(task, warnings, 'no_waiting_time', slices));
   }
 
   // L2 — direct waker, resolved before the stack so an empty chain still
@@ -1368,8 +1354,7 @@ export async function analyzeCriticalPath(
 
   if (segments.length === 0) {
     return render({
-      ...buildEmptyAnalysis(task, warnings, 'no_critical_path_stack'),
-      slices,
+      ...buildEmptyAnalysis(task, warnings, 'no_critical_path_stack', slices),
       directWaker,
     });
   }
@@ -1487,6 +1472,6 @@ export async function analyzeCriticalPath(
     chainSegmentCount: chain.length,
     chainWaitMs: waitTotals.chainWaitMs,
     waitClassTotalsMs: waitTotals.waitClassTotalsMs,
-    totalsNs: {window: task.dur, blocking: blockingNs, self: selfNs, chainWait: waitTotals.chainWaitNs},
+    totalsNs: {blocking: blockingNs, chainWait: waitTotals.chainWaitNs, waiting: sliceWaitNs(slices)},
   });
 }

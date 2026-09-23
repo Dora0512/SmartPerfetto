@@ -491,7 +491,7 @@ export interface CriticalPathAnalysis {
   slices?: SliceFinding[];
   directWaker?: WakerHop | null;
   quantification?: CriticalPathQuantification;
-  semanticSources?: Record<string, SemanticSourceStatus>;
+  semanticSources?: Partial<SemanticSources>;
   unavailableReason?: CriticalPathUnavailableReason;
   // `wakeupChain` holds only the displayed prefix; consumers that summarise
   // waits (the MCP tool routes on them) read these whole-chain totals instead.
@@ -501,32 +501,39 @@ export interface CriticalPathAnalysis {
   chainWaitMs?: number;
   waitClassTotalsMs?: Record<string, number>;
   /**
-   * The exact ns behind the rounded headline ms fields: the window, the
-   * whole-chain blocking and self time, and the chain's S/D time. Evidence
-   * captures read these, never the rounded values.
+   * The exact ns behind the rounded headline ms fields. The window is
+   * `task.dur` and self time is `task.dur - blocking` (never below 0).
+   * Evidence captures read these, never the rounded values.
    */
   totalsNs?: CriticalPathTotalsNs;
 }
 
 export interface CriticalPathTotalsNs {
-  window: number;
+  /** External blocking over the whole top-level chain. */
   blocking: number;
-  self: number;
+  /** The chain's S/D time (`chainWaitMs`). */
   chainWait: number;
+  /** The selected thread's own S/D time inside the window. */
+  waiting: number;
 }
 
-export interface CriticalPathAiSummary {
+/**
+ * The optional model narrative of an auxiliary analysis (critical path,
+ * flamegraph): a model answer, or the deterministic rule summary with the
+ * reason no model answered.
+ */
+export interface AiSummary {
   generated: boolean;
   model?: string;
   summary: string;
   warnings: string[];
   redactionApplied?: boolean;
   /** Set whenever `generated` is false; `warnings` carries the localized explanation. */
-  fallbackReason?: CriticalPathAiFallbackReason;
+  fallbackReason?: AiSummaryFallbackReason;
 }
 
 /** Why the rule summary was returned instead of a model answer. */
-export type CriticalPathAiFallbackReason =
+export type AiSummaryFallbackReason =
   | 'ai_disabled'
   | 'permission_denied'
   | 'runtime_not_supported'
@@ -536,6 +543,9 @@ export type CriticalPathAiFallbackReason =
   | 'timed_out'
   | 'failed'
   | 'empty_response';
+
+export type CriticalPathAiSummary = AiSummary;
+export type CriticalPathAiFallbackReason = AiSummaryFallbackReason;
 
 /** Body of `POST /api/critical-path/:traceId/analyze`; the route's schema must accept exactly this. */
 export interface CriticalPathAnalyzeRequest {
@@ -558,7 +568,11 @@ export interface CriticalPathAnalyzeRequest {
 
 export interface CriticalPathAnalyzeResponse {
   success: true;
-  /** The engine result rendered in zh-CN (the compatible legacy text fields). */
+  /**
+   * The engine result rendered in zh-CN (the compatible legacy text fields).
+   * @deprecated Read `presentationAnalysis`: the same result in the requested
+   * language. Kept for existing HTTP clients; removal is a tracked follow-up.
+   */
   analysis: CriticalPathAnalysis;
   /** The same result rendered in the requested output language. */
   presentationAnalysis: CriticalPathAnalysis;

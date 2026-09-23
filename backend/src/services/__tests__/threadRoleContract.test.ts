@@ -13,8 +13,8 @@ import fs from 'fs';
 import path from 'path';
 
 import {composeFragmentSql} from '../skillEngine/skillFragments';
-import type {WaitClass, WakeSource} from '../criticalPathSemantics';
 import {sqliteTraceProcessor} from '../../../tests/helpers/criticalPathTraceProcessorFixture';
+import type {WaitClass, WakeSource} from '../../types/criticalPathContract';
 
 const wakeFragmentPath = path.resolve(__dirname, '../../../skills/fragments/sleep_wake_source_labels.sql');
 

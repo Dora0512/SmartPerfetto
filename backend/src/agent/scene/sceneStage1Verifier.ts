@@ -15,7 +15,7 @@ import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { sceneStoryConfig } from '../../config';
 import {createSdkEnv, loadClaudeConfig} from '../../agentv3/claudeConfig';
 import { loadPromptTemplate, renderTemplate } from '../../agentv3/strategyLoader';
-import {isolatedSceneModelCallOptions} from './isolatedSceneModelCall';
+import {isolatedClaudeOneShotOptions} from '../../services/oneShotModelCall';
 import type {
   DisplayedScene,
   SceneReconstructionVerification,
@@ -255,15 +255,15 @@ async function runLlmVerifier(
     const sdkEnv = createSdkEnv();
     stream = sdkQuery({
       prompt,
-      options: {
-        ...isolatedSceneModelCallOptions({
-          model: loadClaudeConfig().lightModel,
-          env: sdkEnv,
-          stderr: (data: string) => {
-            console.warn(`[SceneStage1Verifier] SDK stderr: ${data.trimEnd()}`);
-          },
-        }),
-      },
+      // Trace-derived text is untrusted model input: the shared one-shot
+      // isolation (no tools, MCP, settings, skills, plugins or transcript).
+      options: isolatedClaudeOneShotOptions({
+        model: loadClaudeConfig().lightModel,
+        env: sdkEnv,
+        stderr: (data: string) => {
+          console.warn(`[SceneStage1Verifier] SDK stderr: ${data.trimEnd()}`);
+        },
+      }),
     });
 
     let raw = '';

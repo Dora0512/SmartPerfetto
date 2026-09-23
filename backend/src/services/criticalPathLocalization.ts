@@ -8,7 +8,6 @@
 // projected, can be rendered into any output language.
 
 import {localize, type OutputLanguage} from '../agentv3/outputLanguage';
-import type {CriticalPathAnalysis, CriticalPathSegment} from './criticalPathAnalyzer';
 import {
   anomalyText,
   evidenceText,
@@ -21,6 +20,7 @@ import {
   stateText,
   warningText,
 } from './criticalPathText';
+import type {CriticalPathAnalysis, CriticalPathSegment} from '../types/criticalPathContract';
 
 function renderSegment(segment: CriticalPathSegment, language: OutputLanguage): CriticalPathSegment {
   return {
@@ -78,11 +78,26 @@ function summaryText(analysis: CriticalPathAnalysis, language: OutputLanguage): 
   return lines.join('\n');
 }
 
+// One request renders the same result for the route, its rule summary and its
+// prompt; each (analysis, language) pair is rendered once. Results are treated
+// as immutable once the engine returns them.
+const renderedByLanguage = new WeakMap<CriticalPathAnalysis, Map<OutputLanguage, CriticalPathAnalysis>>();
+
 /** Every display field rendered in `language` from the analysis' ids. */
 export function renderCriticalPathAnalysis(
   analysis: CriticalPathAnalysis,
   language: OutputLanguage,
 ): CriticalPathAnalysis {
+  const cached = renderedByLanguage.get(analysis)?.get(language);
+  if (cached) return cached;
+  const rendered = renderUncached(analysis, language);
+  const byLanguage = renderedByLanguage.get(analysis) ?? new Map<OutputLanguage, CriticalPathAnalysis>();
+  byLanguage.set(language, rendered);
+  renderedByLanguage.set(analysis, byLanguage);
+  return rendered;
+}
+
+function renderUncached(analysis: CriticalPathAnalysis, language: OutputLanguage): CriticalPathAnalysis {
   const quantification = analysis.quantification;
   const rendered: CriticalPathAnalysis = {
     ...analysis,
@@ -115,12 +130,4 @@ export function renderCriticalPathAnalysis(
       : {}),
   };
   return {...rendered, summary: summaryText(rendered, language)};
-}
-
-/** The analysis as a reader in `language` sees it; the historical name of the renderer. */
-export function projectCriticalPathAnalysis(
-  analysis: CriticalPathAnalysis,
-  outputLanguage: OutputLanguage,
-): CriticalPathAnalysis {
-  return renderCriticalPathAnalysis(analysis, outputLanguage);
 }

@@ -262,8 +262,6 @@ export interface ObservedFlowCriticalTask {
   utid?: number;
   threadStateId?: number;
   state?: string;
-  tableName?: string;
-  stackDepth?: number;
   waker?: ObservedFlowWakeupRef;
   evidenceSource: string;
   confidence: number;

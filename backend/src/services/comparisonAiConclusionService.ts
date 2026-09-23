@@ -15,7 +15,11 @@ import {
   getAiCapabilityPolicy,
   isAiFeatureEnabled,
 } from './aiCapabilityPolicy';
-import { resolveOneShotModelRoute, runIsolatedClaudeOneShot } from './oneShotModelCall';
+import {
+  resolveOneShotProvider,
+  runIsolatedClaudeOneShot,
+  type ClaudeOneShotContext,
+} from './oneShotModelCall';
 import {
   buildOpenAIChatCompletionsTokenLimit,
   isOpenAIChatCompletionsOutputTruncated,
@@ -229,36 +233,41 @@ async function completeWithOpenAI(input: ComparisonConclusionClientInput): Promi
   }
 }
 
-async function completeWithClaude(input: ComparisonConclusionClientInput): Promise<ComparisonConclusionClientOutput> {
+async function completeWithClaude(
+  input: ComparisonConclusionClientInput,
+  claude: ClaudeOneShotContext,
+): Promise<ComparisonConclusionClientOutput> {
   // The comparison keeps its own choices: the light model, low effort, and
   // the long generation deadline; everything else is the shared isolated call.
   const result = await runIsolatedClaudeOneShot({
     prompt: input.prompt,
+    claude,
     tier: 'light',
     effort: 'low',
     timeoutMs: COMPARISON_CONCLUSION_TIMEOUT_MS,
     signal: input.signal,
     logLabel: 'ComparisonConclusion',
-    providerId: input.providerId,
-    providerScope: input.providerScope,
   });
   if (!result.ok) throw new Error(`Claude comparison conclusion ${result.reason.replace(/_/g, ' ')}`);
   return {text: result.text, model: result.model};
 }
 
-/** Claude and OpenAI runtimes answer; any other runtime is reported, never silently sent to Claude. */
+/**
+ * Claude and OpenAI runtimes answer; any other runtime is reported, never
+ * silently sent to Claude. The AI gate is the caller's
+ * (`generateAiComparisonConclusion`); this only reads the provider, once.
+ */
 class DefaultComparisonConclusionClient implements ComparisonConclusionClient {
   async complete(input: ComparisonConclusionClientInput): Promise<ComparisonConclusionClientOutput> {
-    const route = resolveOneShotModelRoute({
-      feature: 'comparison_ai_conclusion',
+    const provider = resolveOneShotProvider({
       providerId: input.providerId,
       providerScope: input.providerScope,
       logLabel: 'ComparisonConclusion',
     });
-    if (route.kind === 'unavailable') throw new Error(`the AI provider is unavailable (${route.reason})`);
-    if (route.runtime === 'openai-agents-sdk') return completeWithOpenAI(input);
-    if (route.runtime === 'claude-agent-sdk') return completeWithClaude(input);
-    throw new Error(`the active provider runs the ${route.runtime} runtime, which the comparison conclusion does not support`);
+    if (provider.kind === 'unavailable') throw new Error('the AI provider is unavailable');
+    if (provider.runtime === 'openai-agents-sdk') return completeWithOpenAI(input);
+    if (provider.claude) return completeWithClaude(input, provider.claude);
+    throw new Error(`the active provider runs the ${provider.runtime} runtime, which the comparison conclusion does not support`);
   }
 }
 

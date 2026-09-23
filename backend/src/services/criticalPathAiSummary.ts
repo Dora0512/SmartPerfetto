@@ -3,34 +3,14 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import {loadPromptTemplate, renderTemplate, stripPromptComments} from '../agentv3/strategyLoader';
-import {
-  localize,
-  type OutputLanguage,
-} from '../agentv3/outputLanguage';
+import {localize, type OutputLanguage} from '../agentv3/outputLanguage';
+import type {CriticalPathAiSummary, CriticalPathAnalysis} from '../types/criticalPathContract';
 import {redactObjectForLLM} from '../utils/llmPrivacy';
-import {AI_CAPABILITY_ENV_KEY, type AiCapabilityPolicyV1} from './aiCapabilityPolicy';
-import type {CriticalPathAnalysis} from './criticalPathAnalyzer';
-import {projectCriticalPathAnalysis} from './criticalPathLocalization';
+import type {AiCapabilityPolicyV1} from './aiCapabilityPolicy';
+import {renderCriticalPathAnalysis} from './criticalPathLocalization';
 import {buildDeterministicCriticalPathSummary} from './criticalPathSummary';
-import {
-  resolveOneShotModelRoute,
-  runIsolatedClaudeOneShot,
-  type OneShotFallbackReason,
-} from './oneShotModelCall';
+import {runOneShotSummary} from './oneShotModelCall';
 import type {ProviderScope} from './providerManager';
-import type {CriticalPathAiFallbackReason, CriticalPathAiSummary} from '../types/criticalPathContract';
-
-// Re-exported so the critical-path route keeps its historical import site while
-// the pure summary itself no longer drags the Claude Agent SDK in with it.
-export {buildDeterministicCriticalPathSummary};
-
-export type {CriticalPathAiFallbackReason, CriticalPathAiSummary} from '../types/criticalPathContract';
-
-/** True only when two types accept exactly the same values. */
-type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-// The contract spells the fallback reasons out for the frontend; they must stay
-// the one-shot helper's reasons, which is where every one of them comes from.
-const fallbackReasonsMatchOneShot: SameType<CriticalPathAiFallbackReason, OneShotFallbackReason> = true;
 
 export interface CriticalPathAiSummaryOptions {
   /**
@@ -245,71 +225,6 @@ function compactAnalysisForLLM(analysis: CriticalPathAnalysis): unknown {
   };
 }
 
-/** Localized explanation for each deterministic-summary fallback. */
-function fallbackWarning(
-  reason: CriticalPathAiFallbackReason,
-  outputLanguage: OutputLanguage,
-  detail = '',
-): string {
-  switch (reason) {
-    case 'ai_disabled':
-      return localize(
-        outputLanguage,
-        `AI 已由 ${AI_CAPABILITY_ENV_KEY} 关闭，已返回规则兜底总结。`,
-        `AI is disabled by ${AI_CAPABILITY_ENV_KEY}; a deterministic rule summary was returned.`,
-      );
-    case 'runtime_not_supported':
-      return localize(
-        outputLanguage,
-        `当前 Provider 使用 ${detail} 运行时，关键路径 AI 总结只支持 Claude Agent SDK，已返回规则兜底总结。`,
-        `The active provider uses the ${detail} runtime; the critical-path AI summary supports only the Claude Agent SDK, so a deterministic rule summary was returned.`,
-      );
-    case 'runtime_unavailable':
-      return localize(
-        outputLanguage,
-        '无法解析当前 AI Provider，已返回规则兜底总结。',
-        'The active AI provider could not be resolved; a deterministic rule summary was returned.',
-      );
-    case 'credentials_missing':
-      return localize(
-        outputLanguage,
-        'AI 模型未配置，已返回规则兜底总结。',
-        'No AI model is configured; a deterministic rule summary was returned.',
-      );
-    case 'client_disconnected':
-      return localize(
-        outputLanguage,
-        '客户端已断开，AI 诊断已取消。',
-        'The client disconnected, so the AI diagnosis was cancelled.',
-      );
-    case 'timed_out':
-      return localize(
-        outputLanguage,
-        'AI 诊断超时，已返回规则兜底总结。',
-        'AI diagnosis timed out; a deterministic rule summary was returned.',
-      );
-    case 'failed':
-      // The provider's own error text stays in the server log.
-      return localize(
-        outputLanguage,
-        'AI 诊断失败，已返回规则兜底总结。',
-        'AI diagnosis failed; a deterministic rule summary was returned.',
-      );
-    case 'permission_denied':
-      return localize(
-        outputLanguage,
-        '当前账号没有运行 AI 分析的权限（agent:run），已返回规则兜底总结。',
-        'This account may not run AI analysis (agent:run); a deterministic rule summary was returned.',
-      );
-    case 'empty_response':
-      return localize(
-        outputLanguage,
-        'AI 没有返回有效内容，已返回规则兜底总结。',
-        'The AI returned no valid content; a deterministic rule summary was returned.',
-      );
-  }
-}
-
 function buildStructuredPrompt(
   analysis: CriticalPathAnalysis,
   question: string | undefined,
@@ -320,7 +235,7 @@ function buildStructuredPrompt(
   );
   if (!template) return undefined;
   // The model reads the facts in the language it answers in.
-  const compact = compactAnalysisForLLM(projectCriticalPathAnalysis(analysis, outputLanguage));
+  const compact = compactAnalysisForLLM(renderCriticalPathAnalysis(analysis, outputLanguage));
   const redacted = redactObjectForLLM(redactCriticalPathFields(compact));
   const prompt = renderTemplate(stripPromptComments(template), {
     factsJson: JSON.stringify(redacted.value).slice(0, 32_000),
@@ -347,46 +262,17 @@ export async function summarizeCriticalPathWithAi(
   outputLanguage: OutputLanguage = 'zh-CN',
   options: CriticalPathAiSummaryOptions = {},
 ): Promise<CriticalPathAiSummary> {
-  const fallback = buildDeterministicCriticalPathSummary(analysis, outputLanguage);
-  const degrade = (
-    reason: CriticalPathAiFallbackReason,
-    extra: Pick<CriticalPathAiSummary, 'model' | 'redactionApplied'> = {},
-    detail = '',
-  ): CriticalPathAiSummary => ({
-    generated: false,
-    ...extra,
-    summary: fallback,
-    warnings: [fallbackWarning(reason, outputLanguage, detail)],
-    fallbackReason: reason,
-  });
-
-  // The operator switch and the caller's permission are checked before any
-  // provider or credential lookup: no trace-derived text may reach a model
-  // otherwise.
-  const route = resolveOneShotModelRoute({
+  return runOneShotSummary({
     feature: 'critical_path_ai_summary',
-    providerScope: options.providerScope,
+    label: {zh: '关键路径 AI 诊断', en: 'critical-path AI diagnosis'},
+    logLabel: 'CriticalPathAI',
+    outputLanguage,
+    ruleSummary: () => buildDeterministicCriticalPathSummary(analysis, outputLanguage),
+    buildPrompt: () => buildStructuredPrompt(analysis, question, outputLanguage),
+    timeoutMs: Number.parseInt(process.env.CRITICAL_PATH_AI_TIMEOUT_MS || '60000', 10),
     aiPolicy: options.aiPolicy,
-    logLabel: 'CriticalPathAI',
-  });
-  if (route.kind === 'unavailable' && route.reason === 'ai_disabled') return degrade('ai_disabled');
-  if (options.aiPermitted === false) return degrade('permission_denied');
-  if (options.signal?.aborted) return degrade('client_disconnected');
-  if (route.kind === 'unavailable') return degrade(route.reason);
-  if (route.runtime !== 'claude-agent-sdk') return degrade('runtime_not_supported', {}, route.runtime);
-
-  const built = buildStructuredPrompt(analysis, question, outputLanguage);
-  if (!built) return degrade('failed');
-  const timeoutMs = Number.parseInt(process.env.CRITICAL_PATH_AI_TIMEOUT_MS || '60000', 10);
-  const result = await runIsolatedClaudeOneShot({
-    prompt: built.prompt,
-    tier: 'main',
-    timeoutMs,
+    aiPermitted: options.aiPermitted,
     signal: options.signal,
-    logLabel: 'CriticalPathAI',
     providerScope: options.providerScope,
   });
-  const attempted = {...(result.model ? {model: result.model} : {}), redactionApplied: built.redactionApplied};
-  if (!result.ok) return degrade(result.reason, attempted);
-  return {generated: true, ...attempted, model: result.model, summary: result.text, warnings: []};
 }

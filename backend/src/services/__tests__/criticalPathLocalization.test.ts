@@ -2,25 +2,9 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import type {CriticalPathAnalysis} from '../criticalPathAnalyzer';
-import {projectCriticalPathAnalysis, renderCriticalPathAnalysis} from '../criticalPathLocalization';
-import {
-  CRITICAL_PATH_ANOMALY_IDS,
-  CRITICAL_PATH_HINT_CODES,
-  CRITICAL_PATH_HYPOTHESIS_IDS,
-  CRITICAL_PATH_MODULE_IDS,
-  CRITICAL_PATH_NOTE_CODES,
-  CRITICAL_PATH_RECOMMENDATION_IDS,
-  CRITICAL_PATH_WARNING_CODES,
-  anomalyText,
-  hintText,
-  hypothesisText,
-  moduleText,
-  noteText,
-  reasonText,
-  recommendationText,
-  warningText,
-} from '../criticalPathText';
+import {renderCriticalPathAnalysis} from '../criticalPathLocalization';
+import {anomalyText, hintText, hypothesisText, moduleText, noteText, reasonText, recommendationText, warningText} from '../criticalPathText';
+import {CRITICAL_PATH_ANOMALY_IDS, CRITICAL_PATH_HINT_CODES, CRITICAL_PATH_HYPOTHESIS_IDS, CRITICAL_PATH_MODULE_IDS, CRITICAL_PATH_NOTE_CODES, CRITICAL_PATH_RECOMMENDATION_IDS, CRITICAL_PATH_WARNING_CODES, type CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 const HAN = /\p{Script=Han}/u;
 
@@ -101,7 +85,7 @@ describe('criticalPathLocalization', () => {
     const analysis = fixture();
     const raw = structuredClone(analysis);
 
-    const en = projectCriticalPathAnalysis(analysis, 'en');
+    const en = renderCriticalPathAnalysis(analysis, 'en');
 
     expect(en.summary).not.toMatch(HAN);
     expect(en.moduleBreakdown[0].module).toBe('I/O / File system');
@@ -137,9 +121,9 @@ describe('criticalPathLocalization', () => {
     expect(zh.warnings[0]).toBe('critical path 共 180 个链路段，仅展示前 160 个；阻塞时长、模块占比与反事实估计按完整链路计算。');
     expect(zh.summary).toContain('最长外部段是 com.demo / OkHttp Dispatch，持续 40.00 ms，关联 网络收包等待候选。');
     expect(zh.summary).toContain('直接唤醒来源：Interrupt。');
-    const en = projectCriticalPathAnalysis(zh, 'en');
-    expect(projectCriticalPathAnalysis(en, 'en')).toEqual(en);
-    expect(projectCriticalPathAnalysis(en, 'zh-CN')).toEqual(zh);
+    const en = renderCriticalPathAnalysis(zh, 'en');
+    expect(renderCriticalPathAnalysis(en, 'en')).toEqual(en);
+    expect(renderCriticalPathAnalysis(en, 'zh-CN')).toEqual(zh);
   });
 
   it('renders hypothesis statements and notes from their parameters', () => {
@@ -154,8 +138,8 @@ describe('criticalPathLocalization', () => {
       }],
     };
 
-    const en = projectCriticalPathAnalysis(analysis, 'en').quantification!.hypotheses[0];
-    const zh = projectCriticalPathAnalysis(analysis, 'zh-CN').quantification!.hypotheses[0];
+    const en = renderCriticalPathAnalysis(analysis, 'en').quantification!.hypotheses[0];
+    const zh = renderCriticalPathAnalysis(analysis, 'zh-CN').quantification!.hypotheses[0];
 
     expect(en.statement).toContain('Thread utid=42 spends 6 ms of its critical-path segment [1, 2)');
     expect(en.notes).toEqual(['io_wait flag confirmed']);

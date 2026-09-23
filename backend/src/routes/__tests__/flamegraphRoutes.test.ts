@@ -10,8 +10,8 @@ import path from 'path';
 import request from 'supertest';
 import {query as sdkQuery} from '@anthropic-ai/claude-agent-sdk';
 import flamegraphRoutes from '../flamegraphRoutes';
-import {resolveAgentRuntimeSelection} from '../../agentRuntime/runtimeSelection';
-import {createSdkEnv, hasClaudeCredentials} from '../../agentv3/claudeConfig';
+import {selectRuntimeForProvider} from '../../agentRuntime/runtimeSelection';
+import {hasClaudeCredentials, sdkEnvForProviderEnv} from '../../agentv3/claudeConfig';
 import {
   authenticate,
   DEFAULT_DEV_USER_ID,
@@ -32,14 +32,25 @@ jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 jest.mock('../../agentRuntime/runtimeSelection', () => ({
-  resolveAgentRuntimeSelection: jest.fn(),
+  selectRuntimeForProvider: jest.fn(),
+}));
+
+// One provider read per summary: the store is faked so the test can count it.
+const mockProviderService = {
+  getRawEffectiveProvider: jest.fn<(...args: any[]) => any>(),
+  getRawProvider: jest.fn<(...args: any[]) => any>(),
+  getEnvForProviderConfig: jest.fn<(...args: any[]) => any>(),
+};
+jest.mock('../../services/providerManager', () => ({
+  ...(jest.requireActual('../../services/providerManager') as object),
+  getProviderService: () => mockProviderService,
 }));
 
 jest.mock('../../agentv3/claudeConfig', () => ({
-  createSdkEnv: jest.fn(),
+  sdkEnvForProviderEnv: jest.fn(),
   hasClaudeCredentials: jest.fn(),
   loadClaudeConfig: jest.fn(() => ({model: 'env-model'})),
-  resolveRuntimeConfig: jest.fn(() => ({model: 'profile-model'})),
+  runtimeConfigForProviderEnv: jest.fn(() => ({model: 'profile-model'})),
   getSdkBinaryOption: jest.fn(() => ({})),
   resolveClaudeSdkPermissionOptions: jest.fn(() => ({permissionMode: 'dontAsk'})),
 }));
@@ -63,8 +74,8 @@ const actualMetadataStore = jest.requireActual('../../services/traceMetadataStor
   readTraceMetadataForContext: (...args: any[]) => Promise<unknown>;
 };
 const mockQuery = sdkQuery as unknown as jest.Mock<(...args: any[]) => any>;
-const mockSelection = resolveAgentRuntimeSelection as unknown as jest.Mock<(...args: any[]) => any>;
-const mockCreateSdkEnv = createSdkEnv as unknown as jest.Mock<(...args: any[]) => any>;
+const mockSelection = selectRuntimeForProvider as unknown as jest.Mock<(...args: any[]) => any>;
+const mockCreateSdkEnv = sdkEnvForProviderEnv as unknown as jest.Mock<(...args: any[]) => any>;
 const mockHasClaudeCredentials = hasClaudeCredentials as unknown as jest.Mock<(...args: any[]) => any>;
 const mockAnalyze = analyzeFlamegraph as unknown as jest.Mock<(...args: any[]) => any>;
 const mockAvailability = getFlamegraphAvailability as unknown as jest.Mock<(...args: any[]) => any>;
@@ -149,6 +160,8 @@ beforeEach(() => {
   mockAvailability.mockResolvedValue({available: true, sampleSource: 'linux_perf_samples_summary_tree', availableSources: [], missing: [], warnings: []});
   mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
   mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue({id: 'provider-a'});
+    mockProviderService.getEnvForProviderConfig.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
   mockHasClaudeCredentials.mockReturnValue(true);
   mockQuery.mockImplementation(() => sdkStream('## model summary'));
 });
@@ -237,7 +250,8 @@ describe('flamegraph routes: AI summary gate', () => {
     expect(res.body.analysis.available).toBe(true);
     expect(res.body.aiSummary).toMatchObject({generated: false, fallbackReason: 'permission_denied'});
     expect(res.body.aiSummary.warnings[0]).toContain('agent:run');
-    expect(mockSelection).toHaveBeenCalled();
+    // Permission is checked before the provider is read.
+    expect(mockProviderService.getRawEffectiveProvider).not.toHaveBeenCalled();
     expect(mockCreateSdkEnv).not.toHaveBeenCalled();
     expect(mockQuery).not.toHaveBeenCalled();
   });
@@ -270,8 +284,9 @@ describe('flamegraph routes: AI summary gate', () => {
     expect(res.status).toBe(200);
     expect(res.body.aiSummary).toMatchObject({generated: true, model: 'profile-model', summary: '## model summary'});
     const scope = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
-    expect(mockSelection).toHaveBeenCalledWith(undefined, undefined, scope);
-    expect(mockCreateSdkEnv).toHaveBeenCalledWith(undefined, scope);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledTimes(1);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledWith(scope);
+    expect(mockCreateSdkEnv).toHaveBeenCalledWith({ANTHROPIC_API_KEY: 'profile-key'});
     const {prompt, options} = mockQuery.mock.calls[0][0] as {prompt: string; options: Record<string, unknown>};
     // The prompt comes from the strategy template, comments stripped.
     expect(prompt).toContain('self_count');

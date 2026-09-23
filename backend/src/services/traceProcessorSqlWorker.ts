@@ -182,6 +182,21 @@ export function normalizeTraceProcessorSqlError(raw: string): string {
   return position ? `${diagnosis} (line ${position[1]}, col ${position[2]})` : diagnosis;
 }
 
+/** What a trace_processor SQL failure says about the schema it ran against. */
+export type TraceProcessorSqlErrorKind = 'unknown_module' | 'missing_table' | 'missing_column' | 'other';
+
+/**
+ * The kind of a trace_processor SQL error, from its diagnosis line: the stdlib
+ * lacks the module, the schema lacks a table, a column or function does not
+ * exist, or anything else. The one place these messages are read.
+ */
+export function classifyTraceProcessorSqlError(message: string): TraceProcessorSqlErrorKind {
+  if (/unknown module/i.test(message)) return 'unknown_module';
+  if (/no such table/i.test(message)) return 'missing_table';
+  if (/no such column|no such function/i.test(message)) return 'missing_column';
+  return 'other';
+}
+
 export class TraceProcessorSqlWorker {
   private readonly processorId: string;
   private readonly traceId: string;

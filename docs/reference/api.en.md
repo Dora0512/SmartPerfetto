@@ -782,10 +782,13 @@ Modules, anomalies, recommendations, warnings, reasons, waker hints and
 hypotheses carry stable ids (`moduleIds` / `moduleId`, `anomalies[].id` +
 `params` + `evidenceItems`, `recommendationIds`, `warningCodes`, `reasonItems`,
 `directWaker.hintCodes`, `hypotheses[].params` + `noteCodes`); text is rendered
-only at the edge: `analysis` is the zh-CN rendering (compatible legacy fields)
-and `presentationAnalysis` the requested language. `longestSegment` names the
+only at the edge: `presentationAnalysis` is the requested language. `analysis`
+is the same result rendered in zh-CN and is deprecated: it stays for existing
+clients and will be removed in a later release, so new clients read
+`presentationAnalysis` only. `longestSegment` names the
 longest external segment of the whole chain.
-`totalsNs` (`window`, `blocking`, `self`, `chainWait`, integer ns) and the
+`totalsNs` (`blocking`, `chainWait`, `waiting`, integer ns; the window is
+`task.dur` and self time is `task.dur - blocking`) and the
 counterfactual's `longestSegmentDurNs`, `bestCaseDurationNs` and `maxSavingNs`
 are additive; each ms field is rounded once from its ns value. Omitted
 `maxSegments` / `recursionDepth` / `segmentBudget` take the engine's

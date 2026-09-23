@@ -12,8 +12,8 @@
 // module re-exports it for its existing route consumer.
 
 import {localize, type OutputLanguage} from '../agentv3/outputLanguage';
-import type {CriticalPathAnalysis} from './criticalPathAnalyzer';
-import {projectCriticalPathAnalysis} from './criticalPathLocalization';
+import {renderCriticalPathAnalysis} from './criticalPathLocalization';
+import type {CriticalPathAnalysis} from '../types/criticalPathContract';
 
 export function buildDeterministicCriticalPathSummary(
   analysis: CriticalPathAnalysis,
@@ -21,7 +21,7 @@ export function buildDeterministicCriticalPathSummary(
 ): string {
   // Every label is rendered from the analysis' ids, so an analysis that was
   // already projected into another language renders the same way.
-  const view = projectCriticalPathAnalysis(analysis, outputLanguage);
+  const view = renderCriticalPathAnalysis(analysis, outputLanguage);
   const l = (zh: string, en: string): string => localize(outputLanguage, zh, en);
   const listSeparator = l('、', ', ');
   const counterfactual = view.quantification?.counterfactual;

@@ -29,36 +29,23 @@ import {
   toOptionalString,
   type QueryRow,
 } from '../utils/traceProcessorRowUtils';
-import {errorLine, type CriticalPathWarning} from './criticalPathText';
+import {randomUUID} from 'crypto';
+import {errorLine} from './criticalPathText';
 import {composeFragmentSql} from './skillEngine/skillFragments';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
+import {classifyTraceProcessorSqlError} from './traceProcessorSqlWorker';
 import type {TraceProcessorService} from './traceProcessorService';
 import type {
   BinderTxnSummary,
   CpuCompetitionSummary,
+  CriticalPathWarning,
   GcEventSummary,
   IoSignal,
   MonitorContentionSummary,
   SegmentSemantics,
   SemanticSourceName,
-  SemanticSources,
   SemanticSourceStatus,
-  WaitClass,
-  WakeSource,
-  WakeSourceSummary,
-} from '../types/criticalPathContract';
-
-// The result types are declared in the response contract.
-export type {
-  BinderTxnSummary,
-  CpuCompetitionSummary,
-  GcEventSummary,
-  IoSignal,
-  MonitorContentionSummary,
-  SegmentSemantics,
-  SemanticSourceName,
   SemanticSources,
-  SemanticSourceStatus,
   WaitClass,
   WakeSource,
   WakeSourceSummary,
@@ -112,20 +99,20 @@ const STDLIB_MODULES = {
  * long chain no longer starves its shortest segments of evidence.
  */
 const ROWS_PER_SEGMENT = {binder: 8, monitor: 6, io: 4, gc: 3, cpu: 6, wakeSource: 6} as const;
-export const LOADER_ROW_CEILING = 4000;
+const LOADER_ROW_CEILING = 4000;
 
 function classifyError(error: unknown, module?: string): {status: SemanticSourceStatus; warning: CriticalPathWarning} {
   const message = errorLine(error);
+  const kind = classifyTraceProcessorSqlError(message);
   // Only an unknown module means the stdlib lacks it; any other INCLUDE
   // failure (a table or column the module needs) is classified like a query.
-  if (module !== undefined && /unknown module/i.test(message)) {
+  if (module !== undefined && kind === 'unknown_module') {
     return {status: 'stdlib_missing', warning: {code: 'include_failed', params: {module}}};
   }
-  // Perfetto trace_processor returns "no such table: X" / "no such column: Y"
-  if (/no such table/i.test(message)) {
+  if (kind === 'missing_table') {
     return {status: 'stdlib_missing', warning: {code: 'stdlib_table_missing', params: {message}}};
   }
-  if (/no such column|no such function/i.test(message)) {
+  if (kind === 'missing_column') {
     return {status: 'sql_error', warning: {code: 'schema_mismatch', params: {message}}};
   }
   return {status: 'sql_error', warning: {code: 'query_failed', params: {message}}};
@@ -167,6 +154,48 @@ function segmentWindowsCte(segments: SegmentInput[]): string {
     `${segment.waiterUtid ?? 'NULL'})`
   );
   return `segment_windows(idx, utid, tid, upid, ts_start, ts_end, sleeping, runnable, waiter_utid) AS (VALUES ${rows.join(', ')})`;
+}
+
+interface SegmentWindowsInput {
+  /** The `segment_windows` CTE the loaders put first. */
+  cte: string;
+  /** Removes the table, if one was made; never throws. */
+  drop(): Promise<void>;
+}
+
+/**
+ * The windows as a table private to this enrichment (a unique name, dropped
+ * afterwards). Where the processor cannot create one, the loaders fall back to
+ * the inline VALUES CTE, which gives the same rows.
+ */
+async function materializeSegmentWindows(
+  tp: TraceProcessorService,
+  /** The processor without the analysis' cancellation, for the cleanup. */
+  uncancellable: TraceProcessorService,
+  traceId: string,
+  segments: SegmentInput[],
+): Promise<SegmentWindowsInput> {
+  const inline = segmentWindowsCte(segments);
+  const table = `_smartperfetto_cp_windows_${randomUUID().replace(/-/g, '')}`;
+  try {
+    assertQuerySucceeded(
+      await tp.query(traceId, `CREATE TABLE ${table} AS WITH ${inline} SELECT * FROM segment_windows;`),
+    );
+  } catch (error: unknown) {
+    rethrowIfTraceProcessorQueryCancelled(error);
+    return {cte: inline, drop: async () => undefined};
+  }
+  return {
+    cte: `segment_windows AS (SELECT * FROM ${table})`,
+    drop: async () => {
+      try {
+        // The table must go even when the analysis was cancelled.
+        await uncancellable.query(traceId, `DROP TABLE IF EXISTS ${table};`);
+      } catch {
+        // A processor that is gone took the table with it.
+      }
+    },
+  };
 }
 
 /** A loader row: the summary plus the `segment_idx` the query attached it to. */
@@ -420,13 +449,24 @@ export async function enrichSegmentsWithSemantics(
   }
 
   // Queries on one processor run one at a time, so the loaders run in order.
-  const ctx: LoaderContext = {tp, traceId, windows: segmentWindowsCte(unique)};
-  const binder = await loadBinderTxns(ctx);
-  const monitor = await loadMonitorContention(ctx);
-  const io = await loadIoSignals(ctx);
-  const gc = await loadGcEvents(ctx);
-  const cpu = await loadCpuCompetition(ctx, unique);
-  const wakeSource = await loadWakeSources(ctx, unique);
+  // The windows (up to thousands of rows) are written to a table once instead
+  // of being pasted into all six loader statements.
+  const windows = await materializeSegmentWindows(tp, service, traceId, unique);
+  let loaded;
+  try {
+    const ctx: LoaderContext = {tp, traceId, windows: windows.cte};
+    loaded = {
+      binder: await loadBinderTxns(ctx),
+      monitor: await loadMonitorContention(ctx),
+      io: await loadIoSignals(ctx),
+      gc: await loadGcEvents(ctx),
+      cpu: await loadCpuCompetition(ctx, unique),
+      wakeSource: await loadWakeSources(ctx, unique),
+    };
+  } finally {
+    await windows.drop();
+  }
+  const {binder, monitor, io, gc, cpu, wakeSource} = loaded;
 
   const loaders = {binder, monitor, io, gc, cpu, wakeSource};
   const sources = Object.fromEntries(

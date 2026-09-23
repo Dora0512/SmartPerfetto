@@ -4,9 +4,9 @@
 
 import {loadPromptTemplate, renderTemplate, stripPromptComments} from '../agentv3/strategyLoader';
 import {redactObjectForLLM} from '../utils/llmPrivacy';
-import {AI_CAPABILITY_ENV_KEY, type AiCapabilityPolicyV1} from './aiCapabilityPolicy';
-import type {FlamegraphAiFallbackReason, FlamegraphAiSummary, FlamegraphAnalysis} from './flamegraphTypes';
-import {resolveOneShotModelRoute, runIsolatedClaudeOneShot} from './oneShotModelCall';
+import type {AiCapabilityPolicyV1} from './aiCapabilityPolicy';
+import type {FlamegraphAiSummary, FlamegraphAnalysis} from './flamegraphTypes';
+import {runOneShotSummary} from './oneShotModelCall';
 import type {ProviderScope} from './providerManager';
 
 function pct(value: number): string {
@@ -97,31 +97,6 @@ export interface FlamegraphAiSummaryOptions {
   aiPermitted?: boolean;
 }
 
-// The flamegraph surface is Chinese-only (its static page and rule summary).
-function fallbackWarning(reason: FlamegraphAiFallbackReason, detail = ''): string {
-  switch (reason) {
-    case 'ai_disabled':
-      return `AI 已由 ${AI_CAPABILITY_ENV_KEY} 关闭，已返回规则兜底总结。`;
-    case 'permission_denied':
-      return '当前账号没有运行 AI 分析的权限（agent:run），已返回规则兜底总结。';
-    case 'runtime_not_supported':
-      return `当前 Provider 使用 ${detail} 运行时，火焰图 AI 总结只支持 Claude Agent SDK，已返回规则兜底总结。`;
-    case 'runtime_unavailable':
-      return '无法解析当前 AI Provider，已返回规则兜底总结。';
-    case 'credentials_missing':
-      return 'AI 模型未配置，已返回规则兜底总结。';
-    case 'client_disconnected':
-      return '客户端已断开，AI 总结已取消。';
-    case 'timed_out':
-      return 'AI 总结超时，已返回规则兜底总结。';
-    case 'failed':
-      // The provider's own error text stays in the server log.
-      return 'AI 总结失败，已返回规则兜底总结。';
-    case 'empty_response':
-      return 'AI 没有返回有效内容，已返回规则兜底总结。';
-  }
-}
-
 function buildPrompt(
   analysis: FlamegraphAnalysis,
   question: string | undefined,
@@ -140,52 +115,25 @@ function buildPrompt(
  * Optional model narrative over the flamegraph statistics. Every path that
  * does not produce a model answer returns the rule summary with a
  * `fallbackReason` and a warning; this never throws for policy, permission,
- * provider or model failures.
+ * provider or model failures. The flamegraph surface (its static page and rule
+ * summary) is Chinese only.
  */
 export async function summarizeFlamegraphWithAi(
   analysis: FlamegraphAnalysis,
   question?: string,
   options: FlamegraphAiSummaryOptions = {},
 ): Promise<FlamegraphAiSummary> {
-  const fallback = buildDeterministicFlamegraphSummary(analysis);
-  const degrade = (
-    reason: FlamegraphAiFallbackReason,
-    extra: Pick<FlamegraphAiSummary, 'model' | 'redactionApplied'> = {},
-    detail = '',
-  ): FlamegraphAiSummary => ({
-    generated: false,
-    ...extra,
-    summary: fallback,
-    warnings: [fallbackWarning(reason, detail)],
-    fallbackReason: reason,
-  });
-
-  // Operator switch and caller permission first: no trace-derived text may
-  // reach a model otherwise.
-  const route = resolveOneShotModelRoute({
+  return runOneShotSummary({
     feature: 'flamegraph_ai_summary',
-    providerScope: options.providerScope,
+    label: {zh: '火焰图 AI 总结', en: 'flamegraph AI summary'},
+    logLabel: 'FlamegraphAI',
+    outputLanguage: 'zh-CN',
+    ruleSummary: () => buildDeterministicFlamegraphSummary(analysis),
+    buildPrompt: () => buildPrompt(analysis, question),
+    timeoutMs: Number.parseInt(process.env.FLAMEGRAPH_AI_TIMEOUT_MS || '60000', 10),
     aiPolicy: options.aiPolicy,
-    logLabel: 'FlamegraphAI',
-  });
-  if (route.kind === 'unavailable' && route.reason === 'ai_disabled') return degrade('ai_disabled');
-  if (options.aiPermitted === false) return degrade('permission_denied');
-  if (options.signal?.aborted) return degrade('client_disconnected');
-  if (route.kind === 'unavailable') return degrade(route.reason);
-  if (route.runtime !== 'claude-agent-sdk') return degrade('runtime_not_supported', {}, route.runtime);
-
-  const built = buildPrompt(analysis, question);
-  if (!built) return degrade('failed');
-  const timeoutMs = Number.parseInt(process.env.FLAMEGRAPH_AI_TIMEOUT_MS || '60000', 10);
-  const result = await runIsolatedClaudeOneShot({
-    prompt: built.prompt,
-    tier: 'main',
-    timeoutMs,
+    aiPermitted: options.aiPermitted,
     signal: options.signal,
-    logLabel: 'FlamegraphAI',
     providerScope: options.providerScope,
   });
-  const attempted = {...(result.model ? {model: result.model} : {}), redactionApplied: built.redactionApplied};
-  if (!result.ok) return degrade(result.reason, attempted);
-  return {generated: true, ...attempted, model: result.model, summary: result.text, warnings: []};
 }

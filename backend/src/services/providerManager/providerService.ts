@@ -409,6 +409,11 @@ export class ProviderService {
     return this.toEnvVars(provider);
   }
 
+  /** The env of a provider record already read from the store, without reading it again. */
+  getEnvForProviderConfig(provider: ProviderConfig): Record<string, string> {
+    return this.toEnvVars(provider);
+  }
+
   getRawEffectiveProvider(scope?: ProviderScope): ProviderConfig | undefined {
     return this.store.getActive(scope);
   }

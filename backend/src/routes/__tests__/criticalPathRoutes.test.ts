@@ -12,28 +12,40 @@ import {authenticate} from '../../middleware/auth';
 import {rejectEnterpriseUnscopedApi} from '../../middleware/enterpriseRouteBoundary';
 import {bindWorkspaceRouteContext, requireWorkspaceRouteContext} from '../../middleware/workspaceRouteContext';
 import {clientDisconnectSignal} from '../clientDisconnect';
-import {resolveAgentRuntimeSelection} from '../../agentRuntime/runtimeSelection';
-import {createSdkEnv, hasClaudeCredentials} from '../../agentv3/claudeConfig';
+import {selectRuntimeForProvider} from '../../agentRuntime/runtimeSelection';
+import {hasClaudeCredentials, sdkEnvForProviderEnv} from '../../agentv3/claudeConfig';
 import {AI_CAPABILITY_ENV_KEY} from '../../services/aiCapabilityPolicy';
 import {summarizeCriticalPathWithAi} from '../../services/criticalPathAiSummary';
-import {CriticalPathInputError, analyzeCriticalPath, type CriticalPathAnalysis} from '../../services/criticalPathAnalyzer';
+import {CriticalPathInputError, analyzeCriticalPath} from '../../services/criticalPathAnalyzer';
 import {readTraceMetadataForContext} from '../../services/traceMetadataStore';
 import {getTraceProcessorService} from '../../services/traceProcessorService';
 import {renderCriticalPathAnalysis} from '../../services/criticalPathLocalization';
+import type {CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: jest.fn(),
 }));
 
 jest.mock('../../agentRuntime/runtimeSelection', () => ({
-  resolveAgentRuntimeSelection: jest.fn(),
+  selectRuntimeForProvider: jest.fn(),
+}));
+
+// One provider read per summary: the store is faked so the test can count it.
+const mockProviderService = {
+  getRawEffectiveProvider: jest.fn<(...args: any[]) => any>(),
+  getRawProvider: jest.fn<(...args: any[]) => any>(),
+  getEnvForProviderConfig: jest.fn<(...args: any[]) => any>(),
+};
+jest.mock('../../services/providerManager', () => ({
+  ...(jest.requireActual('../../services/providerManager') as object),
+  getProviderService: () => mockProviderService,
 }));
 
 jest.mock('../../agentv3/claudeConfig', () => ({
-  createSdkEnv: jest.fn(),
+  sdkEnvForProviderEnv: jest.fn(),
   hasClaudeCredentials: jest.fn(),
   loadClaudeConfig: jest.fn(() => ({model: 'env-model'})),
-  resolveRuntimeConfig: jest.fn(() => ({model: 'profile-model'})),
+  runtimeConfigForProviderEnv: jest.fn(() => ({model: 'profile-model'})),
   getSdkBinaryOption: jest.fn(() => ({})),
   resolveClaudeSdkPermissionOptions: jest.fn(() => ({permissionMode: 'dontAsk'})),
 }));
@@ -53,8 +65,8 @@ jest.mock('../../services/traceProcessorService', () => ({
 }));
 
 const mockQuery = sdkQuery as unknown as jest.Mock<(...args: any[]) => any>;
-const mockSelection = resolveAgentRuntimeSelection as unknown as jest.Mock<(...args: any[]) => any>;
-const mockCreateSdkEnv = createSdkEnv as unknown as jest.Mock<(...args: any[]) => any>;
+const mockSelection = selectRuntimeForProvider as unknown as jest.Mock<(...args: any[]) => any>;
+const mockCreateSdkEnv = sdkEnvForProviderEnv as unknown as jest.Mock<(...args: any[]) => any>;
 const mockHasClaudeCredentials = hasClaudeCredentials as unknown as jest.Mock<(...args: any[]) => any>;
 const mockAnalyze = analyzeCriticalPath as unknown as jest.Mock<(...args: any[]) => any>;
 const mockReadMetadata = readTraceMetadataForContext as unknown as jest.Mock<(...args: any[]) => any>;
@@ -159,6 +171,8 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     mockAnalyze.mockResolvedValue(analysisFixture());
     mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
     mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue({id: 'provider-a'});
+    mockProviderService.getEnvForProviderConfig.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
     mockHasClaudeCredentials.mockReturnValue(true);
     mockQuery.mockImplementation(() => sdkStream('## model summary'));
   });
@@ -316,8 +330,10 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
       model: 'profile-model',
       summary: '## model summary',
     });
-    expect(mockSelection).toHaveBeenCalledWith(undefined, undefined, PROVIDER_SCOPE);
-    expect(mockCreateSdkEnv).toHaveBeenCalledWith(undefined, PROVIDER_SCOPE);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledTimes(1);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledWith(PROVIDER_SCOPE);
+    expect(mockProviderService.getEnvForProviderConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateSdkEnv).toHaveBeenCalledWith({ANTHROPIC_API_KEY: 'profile-key'});
     expect(mockHasClaudeCredentials).toHaveBeenCalledWith({ANTHROPIC_API_KEY: 'profile-key'});
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const {prompt, options} = mockQuery.mock.calls[0][0] as {
@@ -390,6 +406,8 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     expect(viewer.body.analysis).toBeDefined();
     expect(viewer.body.aiSummary).toMatchObject({generated: false, fallbackReason: 'permission_denied'});
     expect(viewer.body.aiSummary.warnings[0]).toContain('agent:run');
+    // Permission is checked before the provider is read.
+    expect(mockProviderService.getRawEffectiveProvider).not.toHaveBeenCalled();
     expect(mockCreateSdkEnv).not.toHaveBeenCalled();
     expect(mockQuery).not.toHaveBeenCalled();
 
@@ -444,6 +462,8 @@ describe('summarizeCriticalPathWithAi cancellation', () => {
     jest.clearAllMocks();
     mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'default'});
     mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'env-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue(undefined);
+    mockProviderService.getEnvForProviderConfig.mockReturnValue(null);
     mockHasClaudeCredentials.mockReturnValue(true);
   });
 
@@ -554,6 +574,8 @@ describe('critical-path route mounts', () => {
     mockAnalyze.mockResolvedValue(analysisFixture());
     mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
     mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+    mockProviderService.getRawEffectiveProvider.mockReturnValue({id: 'provider-a'});
+    mockProviderService.getEnvForProviderConfig.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
     mockHasClaudeCredentials.mockReturnValue(true);
     mockQuery.mockImplementation(() => sdkStream('## model summary'));
   });

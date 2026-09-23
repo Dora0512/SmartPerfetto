@@ -2,7 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { loadCriticalPathChain, type CriticalPathSegment } from './criticalPathAnalyzer';
+import {loadCriticalPathChain} from './criticalPathAnalyzer';
 import { warningText } from './criticalPathText';
 import { resolveDirectWaker, type WakerChainResult } from './criticalPathWakerChain';
 import { getPipelineDocService } from './pipelineDocService';
@@ -58,6 +58,7 @@ import {
   TEACHING_LIMITS,
   TEACHING_STEP_IDS,
 } from '../config/teaching.config';
+import type {CriticalPathSegment} from '../types/criticalPathContract';
 
 interface PipelineBundle {
   detection: PipelineDetectionResult;

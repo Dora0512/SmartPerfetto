@@ -11,33 +11,20 @@
 // Amdahl-style bookkeeping only.
 
 import {queryRows, assertQuerySucceeded, nsToMs, toNullableNumber, toNumber, toOptionalString} from '../utils/traceProcessorRowUtils';
-import {
-  errorLine,
-  hypothesisText,
-  noteText,
-  type CriticalPathHypothesisId,
-  type CriticalPathNote,
-  type CriticalPathWarning,
-  type TextParams,
-} from './criticalPathText';
+import {errorLine, hypothesisText, noteText} from './criticalPathText';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
-import type {SegmentSemantics} from './criticalPathSemantics';
 import type {
   CounterfactualEstimate,
   CriticalPathHypothesis,
+  CriticalPathHypothesisId,
+  CriticalPathNote,
   CriticalPathQuantification,
+  CriticalPathWarning,
   FrameImpact,
   HypothesisStrength,
-} from '../types/criticalPathContract';
-
-// The result types are declared in the response contract.
-export type {
-  CounterfactualEstimate,
-  CriticalPathHypothesis,
-  CriticalPathQuantification,
-  FrameImpact,
-  HypothesisStrength,
+  SegmentSemantics,
+  TextParams,
 } from '../types/criticalPathContract';
 
 export interface QuantifyTaskInput {

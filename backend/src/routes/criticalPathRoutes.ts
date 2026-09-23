@@ -4,27 +4,22 @@
 
 import express from 'express';
 import {z} from 'zod';
-import {requireRequestContext} from '../middleware/auth';
 import {localize, type OutputLanguage, parseOutputLanguage} from '../agentv3/outputLanguage';
+import {providerScopeFromRequestContext} from '../agentRuntime/runtimeScopes';
 import {summarizeCriticalPathWithAi} from '../services/criticalPathAiSummary';
-import {
-  analyzeCriticalPath,
-  CriticalPathInputError,
-  type CriticalPathAnalyzeOptions,
-  type CriticalPathInputErrorCode,
-} from '../services/criticalPathAnalyzer';
-import {projectCriticalPathAnalysis} from '../services/criticalPathLocalization';
+import {analyzeCriticalPath, CriticalPathInputError, type CriticalPathAnalyzeOptions} from '../services/criticalPathAnalyzer';
+import {renderCriticalPathAnalysis} from '../services/criticalPathLocalization';
 import {hasRbacPermission} from '../services/rbac';
-import {sendResourceNotFound} from '../services/resourceOwnership';
-import {isSafeTraceId, readTraceMetadataForContext} from '../services/traceMetadataStore';
 import {isTraceProcessorQueryCancelledError} from '../services/traceProcessorCancellation';
 import {getTraceProcessorService} from '../services/traceProcessorService';
 import type {
   CriticalPathAnalyzeRequest,
   CriticalPathAnalyzeResponse,
   CriticalPathErrorResponse,
+  CriticalPathInputErrorCode,
 } from '../types/criticalPathContract';
 import {clientDisconnectSignal} from './clientDisconnect';
+import {checkTraceId, parseRequestBody, readableTraceContext} from './traceRouteGuards';
 
 const router = express.Router();
 
@@ -105,14 +100,6 @@ function sendError(res: express.Response, status: number, body: CriticalPathErro
   return res.status(status).json(body);
 }
 
-function traceNotFound(res: express.Response, language: OutputLanguage, traceId: string) {
-  return sendResourceNotFound(
-    res,
-    localize(language, `未找到 Trace ${traceId}`, `Trace ${traceId} not found`),
-    'trace_not_found',
-  );
-}
-
 router.post('/:traceId/analyze', async (req, res) => {
   const outputLanguage = parseOutputLanguage(
     req.body?.outputLanguage ||
@@ -124,41 +111,16 @@ router.post('/:traceId/analyze', async (req, res) => {
   const clientGone = clientDisconnectSignal(res);
 
   const {traceId} = req.params;
-  if (!traceId || !isSafeTraceId(traceId)) {
-    return sendError(res, 400, {
-      success: false,
-      code: 'invalid_trace_id',
-      error: localize(outputLanguage, 'traceId 无效', 'traceId is invalid'),
-    });
-  }
-
+  if (!checkTraceId(res, traceId, outputLanguage)) return;
   // Validate before touching the trace: a bad request must not load a trace
   // processor.
-  const parsed = AnalyzeBodySchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return sendError(res, 400, {
-      success: false,
-      code: 'invalid_request_body',
-      error: localize(outputLanguage, '请求体无效', 'Invalid request body'),
-      issues: parsed.error.issues.map((issue) => ({
-        path: issue.path.join('.'),
-        message: issue.message,
-      })),
-    });
-  }
-  const body = parsed.data;
+  const body = parseRequestBody(res, AnalyzeBodySchema, req.body, outputLanguage);
+  if (!body) return;
 
   try {
-    const requestContext = requireRequestContext(req);
-    // Same ownership check as the Agent routes: the trace must belong to the
-    // caller's workspace and the caller needs trace:read.
-    if (!(await readTraceMetadataForContext(traceId, requestContext))) {
-      return traceNotFound(res, outputLanguage, traceId);
-    }
+    const requestContext = await readableTraceContext(req, res, traceId, outputLanguage);
+    if (!requestContext) return;
     const traceProcessorService = getTraceProcessorService();
-    if (!(await traceProcessorService.getOrLoadTrace(traceId))) {
-      return traceNotFound(res, outputLanguage, traceId);
-    }
 
     const analyzeOptions: CriticalPathAnalyzeOptions = {
       threadStateId: body.threadStateId,
@@ -181,16 +143,12 @@ router.post('/:traceId/analyze', async (req, res) => {
             // Reading the trace is not enough to spend the workspace's model:
             // the summary needs the same permission as an Agent run.
             aiPermitted: hasRbacPermission(requestContext, 'agent:run'),
-            providerScope: {
-              tenantId: requestContext.tenantId,
-              workspaceId: requestContext.workspaceId,
-              userId: requestContext.userId,
-            },
+            providerScope: providerScopeFromRequestContext(requestContext),
           });
     const response: CriticalPathAnalyzeResponse = {
       success: true,
       analysis: rawAnalysis,
-      presentationAnalysis: projectCriticalPathAnalysis(rawAnalysis, outputLanguage),
+      presentationAnalysis: renderCriticalPathAnalysis(rawAnalysis, outputLanguage),
       ...(aiSummary ? {aiSummary} : {}),
     };
     return res.json(response);

@@ -2,9 +2,9 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import type {CriticalPathAnalysis} from '../criticalPathAnalyzer';
-import {buildDeterministicCriticalPathSummary} from '../criticalPathAiSummary';
-import {projectCriticalPathAnalysis, renderCriticalPathAnalysis} from '../criticalPathLocalization';
+import {buildDeterministicCriticalPathSummary} from '../criticalPathSummary';
+import {renderCriticalPathAnalysis} from '../criticalPathLocalization';
+import type {CriticalPathAnalysis} from '../../types/criticalPathContract';
 
 function fixture(): CriticalPathAnalysis {
   return renderCriticalPathAnalysis({
@@ -120,6 +120,6 @@ describe('criticalPathAiSummary localization', () => {
     expect(summary).toContain('Rule findings: The selection contains no waiting time.');
     expect(summary).not.toMatch(/\p{Script=Han}/u);
     // The MCP tool projects first; the projection is idempotent for English.
-    expect(buildDeterministicCriticalPathSummary(projectCriticalPathAnalysis(analysis, 'en'), 'en')).toBe(summary);
+    expect(buildDeterministicCriticalPathSummary(renderCriticalPathAnalysis(analysis, 'en'), 'en')).toBe(summary);
   });
 });

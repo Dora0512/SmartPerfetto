@@ -18,6 +18,7 @@ import type {
 } from './flamegraphTypes';
 import { assertQuerySucceeded, queryRows } from '../utils/traceProcessorRowUtils';
 import { rethrowIfTraceProcessorQueryCancelled } from './traceProcessorCancellation';
+import { classifyTraceProcessorSqlError } from './traceProcessorSqlWorker';
 import type { TraceProcessorService } from './traceProcessorService';
 
 /** Request-scoped controls that are not part of the analysis input. */
@@ -138,8 +139,8 @@ function sleep(ms: number): Promise<void> {
  * or the module defines no such table. That is "not available", not a failure.
  */
 function isMissingSummarySource(error: unknown): boolean {
-  const message = errorMessage(error);
-  return /unknown module/i.test(message) || /no such table/i.test(message);
+  const kind = classifyTraceProcessorSqlError(errorMessage(error));
+  return kind === 'unknown_module' || kind === 'missing_table';
 }
 
 async function getSummarySourceStatsOnce(

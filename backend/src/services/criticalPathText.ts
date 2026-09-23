@@ -24,32 +24,6 @@ import type {
   TextParams,
 } from '../types/criticalPathContract';
 
-// The id lists and their types are declared in the response contract.
-export {
-  CRITICAL_PATH_ANOMALY_IDS,
-  CRITICAL_PATH_HINT_CODES,
-  CRITICAL_PATH_HYPOTHESIS_IDS,
-  CRITICAL_PATH_MODULE_IDS,
-  CRITICAL_PATH_NOTE_CODES,
-  CRITICAL_PATH_RECOMMENDATION_IDS,
-  CRITICAL_PATH_WARNING_CODES,
-} from '../types/criticalPathContract';
-export type {
-  CriticalPathAnomalyId,
-  CriticalPathEvidence,
-  CriticalPathHintCode,
-  CriticalPathHypothesisId,
-  CriticalPathModuleId,
-  CriticalPathNote,
-  CriticalPathNoteCode,
-  CriticalPathReason,
-  CriticalPathRecommendationId,
-  CriticalPathTextCode,
-  CriticalPathWarning,
-  CriticalPathWarningCode,
-  TextParams,
-} from '../types/criticalPathContract';
-
 const MODULE_TEXT: Record<CriticalPathModuleId, [zh: string, en: string]> = {
   binder_ipc: ['Binder / IPC', 'Binder / IPC'],
   lock_futex: ['锁 / Futex', 'Locks / Futex'],
@@ -117,7 +91,7 @@ const WAIT_CLASS_TEXT: Record<string, [zh: string, en: string]> = {
   unknown: ['未知', 'unknown'],
 };
 
-export function waitClassText(waitClass: string, language: OutputLanguage): string {
+function waitClassText(waitClass: string, language: OutputLanguage): string {
   const entry = WAIT_CLASS_TEXT[waitClass];
   return entry ? localize(language, entry[0], entry[1]) : waitClass;
 }

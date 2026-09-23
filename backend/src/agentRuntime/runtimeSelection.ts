@@ -4,7 +4,12 @@
 
 import type { TraceProcessorService } from '../services/traceProcessorService';
 import type { IOrchestrator } from '../agent/core/orchestratorTypes';
-import { getProviderService, type AgentRuntimeKind, type ProviderScope } from '../services/providerManager';
+import {
+  getProviderService,
+  type AgentRuntimeKind,
+  type ProviderConfig,
+  type ProviderScope,
+} from '../services/providerManager';
 import { isProductionAgentRuntimeKind } from './runtimeKinds';
 import {
   type ExperimentalAgentRuntimeKind,
@@ -60,7 +65,19 @@ export function resolveAgentRuntimeSelection(
   if (typeof providerId === 'string' && !provider) {
     throw new Error(`Provider not found: ${providerId}`);
   }
+  return selectRuntimeForProvider(provider, runtimeOverride);
+}
 
+/**
+ * The runtime selection for a provider record already read from the store
+ * (undefined: no provider applies), so a caller that also needs the record's
+ * env reads the store once.
+ */
+export function selectRuntimeForProvider(
+  provider: ProviderConfig | undefined,
+  runtimeOverride?: BackendAgentRuntimeKind,
+): RuntimeSelection {
+  const providerSvc = getProviderService();
   if (provider) {
     return {
       kind: providerSvc.resolveAgentRuntime(provider),

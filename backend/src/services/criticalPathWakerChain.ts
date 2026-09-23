@@ -19,18 +19,15 @@ import {
   toNullableNumber,
   toOptionalString,
 } from '../utils/traceProcessorRowUtils';
-import {
-  errorLine,
-  hintText,
-  type CriticalPathHintCode,
-  type CriticalPathWarning,
-} from './criticalPathText';
+import {errorLine, hintText} from './criticalPathText';
 import {rethrowIfTraceProcessorQueryCancelled} from './traceProcessorCancellation';
 import type {TraceProcessorService} from './traceProcessorService';
-import type {WakerHop, WakerKind} from '../types/criticalPathContract';
-
-// The hop is declared in the response contract.
-export type {WakerHop, WakerKind} from '../types/criticalPathContract';
+import type {
+  CriticalPathHintCode,
+  CriticalPathWarning,
+  WakerHop,
+  WakerKind,
+} from '../types/criticalPathContract';
 
 export interface WakerChainResult {
   hop: WakerHop | null;

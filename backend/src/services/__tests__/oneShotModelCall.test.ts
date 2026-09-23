@@ -4,13 +4,15 @@
 
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import {query as sdkQuery} from '@anthropic-ai/claude-agent-sdk';
-import {resolveAgentRuntimeSelection} from '../../agentRuntime/runtimeSelection';
-import {createSdkEnv, hasClaudeCredentials, resolveRuntimeConfig} from '../../agentv3/claudeConfig';
+import {selectRuntimeForProvider} from '../../agentRuntime/runtimeSelection';
+import {hasClaudeCredentials, runtimeConfigForProviderEnv, sdkEnvForProviderEnv} from '../../agentv3/claudeConfig';
 import {AI_CAPABILITY_ENV_KEY, resolveAiCapabilityPolicy} from '../aiCapabilityPolicy';
 import {
   isolatedClaudeOneShotOptions,
-  resolveOneShotModelRoute,
+  oneShotFallbackWarning,
+  resolveOneShotProvider,
   runIsolatedClaudeOneShot,
+  runOneShotSummary,
 } from '../oneShotModelCall';
 
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -18,25 +20,39 @@ jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 jest.mock('../../agentRuntime/runtimeSelection', () => ({
-  resolveAgentRuntimeSelection: jest.fn(),
+  selectRuntimeForProvider: jest.fn(),
 }));
 
 jest.mock('../../agentv3/claudeConfig', () => ({
-  createSdkEnv: jest.fn(),
+  sdkEnvForProviderEnv: jest.fn(),
   hasClaudeCredentials: jest.fn(),
   loadClaudeConfig: jest.fn(() => ({model: 'env-model', lightModel: 'env-light'})),
-  resolveRuntimeConfig: jest.fn(),
+  runtimeConfigForProviderEnv: jest.fn(),
   getSdkBinaryOption: jest.fn(() => ({pathToClaudeCodeExecutable: '/bin/claude'})),
   resolveClaudeSdkPermissionOptions: jest.fn(() => ({permissionMode: 'dontAsk'})),
 }));
 
+const mockProviderService = {
+  getRawEffectiveProvider: jest.fn<(...args: any[]) => any>(),
+  getRawProvider: jest.fn<(...args: any[]) => any>(),
+  getEnvForProviderConfig: jest.fn<(...args: any[]) => any>(),
+};
+jest.mock('../providerManager', () => ({
+  ...(jest.requireActual('../providerManager') as object),
+  getProviderService: () => mockProviderService,
+}));
+
 const mockQuery = sdkQuery as unknown as jest.Mock<(...args: any[]) => any>;
-const mockSelection = resolveAgentRuntimeSelection as unknown as jest.Mock<(...args: any[]) => any>;
-const mockCreateSdkEnv = createSdkEnv as unknown as jest.Mock<(...args: any[]) => any>;
+const mockSelection = selectRuntimeForProvider as unknown as jest.Mock<(...args: any[]) => any>;
+const mockSdkEnv = sdkEnvForProviderEnv as unknown as jest.Mock<(...args: any[]) => any>;
 const mockHasCredentials = hasClaudeCredentials as unknown as jest.Mock<(...args: any[]) => any>;
-const mockRuntimeConfig = resolveRuntimeConfig as unknown as jest.Mock<(...args: any[]) => any>;
+const mockRuntimeConfig = runtimeConfigForProviderEnv as unknown as jest.Mock<(...args: any[]) => any>;
 
 const SCOPE = {tenantId: 't', workspaceId: 'w', userId: 'u'};
+const CLAUDE = {
+  env: {ANTHROPIC_API_KEY: 'profile-key'},
+  config: {model: 'main-model', lightModel: 'light-model', cwd: '/tmp/cwd'} as any,
+};
 
 function stream(messages: unknown[]) {
   const close = jest.fn();
@@ -61,41 +77,119 @@ function hangingStream(params: any) {
 }
 
 function baseInput() {
-  return {prompt: 'p', tier: 'main' as const, timeoutMs: 5_000, logLabel: 'Test', providerScope: SCOPE};
+  return {prompt: 'p', claude: CLAUDE, tier: 'main' as const, timeoutMs: 5_000, logLabel: 'Test'};
 }
 
-describe('resolveOneShotModelRoute', () => {
+function useClaudeProvider(): void {
+  mockProviderService.getRawEffectiveProvider.mockReturnValue({id: 'provider-a'});
+  mockProviderService.getEnvForProviderConfig.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+  mockSelection.mockReturnValue({kind: 'claude-agent-sdk', source: 'provider'});
+  mockSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
+  mockRuntimeConfig.mockReturnValue({model: 'main-model', lightModel: 'light-model', cwd: '/tmp/cwd'});
+}
+
+describe('resolveOneShotProvider', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    useClaudeProvider();
   });
 
-  it('checks the AI gate before any provider lookup', () => {
-    const route = resolveOneShotModelRoute({
-      feature: 'flamegraph_ai_summary',
-      aiPolicy: resolveAiCapabilityPolicy({[AI_CAPABILITY_ENV_KEY]: 'false'}),
-      logLabel: 'Test',
-    });
+  it('reads the provider once and builds runtime, env and config from that record', () => {
+    const resolved = resolveOneShotProvider({providerScope: SCOPE, logLabel: 'Test'});
 
-    expect(route).toEqual({kind: 'unavailable', reason: 'ai_disabled'});
-    expect(mockSelection).not.toHaveBeenCalled();
+    expect(resolved).toMatchObject({kind: 'resolved', runtime: 'claude-agent-sdk',
+      claude: {env: {ANTHROPIC_API_KEY: 'profile-key'}, config: {model: 'main-model'}}});
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledTimes(1);
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledWith(SCOPE);
+    expect(mockProviderService.getEnvForProviderConfig).toHaveBeenCalledTimes(1);
+    expect(mockSelection).toHaveBeenCalledWith({id: 'provider-a'});
   });
 
-  it('returns the runtime of the caller scope, and runtime_unavailable when it cannot be resolved', () => {
-    const aiPolicy = resolveAiCapabilityPolicy({[AI_CAPABILITY_ENV_KEY]: 'true'});
+  it('reads no env for a runtime other than Claude, and reports an unresolvable provider as unavailable', () => {
     mockSelection.mockReturnValueOnce({kind: 'openai-agents-sdk', source: 'provider'});
-    expect(resolveOneShotModelRoute({
-      feature: 'comparison_ai_conclusion', providerId: 'p1', providerScope: SCOPE, aiPolicy, logLabel: 'Test',
-    })).toEqual({kind: 'runtime', runtime: 'openai-agents-sdk'});
-    expect(mockSelection).toHaveBeenCalledWith('p1', undefined, SCOPE);
+    expect(resolveOneShotProvider({providerScope: SCOPE, logLabel: 'Test'}))
+      .toEqual({kind: 'resolved', runtime: 'openai-agents-sdk'});
+    expect(mockProviderService.getEnvForProviderConfig).not.toHaveBeenCalled();
 
-    mockSelection.mockImplementationOnce(() => {
-      throw new Error('provider p2 not found');
-    });
+    mockProviderService.getRawProvider.mockReturnValueOnce(undefined);
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    expect(resolveOneShotModelRoute({
-      feature: 'comparison_ai_conclusion', providerId: 'p2', aiPolicy, logLabel: 'Test',
-    })).toEqual({kind: 'unavailable', reason: 'runtime_unavailable'});
+    expect(resolveOneShotProvider({providerId: 'deleted', providerScope: SCOPE, logLabel: 'Test'}))
+      .toEqual({kind: 'unavailable'});
     warn.mockRestore();
+  });
+});
+
+describe('runOneShotSummary gates', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useClaudeProvider();
+    mockHasCredentials.mockReturnValue(true);
+    mockQuery.mockImplementation(() => stream([{type: 'result', subtype: 'success', result: 'model answer'}]));
+  });
+
+  function summary(overrides: Partial<Parameters<typeof runOneShotSummary>[0]> = {}) {
+    const buildPrompt = jest.fn(() => ({prompt: 'p', redactionApplied: true}));
+    const ruleSummary = jest.fn(() => 'rule summary');
+    return {
+      buildPrompt,
+      ruleSummary,
+      run: () => runOneShotSummary({
+        feature: 'critical_path_ai_summary',
+        label: {zh: '测试 AI 总结', en: 'test AI summary'},
+        logLabel: 'Test',
+        outputLanguage: 'en',
+        ruleSummary,
+        buildPrompt,
+        timeoutMs: 5_000,
+        aiPolicy: resolveAiCapabilityPolicy({[AI_CAPABILITY_ENV_KEY]: 'true'}),
+        providerScope: SCOPE,
+        ...overrides,
+      }),
+    };
+  }
+
+  it.each([
+    ['ai_disabled', {aiPolicy: resolveAiCapabilityPolicy({[AI_CAPABILITY_ENV_KEY]: 'false'})}],
+    ['permission_denied', {aiPermitted: false}],
+    ['client_disconnected', {signal: AbortSignal.abort()}],
+  ])('answers %s before the provider is read', async (reason, overrides) => {
+    const {run, buildPrompt} = summary(overrides as any);
+
+    const result = await run();
+
+    expect(result).toMatchObject({generated: false, summary: 'rule summary', fallbackReason: reason});
+    expect(mockProviderService.getRawEffectiveProvider).not.toHaveBeenCalled();
+    expect(buildPrompt).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('names the runtime it does not support and never builds the prompt for it', async () => {
+    mockSelection.mockReturnValue({kind: 'opencode', source: 'provider'});
+    const {run, buildPrompt} = summary();
+
+    const result = await run();
+
+    expect(result.fallbackReason).toBe('runtime_not_supported');
+    expect(result.warnings[0]).toContain('opencode');
+    expect(result.warnings[0]).toContain('test AI summary');
+    expect(buildPrompt).not.toHaveBeenCalled();
+  });
+
+  it('builds the rule summary only when no model answers', async () => {
+    const {run, ruleSummary} = summary();
+
+    expect(await run()).toMatchObject({generated: true, summary: 'model answer', model: 'main-model', redactionApplied: true});
+    expect(ruleSummary).not.toHaveBeenCalled();
+    expect(mockProviderService.getRawEffectiveProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('localizes every fallback reason in both languages', () => {
+    const label = {zh: '测试 AI 总结', en: 'test AI summary'};
+    for (const reason of ['ai_disabled', 'permission_denied', 'runtime_not_supported', 'runtime_unavailable',
+      'credentials_missing', 'client_disconnected', 'timed_out', 'failed', 'empty_response'] as const) {
+      expect(oneShotFallbackWarning(reason, label, 'en', 'opencode')).toMatch(/[a-z]/);
+      expect(oneShotFallbackWarning(reason, label, 'zh-CN', 'opencode')).toMatch(/[\u4e00-\u9fff]/);
+    }
   });
 });
 
@@ -125,8 +219,6 @@ describe('runIsolatedClaudeOneShot', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useRealTimers();
-    mockRuntimeConfig.mockReturnValue({model: 'main-model', lightModel: 'light-model', cwd: '/tmp/cwd'});
-    mockCreateSdkEnv.mockReturnValue({ANTHROPIC_API_KEY: 'profile-key'});
     mockHasCredentials.mockReturnValue(true);
   });
 
@@ -134,7 +226,7 @@ describe('runIsolatedClaudeOneShot', () => {
     jest.useRealTimers();
   });
 
-  it('answers with the result text of the selected tier in the caller scope', async () => {
+  it('answers with the result text of the selected tier, with no provider read of its own', async () => {
     mockQuery.mockImplementation(() => stream([{type: 'result', subtype: 'success', result: '  answer  '}]));
 
     const main = await runIsolatedClaudeOneShot(baseInput());
@@ -142,7 +234,7 @@ describe('runIsolatedClaudeOneShot', () => {
 
     expect(main).toEqual({ok: true, text: 'answer', model: 'main-model'});
     expect(light).toEqual({ok: true, text: 'answer', model: 'light-model'});
-    expect(mockCreateSdkEnv).toHaveBeenCalledWith(undefined, SCOPE);
+    expect(mockProviderService.getRawEffectiveProvider).not.toHaveBeenCalled();
     const lightOptions = mockQuery.mock.calls[1][0].options;
     expect(lightOptions).toMatchObject({model: 'light-model', effort: 'low', cwd: '/tmp/cwd', env: {ANTHROPIC_API_KEY: 'profile-key'}});
     expect(lightOptions.abortController).toBeInstanceOf(AbortController);
@@ -155,19 +247,6 @@ describe('runIsolatedClaudeOneShot', () => {
 
     expect(result).toEqual({ok: false, reason: 'credentials_missing', model: 'main-model'});
     expect(mockHasCredentials).toHaveBeenCalledWith({ANTHROPIC_API_KEY: 'profile-key'});
-    expect(mockQuery).not.toHaveBeenCalled();
-  });
-
-  it('reports runtime_unavailable when the profile cannot be resolved', async () => {
-    mockRuntimeConfig.mockImplementation(() => {
-      throw new Error('provider deleted');
-    });
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    const result = await runIsolatedClaudeOneShot(baseInput());
-    warn.mockRestore();
-
-    expect(result).toEqual({ok: false, reason: 'runtime_unavailable'});
     expect(mockQuery).not.toHaveBeenCalled();
   });
 

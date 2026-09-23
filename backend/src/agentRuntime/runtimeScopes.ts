@@ -24,3 +24,10 @@ export function knowledgeScopeFromAnalysisOptions(options: AnalysisOptions): Kno
     sourceRunId: options.runId,
   };
 }
+
+/** The Provider Manager scope of an HTTP caller, the same one an Agent run of theirs uses. */
+export function providerScopeFromRequestContext(
+  context: {tenantId: string; workspaceId: string; userId: string},
+): ProviderScope {
+  return {tenantId: context.tenantId, workspaceId: context.workspaceId, userId: context.userId};
+}
