@@ -15,7 +15,7 @@ const EMPTY: QueryResult = {columns: [], rows: [], durationMs: 1};
 
 // The task is thread 1 of process 7; the evidence below comes from other
 // threads on its chain, as it does after the root thread is removed.
-const TASK: QuantifyTaskInput = {upid: 7, startTs: 0, endTs: 200 * MS, durMs: 200};
+const TASK: QuantifyTaskInput = {upid: 7, startTs: 0, endTs: 200 * MS};
 const WINDOW = {startTs: 100 * MS, endTs: 110 * MS};
 
 function semantics(
@@ -69,9 +69,9 @@ const CPU = semantics({utid: 44, upid: 8}, {
 
 describe('criticalPathQuantify counterfactual', () => {
   it('reports the best-case remaining duration and the maximum saving', () => {
-    const estimate = buildCounterfactual({...TASK, durMs: 30}, [
-      {segmentKey: 'a', durMs: 5},
-      {segmentKey: 'b', durMs: 22},
+    const estimate = buildCounterfactual({...TASK, endTs: 30 * MS}, [
+      {segmentKey: 'a', durNs: 5 * MS},
+      {segmentKey: 'b', durNs: 22 * MS},
     ]);
 
     expect(estimate).toMatchObject({
@@ -85,14 +85,27 @@ describe('criticalPathQuantify counterfactual', () => {
     expect(estimate?.note).toContain('at most maxSavingMs');
   });
 
+  it('subtracts in ns and rounds once, keeping the exact values beside the ms fields', () => {
+    // 10.004 ms - 4.005 ms: rounding each first would give 10.00 - 4.01 = 5.99.
+    const estimate = buildCounterfactual({...TASK, endTs: 10_004_000}, [{segmentKey: 'a', durNs: 4_005_000}]);
+
+    expect(estimate).toMatchObject({
+      bestCaseDurationNs: 5_999_000,
+      bestCaseDurationMs: 6,
+      maxSavingNs: 4_005_000,
+      longestSegmentDurNs: 4_005_000,
+      maxSavingMs: 4.01,
+    });
+  });
+
   it('floors the best case at zero and has no estimate without a positive segment', () => {
-    expect(buildCounterfactual({...TASK, durMs: 10}, [{segmentKey: 'a', durMs: 12}])).toMatchObject({
+    expect(buildCounterfactual({...TASK, endTs: 10 * MS}, [{segmentKey: 'a', durNs: 12 * MS}])).toMatchObject({
       bestCaseDurationMs: 0,
       upperBoundMs: 0,
       maxSavingMs: 12,
     });
     expect(buildCounterfactual(TASK, [])).toBeNull();
-    expect(buildCounterfactual(TASK, [{segmentKey: 'a', durMs: 0}])).toBeNull();
+    expect(buildCounterfactual(TASK, [{segmentKey: 'a', durNs: 0}])).toBeNull();
   });
 });
 
@@ -202,7 +215,7 @@ describe('quantifyCriticalPath', () => {
       tp,
       'trace-1',
       TASK,
-      [{segmentKey: IO.segmentKey, durMs: 10}],
+      [{segmentKey: IO.segmentKey, durNs: 10 * MS}],
       [IO, CPU]
     );
 

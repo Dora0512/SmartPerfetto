@@ -781,6 +781,11 @@ hypotheses carry stable ids (`moduleIds` / `moduleId`, `anomalies[].id` +
 only at the edge: `analysis` is the zh-CN rendering (compatible legacy fields)
 and `presentationAnalysis` the requested language. `longestSegment` names the
 longest external segment of the whole chain.
+`totalsNs` (`window`, `blocking`, `self`, `chainWait`, integer ns) and the
+counterfactual's `longestSegmentDurNs`, `bestCaseDurationNs` and `maxSavingNs`
+are additive; each ms field is rounded once from its ns value. Omitted
+`maxSegments` / `recursionDepth` / `segmentBudget` take the engine's
+`CRITICAL_PATH_DEFAULTS.ui` (160 / 2 / 16).
 `aiSummary` falls back to the deterministic rule summary (`generated: false`)
 with a `fallbackReason` and localized `warnings` when AI is disabled (feature
 `critical_path_ai_summary`), the caller lacks `agent:run` (`permission_denied`:

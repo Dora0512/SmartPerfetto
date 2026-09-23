@@ -64,6 +64,39 @@ import {
 } from './criticalPathText';
 import {renderCriticalPathAnalysis} from './criticalPathLocalization';
 
+/**
+ * Version of what the engine's numbers mean. Evidence captures fingerprint
+ * their field semantics with it: bump it when a captured field changes meaning
+ * or exactness, so claims verified against the old definition do not carry over.
+ */
+export const CRITICAL_PATH_ENGINE_VERSION = 'critical-path-engine@3';
+
+export interface CriticalPathProfile {
+  /** Segments of the chain displayed (and recursed into); totals always cover the whole chain. */
+  maxSegments: number;
+  /** Levels of L4 recursion into the longest segments of other threads. */
+  recursionDepth: number;
+  /** Most child segments all recursion levels together may add. */
+  segmentBudget: number;
+}
+
+/**
+ * The engine's own defaults, per caller. `ui` is the interactive drawer (and
+ * any caller that passes nothing); `agent` is the `analyze_wait_chain` tool.
+ *
+ * Agent recursion depth, measured on 48 of the longest main-thread waits of
+ * four canonical traces (2026-09-23): depth 1 and depth 2 took the same time
+ * (e.g. 1044-1193 ms vs 1061-1193 ms on lacunh_heavy, 742-787 ms vs 737-799 ms
+ * on the customer scroll trace) because recursion expanded nothing at either
+ * depth; each recursion level costs 40-150 ms of empty `_critical_path_stack`
+ * calls (depth 0 vs 1). Depth 1 keeps the capability at the lower cost.
+ * The agent displays 200 segments, as the tool always has.
+ */
+export const CRITICAL_PATH_DEFAULTS = {
+  ui: {maxSegments: 160, recursionDepth: 2, segmentBudget: 16},
+  agent: {maxSegments: 200, recursionDepth: 1, segmentBudget: 16},
+} as const satisfies Record<'ui' | 'agent', CriticalPathProfile>;
+
 export interface CriticalPathAnalyzeOptions {
   threadStateId?: number | string;
   utid?: number | string;
@@ -254,6 +287,19 @@ export interface CriticalPathAnalysis {
   chainSegmentCount?: number;
   chainWaitMs?: number;
   waitClassTotalsMs?: Record<string, number>;
+  /**
+   * The exact ns behind the rounded headline ms fields: the window, the
+   * whole-chain blocking and self time, and the chain's S/D time. Evidence
+   * captures read these, never the rounded values.
+   */
+  totalsNs?: CriticalPathTotalsNs;
+}
+
+export interface CriticalPathTotalsNs {
+  window: number;
+  blocking: number;
+  self: number;
+  chainWait: number;
 }
 
 // === Helpers ===
@@ -880,6 +926,7 @@ function buildEmptyAnalysis(
     chainSegmentCount: 0,
     chainWaitMs: 0,
     waitClassTotalsMs: {},
+    totalsNs: {window: task.dur, blocking: 0, self: task.dur, chainWait: 0},
   };
 }
 
@@ -893,7 +940,7 @@ function uniqueWarnings(warnings: CriticalPathWarning[]): CriticalPathWarning[] 
 // Callers pass the top-level chain only (see `CriticalPathAnalysis`).
 function chainWaitTotals(
   segments: readonly CriticalPathSegment[]
-): {chainWaitMs: number; waitClassTotalsMs: Record<string, number>} {
+): {chainWaitNs: number; chainWaitMs: number; waitClassTotalsMs: Record<string, number>} {
   const classNs: Record<string, number> = {};
   let waitNs = 0;
   for (const segment of segments) {
@@ -904,6 +951,7 @@ function chainWaitTotals(
     waitNs += segment.dur;
   }
   return {
+    chainWaitNs: waitNs,
     chainWaitMs: nsToMs(waitNs),
     waitClassTotalsMs: Object.fromEntries(Object.entries(classNs).map(([key, ns]) => [key, nsToMs(ns)])),
   };
@@ -1377,11 +1425,12 @@ export async function analyzeCriticalPath(
 ): Promise<CriticalPathAnalysis> {
   const {signal} = options;
   const {primary: task, slices} = await loadTask(traceProcessorService, traceId, options);
-  const maxSegments = normalizePositiveInt(options.maxSegments, 160, 20, 1000);
+  const defaults = CRITICAL_PATH_DEFAULTS.ui;
+  const maxSegments = normalizePositiveInt(options.maxSegments, defaults.maxSegments, 20, 1000);
   const maxChainSegments = normalizePositiveInt(options.maxChainSegments, DEFAULT_MAX_CHAIN_SEGMENTS, maxSegments, 5000);
-  const recursionDepth = normalizePositiveInt(options.recursionDepth, 2, 0, 2);
+  const recursionDepth = normalizePositiveInt(options.recursionDepth, defaults.recursionDepth, 0, 2);
   const recursionEnabled = options.recursionEnabled !== false;
-  const segmentBudget = normalizePositiveInt(options.segmentBudget, 16, 4, 32);
+  const segmentBudget = normalizePositiveInt(options.segmentBudget, defaults.segmentBudget, 4, 32);
   const warnings: CriticalPathWarning[] = [];
   // The engine's own result is rendered in zh-CN; a projection renders any
   // other language from the same ids.
@@ -1501,11 +1550,14 @@ export async function analyzeCriticalPath(
   // Summed in ns and converted once: rounded per-segment ms can overshoot the task.
   const blockingNs = chain.reduce((sum, segment) => sum + segment.dur, 0);
   const blockingMs = nsToMs(blockingNs);
-  const selfMs = nsToMs(Math.max(0, task.dur - blockingNs));
+  const selfNs = Math.max(0, task.dur - blockingNs);
+  const selfMs = nsToMs(selfNs);
   const moduleBreakdown = buildModuleBreakdown(chain, task.dur);
   const signals = collectChainSignals(chain);
   const longest = longestSegment(chain);
   const anomalies = buildAnomalies(task, longest, signals, blockingMs);
+
+  const waitTotals = chainWaitTotals(chain);
 
   // L5 — Quantification.
   throwIfTraceProcessorQueryCancelled(signal);
@@ -1516,11 +1568,10 @@ export async function analyzeCriticalPath(
       upid: task.upid ?? null,
       startTs: task.startTs,
       endTs: task.startTs + task.dur,
-      durMs: task.durationMs,
     },
     chain.map((segment): QuantifySegmentInput => ({
       segmentKey: segmentKeyOf(segmentWindow(segment)),
-      durMs: segment.durationMs,
+      durNs: segment.dur,
     })),
     flatSegments.map((segment) => segment.semantics).filter((sem): sem is SegmentSemantics => sem !== undefined),
     signal
@@ -1557,6 +1608,8 @@ export async function analyzeCriticalPath(
     quantification,
     semanticSources: enrichment.sources,
     chainSegmentCount: chain.length,
-    ...chainWaitTotals(chain),
+    chainWaitMs: waitTotals.chainWaitMs,
+    waitClassTotalsMs: waitTotals.waitClassTotalsMs,
+    totalsNs: {window: task.dur, blocking: blockingNs, self: selfNs, chainWait: waitTotals.chainWaitNs},
   });
 }

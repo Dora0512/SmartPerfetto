@@ -230,13 +230,33 @@ async function checkAnalysis(ctx: TraceContext, analysis: CriticalPathAnalysis, 
   }
   if (ctx.constructed && analysis.truncated) problem('truncated on a constructed case');
 
+  // The exact ns totals are what evidence captures read; the ms fields are
+  // each rounded from them once.
+  const toMs = (ns: number) => Math.round((ns / 1e6) * 100) / 100;
+  const totals = analysis.totalsNs;
+  if (!totals) {
+    problem('totalsNs missing');
+  } else {
+    if (totals.window !== analysis.task.dur || totals.blocking + totals.self !== totals.window) {
+      problem(`totalsNs do not add up: ${JSON.stringify(totals)} for a ${analysis.task.dur} ns window`);
+    }
+    if (toMs(totals.blocking) !== analysis.blockingMs || toMs(totals.self) !== analysis.selfMs ||
+      toMs(totals.chainWait) !== (analysis.chainWaitMs ?? 0)) {
+      problem(`ms totals are not rounded from totalsNs: ${JSON.stringify(totals)}`);
+    }
+  }
+
   const counterfactual = analysis.quantification?.counterfactual;
   if (counterfactual) {
-    const total = counterfactual.bestCaseDurationMs + counterfactual.maxSavingMs;
-    if (Math.abs(total - analysis.totalMs) >= 0.005) {
-      problem(`counterfactual bestCase ${counterfactual.bestCaseDurationMs} + maxSaving ${counterfactual.maxSavingMs} != totalMs ${analysis.totalMs}`);
+    if (counterfactual.bestCaseDurationNs !== Math.max(0, analysis.task.dur - counterfactual.maxSavingNs)) {
+      problem(`counterfactual bestCase ${counterfactual.bestCaseDurationNs} ns + maxSaving ${counterfactual.maxSavingNs} ns != window ${analysis.task.dur} ns`);
     }
-    if (counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs ||
+    if (toMs(counterfactual.bestCaseDurationNs) !== counterfactual.bestCaseDurationMs ||
+      toMs(counterfactual.maxSavingNs) !== counterfactual.maxSavingMs) {
+      problem(`counterfactual ms fields are not rounded from ns: ${JSON.stringify(counterfactual)}`);
+    }
+    if (counterfactual.maxSavingNs !== counterfactual.longestSegmentDurNs ||
+      counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs ||
       counterfactual.upperBoundMs !== counterfactual.bestCaseDurationMs) {
       problem(`counterfactual fields disagree: ${JSON.stringify(counterfactual)}`);
     }

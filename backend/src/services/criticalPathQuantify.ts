@@ -28,12 +28,11 @@ export interface QuantifyTaskInput {
   upid: number | null;
   startTs: number;
   endTs: number;
-  durMs: number;
 }
 
 export interface QuantifySegmentInput {
   segmentKey: string;
-  durMs: number;
+  durNs: number;
 }
 
 export interface CounterfactualEstimate {
@@ -43,6 +42,10 @@ export interface CounterfactualEstimate {
   bestCaseDurationMs: number;
   /** The most removing that segment can save (= longestSegmentDurMs). */
   maxSavingMs: number;
+  /** The exact ns the ms fields above are rounded from. */
+  longestSegmentDurNs: number;
+  bestCaseDurationNs: number;
+  maxSavingNs: number;
   /** @deprecated read bestCaseDurationMs */
   upperBoundMs: number;
   noteCode: 'best_case_only';
@@ -94,15 +97,20 @@ function buildCounterfactual(
   // Stable order: dur DESC, then segmentKey ASC — guarantees deterministic
   // "longest segment" pick across equal-duration ties.
   const longest = [...segments].sort(
-    (a, b) => b.durMs - a.durMs || a.segmentKey.localeCompare(b.segmentKey)
+    (a, b) => b.durNs - a.durNs || a.segmentKey.localeCompare(b.segmentKey)
   )[0];
-  if (!longest || longest.durMs <= 0) return null;
-  const bestCaseDurationMs = Math.max(0, Math.round((task.durMs - longest.durMs) * 100) / 100);
+  if (!longest || longest.durNs <= 0) return null;
+  // Subtracted in ns and rounded once, like the analysis totals.
+  const bestCaseDurationNs = Math.max(0, task.endTs - task.startTs - longest.durNs);
+  const bestCaseDurationMs = nsToMs(bestCaseDurationNs);
   return {
     longestSegmentKey: longest.segmentKey,
-    longestSegmentDurMs: longest.durMs,
+    longestSegmentDurMs: nsToMs(longest.durNs),
     bestCaseDurationMs,
-    maxSavingMs: longest.durMs,
+    maxSavingMs: nsToMs(longest.durNs),
+    longestSegmentDurNs: longest.durNs,
+    bestCaseDurationNs,
+    maxSavingNs: longest.durNs,
     upperBoundMs: bestCaseDurationMs,
     noteCode: 'best_case_only',
     note: noteText({code: 'best_case_only'}, 'en'),
