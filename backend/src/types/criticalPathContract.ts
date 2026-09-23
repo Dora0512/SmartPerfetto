@@ -312,8 +312,6 @@ export interface CounterfactualEstimate {
   longestSegmentDurNs: number;
   bestCaseDurationNs: number;
   maxSavingNs: number;
-  /** @deprecated read bestCaseDurationMs */
-  upperBoundMs: number;
   noteCode: 'best_case_only';
   /** `noteCode` rendered. */
   note: string;
@@ -377,14 +375,6 @@ export interface CriticalPathTaskInfo {
   cpu?: number | null;
   threadName?: string | null;
   processName?: string | null;
-  waker?: {
-    threadStateId?: number | null;
-    utid?: number | null;
-    threadName?: string | null;
-    processName?: string | null;
-    state?: string | null;
-    interruptContext?: boolean | null;
-  };
 }
 
 export interface CriticalPathSegment {

@@ -1,0 +1,10 @@
+{
+  "description": "SmartPerfetto static assets in frontend/ next to the Perfetto build. update-frontend.sh injects `injected` into index.html and deletes `retired`; check-frontend-prebuild.cjs holds the committed prebuild to exactly this list.",
+  "injected": [
+    {"file": "assistant-flamegraph.css", "tag": "<link rel=\"stylesheet\" href=\"/assistant-flamegraph.css\">"},
+    {"file": "assistant-flamegraph.js", "tag": "<script defer src=\"/assistant-flamegraph.js\"></script>"}
+  ],
+  "retired": ["assistant-critical-path.js"],
+  "pluginOwnedStylePrefixes": ["sp-critical-path"],
+  "buildEntries": [".gitignore", "assets", "index.html", "server.js", "service_worker.js"]
+}

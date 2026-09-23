@@ -9393,7 +9393,7 @@ describe('analyze_wait_chain', () => {
       totalsNs: {window: 10_000_000, blocking: 4_000_000, self: 6_000_000, chainWait: 5_000_000},
       quantification: {counterfactual: {longestSegmentKey: 's1', longestSegmentDurMs: 4,
         bestCaseDurationMs: 6, maxSavingMs: 4, longestSegmentDurNs: 4_000_000, bestCaseDurationNs: 6_000_000,
-        maxSavingNs: 4_000_000, upperBoundMs: 6, noteCode: 'best_case_only', note: ''},
+        maxSavingNs: 4_000_000, noteCode: 'best_case_only', note: ''},
       frameImpacts: [], hypotheses: [], warnings: []},
       semanticSources: {},
       ...overrides,

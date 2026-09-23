@@ -8,7 +8,17 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const frontendDir = path.join(root, 'frontend');
+// The committed prebuild; a test points the check at a fixture with its own
+// variable (update-frontend.sh's SMARTPERFETTO_FRONTEND_DIR redirects where it
+// writes, not what the repository commits).
+const frontendDir = process.env.SMARTPERFETTO_PREBUILD_CHECK_DIR
+  ? path.resolve(process.env.SMARTPERFETTO_PREBUILD_CHECK_DIR)
+  : path.join(root, 'frontend');
+
+// The static assets next to the Perfetto build, as update-frontend.sh
+// injects them. Retired ones (e.g. the old critical-path page, which raced the
+// plugin for its button) must not come back through a refresh.
+const staticAssets = JSON.parse(readText(path.join(root, 'scripts', 'frontend-static-assets.json')));
 
 function fail(message) {
   console.error(`ERROR: ${message}`);
@@ -46,7 +56,34 @@ function stableVersionFromIndex(indexHtml) {
   }
 }
 
+/** frontend/ holds the build, the declared static assets and nothing else. */
+function checkStaticAssets(indexHtml) {
+  for (const asset of staticAssets.retired) {
+    if (exists(path.join(frontendDir, asset))) fail(`retired static asset is present: frontend/${asset}`);
+    if (indexHtml.includes(asset)) fail(`frontend/index.html still loads the retired static asset ${asset}`);
+  }
+  for (const {file, tag} of staticAssets.injected) {
+    const assetPath = path.join(frontendDir, file);
+    if (!exists(assetPath)) {
+      fail(`declared static asset is missing: frontend/${file}`);
+      continue;
+    }
+    if (!indexHtml.includes(tag)) fail(`frontend/index.html does not load frontend/${file}`);
+    if (file.endsWith('.css')) {
+      const css = readText(assetPath);
+      for (const prefix of staticAssets.pluginOwnedStylePrefixes) {
+        if (css.includes(prefix)) fail(`frontend/${file} still styles .${prefix}-*, which the plugin owns`);
+      }
+    }
+  }
+  const allowed = new Set([...staticAssets.buildEntries, ...staticAssets.injected.map(({file}) => file)]);
+  for (const entry of fs.readdirSync(frontendDir)) {
+    if (!allowed.has(entry) && !/^v\d/.test(entry)) fail(`undeclared top-level entry in frontend/: ${entry}`);
+  }
+}
+
 const indexPath = path.join(frontendDir, 'index.html');
+if (exists(indexPath)) checkStaticAssets(readText(indexPath));
 if (!exists(indexPath)) {
   fail('frontend/index.html is missing');
 } else if (!exists(path.join(frontendDir, 'server.js'))) {

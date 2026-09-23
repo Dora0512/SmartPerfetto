@@ -256,8 +256,7 @@ async function checkAnalysis(ctx: TraceContext, analysis: CriticalPathAnalysis, 
       problem(`counterfactual ms fields are not rounded from ns: ${JSON.stringify(counterfactual)}`);
     }
     if (counterfactual.maxSavingNs !== counterfactual.longestSegmentDurNs ||
-      counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs ||
-      counterfactual.upperBoundMs !== counterfactual.bestCaseDurationMs) {
+      counterfactual.maxSavingMs !== counterfactual.longestSegmentDurMs) {
       problem(`counterfactual fields disagree: ${JSON.stringify(counterfactual)}`);
     }
   }
@@ -270,9 +269,6 @@ async function runThreadState(ctx: TraceContext, candidate: Candidate, label: st
   const wakerUtid = analysis.directWaker?.utid ?? null;
   if (wakerUtid !== candidate.wakerUtid) {
     ctx.problems.push(`${ctx.selector} ${where}: directWaker.utid ${wakerUtid} != successor waker_utid ${candidate.wakerUtid}`);
-  }
-  if ((analysis.task.waker?.utid ?? null) !== wakerUtid) {
-    ctx.problems.push(`${ctx.selector} ${where}: task.waker.utid ${analysis.task.waker?.utid} != directWaker.utid ${wakerUtid}`);
   }
   await checkAnalysis(ctx, analysis, where);
   return analysis;

@@ -81,7 +81,6 @@ describe('criticalPathAiSummary localization', () => {
           longestSegmentDurNs: 40_000_000,
           bestCaseDurationNs: 10_000_000,
           maxSavingNs: 40_000_000,
-          upperBoundMs: 10,
           noteCode: 'best_case_only',
           note: '',
         },

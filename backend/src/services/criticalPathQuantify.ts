@@ -73,7 +73,6 @@ function buildCounterfactual(
     longestSegmentDurNs: longest.durNs,
     bestCaseDurationNs,
     maxSavingNs: longest.durNs,
-    upperBoundMs: bestCaseDurationMs,
     noteCode: 'best_case_only',
     note: noteText({code: 'best_case_only'}, 'en'),
   };

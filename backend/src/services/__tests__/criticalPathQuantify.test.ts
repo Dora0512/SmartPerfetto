@@ -79,7 +79,6 @@ describe('criticalPathQuantify counterfactual', () => {
       longestSegmentDurMs: 22,
       bestCaseDurationMs: 8,
       maxSavingMs: 22,
-      upperBoundMs: 8,
     });
     expect(estimate?.note).toMatch(/^BEST CASE ONLY/);
     expect(estimate?.note).toContain('at most maxSavingMs');
@@ -101,7 +100,6 @@ describe('criticalPathQuantify counterfactual', () => {
   it('floors the best case at zero and has no estimate without a positive segment', () => {
     expect(buildCounterfactual({...TASK, endTs: 10 * MS}, [{segmentKey: 'a', durNs: 12 * MS}])).toMatchObject({
       bestCaseDurationMs: 0,
-      upperBoundMs: 0,
       maxSavingMs: 12,
     });
     expect(buildCounterfactual(TASK, [])).toBeNull();

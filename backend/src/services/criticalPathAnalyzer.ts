@@ -1033,19 +1033,6 @@ async function resolveTaskWaker(
   return result;
 }
 
-// `task.waker` predates `directWaker`; it is derived from the same hop so the
-// two can never disagree.
-function taskWakerOf(hop: WakerHop | null): NonNullable<CriticalPathTaskInfo['waker']> {
-  return {
-    threadStateId: hop?.threadStateId ?? null,
-    utid: hop?.utid ?? null,
-    threadName: hop?.threadName ?? null,
-    processName: hop?.processName ?? null,
-    state: hop?.state ?? null,
-    interruptContext: hop ? hop.irqContext : null,
-  };
-}
-
 interface RecursionContext {
   visited: Set<string>;
   segmentBudget: number;
@@ -1360,10 +1347,7 @@ export async function analyzeCriticalPath(
   throwIfTraceProcessorQueryCancelled(signal);
   const wakerResult = await resolveTaskWaker(traceProcessorService, traceId, task, slices, signal);
   const directWaker = wakerResult?.hop ?? null;
-  if (wakerResult) {
-    task.waker = taskWakerOf(wakerResult.hop);
-    warnings.push(...wakerResult.warnings);
-  }
+  if (wakerResult) warnings.push(...wakerResult.warnings);
 
   throwIfTraceProcessorQueryCancelled(signal);
   const stack = await loadCriticalPathChain(traceProcessorService, traceId, task, {

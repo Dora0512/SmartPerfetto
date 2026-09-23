@@ -109,16 +109,12 @@ describe('critical path analyzer', () => {
     expect(analysis.wakeupChain[0].semantics?.binderTxns).toEqual([
       expect.objectContaining({binderTxnId: 42, side: 'server', durMs: 12}),
     ]);
-    expect(analysis.directWaker).toMatchObject({kind: 'thread', utid: 2, threadName: 'binder:system', threadStateId: 55});
-    // task.waker is the same hop, not a second lookup.
-    expect(analysis.task.waker).toEqual({
-      threadStateId: 55,
-      utid: 2,
-      threadName: 'binder:system',
-      processName: 'system_server',
-      state: 'Running',
-      interruptContext: false,
+    expect(analysis.directWaker).toMatchObject({
+      kind: 'thread', utid: 2, threadName: 'binder:system', processName: 'system_server',
+      state: 'Running', threadStateId: 55, irqContext: false,
     });
+    // The waker is reported once, as directWaker; the task carries no copy of it.
+    expect(analysis.task).not.toHaveProperty('waker');
     expect(analysis.summary).toContain('直接唤醒来源：system_server / binder:system');
     expect(analysis.semanticSources?.binder).toBe('present');
     expect(analysis.anomalies.map((a) => a.title)).toContain('等待链涉及 Binder / IPC');
@@ -182,7 +178,6 @@ describe('critical path analyzer', () => {
     const irqAnalysis = await analyzeCriticalPath(irq.tp, 'trace-1', {threadStateId: 104});
     expect(irqAnalysis.directWaker).toMatchObject({irqContext: true, kind: 'irq', utid: 5});
     expect(irqAnalysis.directWaker?.hintCodes).toContain('irq_wakeup');
-    expect(irqAnalysis.task.waker?.interruptContext).toBe(true);
 
     // The waker's own row carries irq_context=1; the wakeup itself was not in IRQ context.
     const notIrq = sqliteTraceProcessor(
@@ -255,7 +250,6 @@ describe('critical path analyzer', () => {
     // waker_id is NULL on the wakeup row; the waker is still named through waker_utid.
     expect(analysis.directWaker).toMatchObject({utid: 2, threadName: 'binder:system', kind: 'thread'});
     expect(analysis.directWaker?.hintCodes).toContain('range_longest_waiting_slice');
-    expect(analysis.task.waker?.threadName).toBe('binder:system');
   });
 
   it('returns no_waiting_time for a range without S/D/R time and never queries the stack', async () => {
@@ -321,7 +315,7 @@ describe('critical path analyzer', () => {
     expect(counterfactual?.longestSegmentDurMs).toBeCloseTo(22, 1);
     expect(counterfactual?.bestCaseDurationMs).toBeCloseTo(8, 1);
     expect(counterfactual?.maxSavingMs).toBeCloseTo(22, 1);
-    expect(counterfactual?.upperBoundMs).toBeCloseTo(8, 1);
+    expect(counterfactual).not.toHaveProperty('upperBoundMs');
     expect(counterfactual?.noteCode).toBe('best_case_only');
     expect(counterfactual?.note).toMatch(/仅为最好情况/);
   });

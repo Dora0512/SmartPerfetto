@@ -122,7 +122,6 @@ function analysisFixture(): CriticalPathAnalysis {
         longestSegmentDurNs: 30_000_000,
         bestCaseDurationNs: 20_000_000,
         maxSavingNs: 30_000_000,
-        upperBoundMs: 20,
         noteCode: 'best_case_only',
         note: '',
       },
@@ -328,7 +327,7 @@ describe('POST /api/critical-path/:traceId/analyze', () => {
     // The model reads the counterfactual through its best-case fields only.
     expect(prompt).toContain('"bestCaseDurationMs":20');
     expect(prompt).toContain('"maxSavingMs":30');
-    expect(prompt).not.toContain('upperBoundMs');
+    expect(prompt).not.toContain('bestCaseDurationNs');
     expect(options).toMatchObject({
       model: 'profile-model',
       maxTurns: 1,

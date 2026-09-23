@@ -62,7 +62,7 @@ interface CounterfactualView {
   maxSavingMs: number;
 }
 
-// The pick keeps the deprecated `upperBoundMs` alias and the note out of the
+// The pick keeps the ns fields and the note out of the
 // prompt: the model sees the best-case fields only.
 function readCounterfactual(counterfactual: CriticalPathCounterfactual): CounterfactualView {
   const {longestSegmentDurMs, bestCaseDurationMs, maxSavingMs} = counterfactual;

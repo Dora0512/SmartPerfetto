@@ -18,37 +18,40 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="${SMARTPERFETTO_FRONTEND_DIST_DIR:-$PROJECT_ROOT/perfetto/out/ui/ui/dist}"
 FRONTEND_DIR="${SMARTPERFETTO_FRONTEND_DIR:-$PROJECT_ROOT/frontend}"
 
+STATIC_ASSETS_MANIFEST="$PROJECT_ROOT/scripts/frontend-static-assets.json"
+
+# Inject the static assets declared in scripts/frontend-static-assets.json
+# (the same list check-frontend-prebuild.cjs enforces) before </head>.
 inject_smartperfetto_static_assets() {
   local index_file="$1"
-  if grep -q 'assistant-flamegraph.js' "$index_file"; then
-    return 0
-  fi
+  node - "$index_file" "$STATIC_ASSETS_MANIFEST" <<'NODE'
+const fs = require('fs');
+const [indexPath, manifestPath] = process.argv.slice(2);
+const {injected} = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+let html = fs.readFileSync(indexPath, 'utf8');
+const missing = injected.filter(({tag}) => !html.includes(tag));
+if (missing.length === 0) process.exit(0);
+const anchor = ['</head>', '</body>', '</html>'].find((marker) => html.includes(marker));
+if (!anchor) {
+  console.error(`ERROR: Could not find an insertion point for SmartPerfetto static assets in ${indexPath}`);
+  process.exit(2);
+}
+html = html.replace(anchor, `${missing.map(({tag}) => `  ${tag}\n`).join('')}${anchor}`);
+fs.writeFileSync(indexPath, html);
+NODE
+}
 
-  local insert_before
-  if grep -q '</head>' "$index_file"; then
-    insert_before='</head>'
-  elif grep -q '</body>' "$index_file"; then
-    insert_before='</body>'
-  elif grep -q '</html>' "$index_file"; then
-    insert_before='</html>'
-  else
-    echo "ERROR: Could not find an insertion point for SmartPerfetto static assets in $index_file" >&2
-    return 2
-  fi
-
-  local tmp
-  tmp="$(mktemp)"
-  awk -v insert_before="$insert_before" '
-    index($0, insert_before) && !inserted {
-      print "  <link rel=\"stylesheet\" href=\"/assistant-flamegraph.css\">";
-      print "  <script defer src=\"/assistant-flamegraph.js\"></script>";
-      print "  <script defer src=\"/assistant-critical-path.js\"></script>";
-      inserted=1;
-    }
-    { print }
-    END { if (!inserted) exit 2 }
-  ' "$index_file" > "$tmp"
-  mv "$tmp" "$index_file"
+# Delete static assets the manifest retires, so a refresh cannot keep them.
+remove_retired_static_assets() {
+  local frontend_dir="$1"
+  local retired
+  while IFS= read -r retired; do
+    [ -n "$retired" ] || continue
+    if [ -e "$frontend_dir/$retired" ]; then
+      rm -f "$frontend_dir/$retired"
+      echo "Removed retired static asset $retired"
+    fi
+  done < <(node -e 'for (const f of require(process.argv[1]).retired) console.log(f)' "$STATIC_ASSETS_MANIFEST")
 }
 
 normalize_frontend_font_asset_paths() {
@@ -173,6 +176,7 @@ echo "Updating frontend/ ..."
 # Copy top-level files
 cp "$DIST_DIR/index.html"          "$FRONTEND_DIR/index.html"
 inject_smartperfetto_static_assets "$FRONTEND_DIR/index.html"
+remove_retired_static_assets "$FRONTEND_DIR"
 cp "$DIST_DIR/service_worker.js"   "$FRONTEND_DIR/service_worker.js" 2>/dev/null || true
 
 # Upstream Vite emits shared runtime assets at dist/assets/. Some bundled

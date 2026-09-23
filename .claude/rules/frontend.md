@@ -63,12 +63,15 @@ After any change under `perfetto/ui/src/plugins/com.smartperfetto.AIAssistant/`:
 7. Commit the plugin source, `frontend/index.html`, the active `frontend/v*`
    bundle, and any SmartPerfetto static assistant assets that changed.
 
-`scripts/update-frontend.sh` is the supported way to refresh `frontend/`. It
-must preserve:
-
-- `assistant-flamegraph.css`
-- `assistant-flamegraph.js`
-- `assistant-critical-path.js`
+`scripts/update-frontend.sh` is the supported way to refresh `frontend/`. The
+SmartPerfetto static assets next to the Perfetto build are declared once in
+`scripts/frontend-static-assets.json`: the script injects the `injected` ones
+(`assistant-flamegraph.css`, `assistant-flamegraph.js`) into `index.html` and
+deletes the `retired` ones (the former static `assistant-critical-path.js`; the
+drawer is part of the plugin, styled in its `styles.scss`).
+`check:frontend-prebuild` holds `frontend/` to that list: every declared asset
+loaded, nothing retired or undeclared at the top level, and no plugin-owned
+`.sp-critical-path-*` rules in the static stylesheet.
 
 It also removes stale sibling `frontend/v*` directories. Do not leave old
 prebuilt version directories for a later manual cleanup.
