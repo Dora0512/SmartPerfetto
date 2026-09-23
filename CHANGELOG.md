@@ -11,9 +11,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Commit prefixes follow [Conventional Commits](https://www.conventionalcommits.org/).
 Detailed commit-level history is available via `git log`.
 
-## [Unreleased]
+## [1.14.0] - 2026-09-24
+
+### Added
+- CPU frequency limits are attributed to thermal, cooling-device and workload
+  evidence: limit episodes are detected per cluster and matched against
+  cooling-device state, thermal signals and the threads that ran during the
+  episode, with a constructed thermal-limit trace case.
+- Interruptible (S) waits are attributed by wake source. Android kernels emit
+  `sched_blocked_reason` only for uninterruptible sleep, so socket, timer and
+  hand-off waits were invisible; the waker and IRQ context of the wakeup row
+  now classify them as network receive, timer/device, worker hand-off, binder
+  reply or system service candidates. The new Skill
+  `process_thread_wait_sources_in_range` covers every thread of a process.
+- The wait-chain engine is available to the agent as the MCP tool
+  `analyze_wait_chain`. Its segment and one-row summary tables carry
+  native-producer semantics for exact ns values and `utid`, so a numeric
+  claim citing them is proved or rejected by the deterministic verifier.
+- The AI Assistant critical-path drawer renders every layer the engine
+  returns (direct waker, semantic sources, the target's own states, the
+  recursed chain, best case and maximum saving, affected frames, falsifiable
+  hypotheses with copyable verification SQL). "Continue in the conversation"
+  pre-fills the composer with an ids-and-numbers question for the current
+  trace; it is never sent automatically.
+- `/api/workspaces/:workspaceId/critical-path` serves the drawer in
+  enterprise / OIDC deployments, where the global route answers 410. The
+  response is declared once in a shared contract and generated into the
+  frontend types.
+
+### Changed
+- Bounded first-turn questions keep trace-fact preflight (focus app,
+  architecture, vendor, trace completeness); only memory-type prefetch is
+  limited to scene-wide reads. `list_skills` describes the Skills most
+  relevant to the query first, and scene classification uses each strategy's
+  first keywords as lexical anchors.
+- Final conclusions keep their comparison tables and evidence beyond the
+  streamed previews, and the legacy quick/full prompt templates are removed
+  in favour of the `knowledge-*` templates.
+- The critical-path, comparison and flamegraph summaries share one isolated
+  one-shot model call (AI capability gate, the caller's Provider Manager
+  runtime, no tools or MCP servers, cancellation and deadline). The
+  flamegraph summary has its own feature gate, `flamegraph_ai_summary`.
+- Critical-path results carry stable ids for modules, anomalies,
+  recommendations, warnings and reasons; text is rendered per request
+  language in `presentationAnalysis`. `analysis` remains as the deprecated
+  zh-CN rendering. Engine defaults are the single source for segment and
+  recursion limits.
+- Per-segment attribution (IO blocked-function families, wake sources,
+  binder, monitor contention, GC, CPU competition and frequency) is shared
+  SQL fragments used by both Skills and the critical-path engine.
+- The static `assistant-critical-path.js` page is retired; the plugin owns
+  the button. Static frontend assets are declared in
+  `scripts/frontend-static-assets.json` and checked by
+  `check:frontend-prebuild`.
 
 ### Fixed
+- The critical-path engine reads the direct waker from the wakeup row, sums
+  totals over the whole chain in ns (an external share can no longer exceed
+  100%), stops when the caller disconnects or cancels, returns typed errors
+  for invalid thread selectors, and attaches monitor contention to the lock
+  owner's segment. The rendering-pipeline teaching flow reuses the engine's
+  chain and waker.
+- The flamegraph route validates its input before loading a trace and no
+  longer hides trace-processor query errors.
 - Scene reconstruction proposals accept the `planPhaseId` every evidence tool
   advertises, treat explicit nulls and blank identifiers as absent, and accept a
   numeric cell quoted as its exact decimal string. Changes commit in atomic
@@ -47,6 +107,12 @@ Detailed commit-level history is available via `git log`.
 - Summarized SQL results list the original row index of each sample row, and
   the Agent SSE verification script exits after writing its artifacts and
   treats a failed run's `error` event as terminal, as the AI panel does.
+
+### Known issues
+- With real providers, long startup reports are still frequently delivered as
+  `partial` because the semantic review rejects undeclared assertions and
+  body values that differ from their declarations. The answer is delivered
+  with the failing checks named; treat it as unverified.
 
 ## [1.13.0] - 2026-09-21
 
@@ -696,7 +762,11 @@ Detailed commit-level history is available via `git log`.
 - HTML report generation and CSV / JSON export.
 - AGPL v3.0 licensing throughout.
 
-[Unreleased]: https://github.com/Gracker/SmartPerfetto/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/Gracker/SmartPerfetto/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.13.0...v1.14.0
+[1.13.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.12.1...v1.13.0
+[1.12.1]: https://github.com/Gracker/SmartPerfetto/compare/v1.12.0...v1.12.1
+[1.12.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Gracker/SmartPerfetto/compare/v1.8.4...v1.9.0
