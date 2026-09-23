@@ -536,7 +536,7 @@ function normalizeStackRows(rows: QueryRow[]): CriticalPathStackRow[] {
 
 function buildSegments(
   rows: CriticalPathStackRow[],
-  task: CriticalPathTaskInfo
+  task: ChainWindow
 ): CriticalPathSegment[] {
   const segments = new Map<string, SegmentAccumulator>();
 
@@ -1214,6 +1214,54 @@ const MAX_SLICES_PER_SEGMENT = 8;
  */
 const DEFAULT_MAX_CHAIN_SEGMENTS = 5000;
 
+/** The thread and window a chain is read for. */
+export interface ChainWindow {
+  utid: number;
+  startTs: number;
+  dur: number;
+  /** The thread's own name; a slice of that name is not reported as a wait. */
+  threadName?: string | null;
+}
+
+export interface CriticalPathChain {
+  /** Merged segments of other threads, in time order. */
+  segments: CriticalPathSegment[];
+  /** Rows the stack query returned. */
+  rawRows: number;
+  /** The stack held more than `maxSegments` segments; `segments` is the part before the cut. */
+  truncated: boolean;
+}
+
+/**
+ * L1 alone: the critical-path stack of one thread over one window, turned into
+ * merged segments. Everything else the engine reports starts from this chain;
+ * a caller that needs only the chain (the teaching flow) reads it here rather
+ * than querying `_critical_path_stack` itself.
+ */
+export async function loadCriticalPathChain(
+  tp: TraceProcessorService,
+  traceId: string,
+  window: ChainWindow,
+  options: {maxSegments?: number; signal?: AbortSignal} = {}
+): Promise<CriticalPathChain> {
+  const {signal} = options;
+  assertQuerySucceeded(
+    await tp.query(traceId, 'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;', {signal})
+  );
+  const stack = await fetchCriticalPathStack(
+    tp,
+    traceId,
+    {utid: window.utid, startTs: window.startTs, dur: window.dur},
+    options.maxSegments ?? DEFAULT_MAX_CHAIN_SEGMENTS,
+    signal
+  );
+  return {
+    segments: mergeAdjacentSegments(buildSegments(stack.rows, window)),
+    rawRows: stack.raw,
+    truncated: stack.truncated,
+  };
+}
+
 interface CriticalPathStack {
   rows: CriticalPathStackRow[];
   /** Rows returned by the stack query. */
@@ -1462,25 +1510,14 @@ export async function analyzeCriticalPath(
   }
 
   throwIfTraceProcessorQueryCancelled(signal);
-  assertQuerySucceeded(
-    await traceProcessorService.query(
-      traceId,
-      'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;',
-      {signal}
-    )
-  );
-
-  const stack = await fetchCriticalPathStack(
-    traceProcessorService,
-    traceId,
-    {utid: task.utid, startTs: task.startTs, dur: task.dur},
-    maxChainSegments,
-    signal
-  );
+  const stack = await loadCriticalPathChain(traceProcessorService, traceId, task, {
+    maxSegments: maxChainSegments,
+    signal,
+  });
 
   // `chain` is the whole merged chain: totals, breakdown, anomalies and the
   // counterfactual are computed on it. `segments` is the displayed prefix.
-  const chain = mergeAdjacentSegments(buildSegments(stack.rows, task));
+  const chain = stack.segments;
   const segments = chain.slice(0, maxSegments);
   const truncated = stack.truncated || chain.length > maxSegments;
   if (stack.truncated) {
@@ -1593,7 +1630,7 @@ export async function analyzeCriticalPath(
     recommendations: [],
     warningCodes: uniqueWarnings(warnings),
     warnings: [],
-    rawRows: stack.raw,
+    rawRows: stack.rawRows,
     truncated,
     longestSegment: longest
       ? {

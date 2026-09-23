@@ -81,10 +81,13 @@ function withHints(hintCodes: CriticalPathHintCode[]): Pick<WakerHop, 'hintCodes
  * hop (NOT a recursive chain) annotated with IRQ/swapper context.
  *
  * Perfetto records `waker_utid`, `waker_id` and `irq_context` on the first
- * R/R+ row after a sleep, never on the S/D row itself. A waiting row is
- * therefore resolved through its successor at `ts + dur` (same join and MAX
- * collapse as blocking_chain_analysis.skill.yaml); a selected R/R+ row is the
- * wakeup row and is read directly.
+ * R/R+ row after a sleep, never on the S/D row itself nor on the Running row
+ * that follows. The wakeup row is therefore found by position:
+ *  - a waiting row: its successor at `ts + dur` (same join and MAX collapse
+ *    as blocking_chain_analysis.skill.yaml);
+ *  - a Running row: the R/R+ row that ends where it starts. A predecessor
+ *    without a waker is a preemption, not a wakeup, and reports no waker;
+ *  - an R/R+ row: itself.
  *
  * Failure modes (each returns hop=null with a warning):
  *  - thread_state row missing
@@ -112,16 +115,19 @@ export async function resolveDirectWaker(
       SELECT
         target.id AS target_id,
         target.ts AS target_ts,
-        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_utid ELSE MAX(nxt.waker_utid) END AS waker_utid,
-        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_id ELSE MAX(nxt.waker_id) END AS waker_id,
-        CASE WHEN target.state IN ('R', 'R+') THEN target.irq_context ELSE MAX(nxt.irq_context) END AS irq_context
+        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_utid ELSE MAX(adj.waker_utid) END AS waker_utid,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.waker_id ELSE MAX(adj.waker_id) END AS waker_id,
+        CASE WHEN target.state IN ('R', 'R+') THEN target.irq_context ELSE MAX(adj.irq_context) END AS irq_context
       FROM target
-      LEFT JOIN thread_state AS nxt
+      LEFT JOIN thread_state AS adj
         ON target.state NOT IN ('R', 'R+')
-       AND nxt.utid = target.utid
-       AND nxt.ts = target.ts + target.dur
-       AND nxt.state IN ('R', 'R+')
-       AND nxt.waker_utid IS NOT NULL
+       AND adj.utid = target.utid
+       AND adj.state IN ('R', 'R+')
+       AND adj.waker_utid IS NOT NULL
+       AND (
+         (target.state = 'Running' AND adj.ts + adj.dur = target.ts)
+         OR (target.state != 'Running' AND adj.ts = target.ts + target.dur)
+       )
       GROUP BY target.id
     )
     SELECT

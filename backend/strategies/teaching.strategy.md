@@ -104,8 +104,9 @@ invoke_skill('rendering_pipeline_detection', { package: <package hint> })
 # 读取 pipeline_bundle: detection + teachingContent + pinInstructions + activeRenderingProcesses
 # 再基于 selection / visible window / package hint 查询 observedFlow.lanes/events
 # 对关键 rendering event 追加 bounded scheduler 事实：
-#   - thread_state.waker_id -> direct_wakeup / wakes_to
-#   - sched.thread_executing_span_with_slice._critical_path_stack -> critical_path_segment / critical_path_to
+#   - 唤醒行（Running 行之前、或睡眠之后的第一条 R/R+ 行）上的 waker_id -> direct_wakeup / wakes_to
+#     （Running 行本身不带 waker；前一条 R/R+ 没有 waker 表示被抢占而不是被唤醒）
+#   - sched.thread_executing_span_with_slice._critical_path_stack 合并后的其他线程段 -> critical_path_segment / critical_path_to
 ```
 - 先展示当前 trace 中真实观测到的 lanes/events，再展示 Mermaid
 - `primary_pipeline_id` 只是入口，不是最终单选结论

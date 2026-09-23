@@ -2,6 +2,9 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import { loadCriticalPathChain, type CriticalPathSegment } from './criticalPathAnalyzer';
+import { warningText } from './criticalPathText';
+import { resolveDirectWaker, type WakerChainResult } from './criticalPathWakerChain';
 import { getPipelineDocService } from './pipelineDocService';
 import {
   ensurePipelineSkillsInitialized,
@@ -16,9 +19,9 @@ import {
   type TraceProcessorService,
 } from './traceProcessorService';
 import {
+  assertQuerySucceeded,
   rowsToObjects,
   nsToMs,
-  toNullableNumber,
   toNumber,
   toOptionalString,
 } from '../utils/traceProcessorRowUtils';
@@ -98,7 +101,8 @@ interface ObservedEventRow {
   stage: string;
 }
 
-interface WakeupRow {
+/** The thread_state row a rendering event is attributed to: the row it overlaps most. */
+interface RootStateRow {
   eventId: string;
   eventLaneId?: string;
   threadStateId?: number;
@@ -108,43 +112,6 @@ interface WakeupRow {
   state?: string;
   threadName?: string;
   processName?: string;
-  wakerThreadStateId?: number;
-  wakerUtid?: number;
-  wakerTid?: number;
-  wakerState?: string;
-  wakerThreadName?: string;
-  wakerProcessName?: string;
-  wakerIrqContext?: boolean;
-  targetIrqContext?: boolean;
-}
-
-interface CriticalPathStackRow {
-  rootEventId: string;
-  rootLaneId?: string;
-  entityId?: number;
-  ts: number;
-  dur: number;
-  utid?: number;
-  stackDepth?: number;
-  name: string;
-  tableName?: string;
-  threadName?: string;
-  processName?: string;
-}
-
-interface CriticalTaskAccumulator {
-  rootEventId: string;
-  rootLaneId?: string;
-  ts: number;
-  dur: number;
-  utid?: number;
-  threadStateId?: number;
-  state?: string;
-  threadName?: string;
-  processName?: string;
-  tableName?: string;
-  stackDepth?: number;
-  names: Set<string>;
 }
 
 const DEFAULT_SUBVARIANTS: RenderingPipelineSubvariants = {
@@ -184,7 +151,7 @@ const DEFAULT_KEY_SLICE_NAMES = [
 
 const POINT_SELECTION_CONTEXT_NS = 50_000_000;
 const MAX_CRITICAL_TASK_ROOTS = 6;
-const MAX_CRITICAL_PATH_ROWS_PER_ROOT = 36;
+const MAX_CRITICAL_PATH_SEGMENTS_PER_ROOT = 12;
 const MAX_CRITICAL_TASKS = 40;
 
 const PRODUCER_PIPELINE_PATTERNS: Array<{
@@ -476,22 +443,6 @@ function sortLaneRole(role: ObservedFlowLaneRole): number {
     critical_task: 6,
     unknown: 7,
   }[role];
-}
-
-function stripPrefix(value: string, prefix: string): string | undefined {
-  return value.startsWith(prefix) ? value.slice(prefix.length).trim() : undefined;
-}
-
-function classifyWakerKind(
-  threadName: string | undefined,
-  tid: number | undefined,
-  irqContext: boolean | undefined
-): 'irq' | 'swapper' | 'thread' | 'unknown' {
-  if (irqContext) return 'irq';
-  if (tid === 0) return 'swapper';
-  if (threadName && /^swapper(\/\d+)?$/.test(threadName)) return 'swapper';
-  if (threadName) return 'thread';
-  return 'unknown';
 }
 
 function sameLaneOwner(
@@ -1064,20 +1015,40 @@ export class RenderingPipelineTeachingService {
     const warnings: string[] = [];
     const criticalTasks: ObservedFlowCriticalTask[] = [];
 
+    // L2 of the critical-path engine: the direct waker of each root's row,
+    // read from the wakeup row (the R/R+ row before a Running row or after a
+    // sleep), never from the row itself.
     try {
-      const wakeupRows = await this.queryWakeupRows(traceId, roots);
-      criticalTasks.push(...this.buildDirectWakeupTasks(wakeupRows));
+      const rootRows = await this.queryRootStateRows(traceId, roots);
+      for (const row of rootRows) {
+        if (row.threadStateId === undefined) continue;
+        const waker = await resolveDirectWaker(this.traceProcessorService, traceId, {
+          threadStateId: row.threadStateId,
+        });
+        const failure = waker.warnings.find((warning) => warning.code === 'waker_query_failed');
+        if (failure) warnings.push(`Scheduler wakeup query failed: ${warningText(failure, 'en')}`);
+        criticalTasks.push(this.buildDirectWakeupTask(row, waker));
+      }
     } catch (error: any) {
       warnings.push(`Scheduler wakeup query failed: ${error?.message || error}`);
     }
 
+    // L1 of the critical-path engine: each root's chain of other threads.
     try {
-      await this.traceProcessorService.query(
-        traceId,
-        'INCLUDE PERFETTO MODULE sched.thread_executing_span_with_slice;'
-      );
-      const stackRows = await this.queryCriticalPathRows(traceId, roots);
-      criticalTasks.push(...this.buildCriticalPathTasks(stackRows));
+      for (const root of roots) {
+        const chain = await loadCriticalPathChain(
+          this.traceProcessorService,
+          traceId,
+          {
+            utid: Math.trunc(root.utid || 0),
+            startTs: Math.trunc(root.ts),
+            dur: Math.trunc(root.dur),
+            threadName: root.threadName,
+          },
+          { maxSegments: MAX_CRITICAL_PATH_SEGMENTS_PER_ROOT }
+        );
+        criticalTasks.push(...this.buildCriticalPathTasks(root, chain.segments));
+      }
     } catch (error: any) {
       warnings.push(`Official critical path query failed: ${error?.message || error}`);
     }
@@ -1120,10 +1091,10 @@ export class RenderingPipelineTeachingService {
     return roots;
   }
 
-  private async queryWakeupRows(
+  private async queryRootStateRows(
     traceId: string,
     roots: ObservedFlowEvent[]
-  ): Promise<WakeupRow[]> {
+  ): Promise<RootStateRow[]> {
     const values = roots
       .map((event) =>
         `(${sqlLiteral(event.id)}, ${event.laneId ? sqlLiteral(event.laneId) : 'NULL'}, ${Math.trunc(event.ts)}, ${Math.trunc(event.ts + event.dur)}, ${Math.trunc(event.utid || 0)})`
@@ -1143,8 +1114,6 @@ export class RenderingPipelineTeachingService {
           target.dur,
           target.utid,
           target.state,
-          target.waker_id,
-          target.irq_context AS target_irq_context,
           thread.name AS thread_name,
           process.name AS process_name,
           max(0, min(target.ts + target.dur, root_events.event_end) - max(target.ts, root_events.event_ts)) AS overlap_ns,
@@ -1167,33 +1136,13 @@ export class RenderingPipelineTeachingService {
           ) AS rn
         FROM candidate_state
       )
-      SELECT
-        ranked_state.event_id,
-        ranked_state.lane_id,
-        ranked_state.thread_state_id,
-        ranked_state.ts,
-        ranked_state.dur,
-        ranked_state.utid,
-        ranked_state.state,
-        ranked_state.target_irq_context,
-        ranked_state.thread_name,
-        ranked_state.process_name,
-        waker.id AS waker_thread_state_id,
-        waker.utid AS waker_utid,
-        waker.state AS waker_state,
-        waker.irq_context AS waker_irq_context,
-        waker_thread.tid AS waker_tid,
-        waker_thread.name AS waker_thread_name,
-        waker_process.name AS waker_process_name
+      SELECT event_id, lane_id, thread_state_id, ts, dur, utid, state, thread_name, process_name
       FROM ranked_state
-      LEFT JOIN thread_state AS waker ON ranked_state.waker_id = waker.id
-      LEFT JOIN thread AS waker_thread ON waker.utid = waker_thread.utid
-      LEFT JOIN process AS waker_process ON waker_thread.upid = waker_process.upid
-      WHERE ranked_state.rn = 1
-      ORDER BY ranked_state.ts
+      WHERE rn = 1
+      ORDER BY ts
     `;
 
-    const result = await this.traceProcessorService.query(traceId, sql);
+    const result = assertQuerySucceeded(await this.traceProcessorService.query(traceId, sql));
     return rowsToObjects(result).map((row) => ({
       eventId: String(row.event_id || ''),
       eventLaneId: toOptionalString(row.lane_id) || undefined,
@@ -1204,167 +1153,67 @@ export class RenderingPipelineTeachingService {
       state: toOptionalString(row.state) || undefined,
       threadName: toOptionalString(row.thread_name) || undefined,
       processName: toOptionalString(row.process_name) || undefined,
-      wakerThreadStateId: safeNumber(row.waker_thread_state_id),
-      wakerUtid: safeNumber(row.waker_utid),
-      wakerTid: safeNumber(row.waker_tid),
-      wakerState: toOptionalString(row.waker_state) || undefined,
-      wakerThreadName: toOptionalString(row.waker_thread_name) || undefined,
-      wakerProcessName: toOptionalString(row.waker_process_name) || undefined,
-      wakerIrqContext: toNullableNumber(row.waker_irq_context) === 1,
-      targetIrqContext: toNullableNumber(row.target_irq_context) === 1,
     }));
   }
 
-  private buildDirectWakeupTasks(rows: WakeupRow[]): ObservedFlowCriticalTask[] {
-    return rows
-      .filter((row) => row.threadStateId !== undefined)
-      .map((row) => {
-        const hasWaker = row.wakerThreadStateId !== undefined || row.targetIrqContext;
-        const wakerKind = classifyWakerKind(row.wakerThreadName, row.wakerTid, row.wakerIrqContext || row.targetIrqContext);
-        return {
-          id: `critical-task-wakeup-${row.eventId}`,
-          kind: 'direct_wakeup' as const,
-          rootEventId: row.eventId,
-          rootLaneId: row.eventLaneId,
-          laneId: row.eventLaneId,
-          name: hasWaker
-            ? `direct waker: ${row.wakerThreadName || row.wakerProcessName || wakerKind}`
-            : 'direct waker: not recorded',
-          ts: row.ts,
-          dur: row.dur,
-          durMs: nsToMs(row.dur),
-          processName: row.processName,
-          threadName: row.threadName,
-          utid: row.utid,
-          threadStateId: row.threadStateId,
-          state: row.state,
-          waker: hasWaker
-            ? {
-                threadStateId: row.wakerThreadStateId,
-                utid: row.wakerUtid,
-                processName: row.wakerProcessName,
-                threadName: row.wakerThreadName,
-                state: row.wakerState,
-                irqContext: row.wakerIrqContext || row.targetIrqContext,
-                kind: wakerKind,
-              }
-            : undefined,
-          evidenceSource: 'thread_state_waker_id',
-          confidence: hasWaker ? 0.85 : 0.55,
-        };
-      });
+  private buildDirectWakeupTask(row: RootStateRow, waker: WakerChainResult): ObservedFlowCriticalTask {
+    const hop = waker.hop;
+    return {
+      id: `critical-task-wakeup-${row.eventId}`,
+      kind: 'direct_wakeup',
+      rootEventId: row.eventId,
+      rootLaneId: row.eventLaneId,
+      laneId: row.eventLaneId,
+      name: hop
+        ? `direct waker: ${hop.threadName || hop.processName || hop.kind}`
+        : 'direct waker: not recorded',
+      ts: row.ts,
+      dur: row.dur,
+      durMs: nsToMs(row.dur),
+      processName: row.processName,
+      threadName: row.threadName,
+      utid: row.utid,
+      threadStateId: row.threadStateId,
+      state: row.state,
+      waker: hop
+        ? {
+            threadStateId: hop.threadStateId ?? undefined,
+            utid: hop.utid ?? undefined,
+            processName: hop.processName ?? undefined,
+            threadName: hop.threadName ?? undefined,
+            state: hop.state ?? undefined,
+            irqContext: hop.irqContext,
+            kind: hop.kind,
+          }
+        : undefined,
+      evidenceSource: 'thread_state_waker_id',
+      confidence: hop ? 0.85 : 0.55,
+    };
   }
 
-  private async queryCriticalPathRows(
-    traceId: string,
-    roots: ObservedFlowEvent[]
-  ): Promise<CriticalPathStackRow[]> {
-    const rows: CriticalPathStackRow[] = [];
-    for (const root of roots) {
-      const sql = `
-        SELECT
-          ${sqlLiteral(root.id)} AS root_event_id,
-          ${root.laneId ? sqlLiteral(root.laneId) : 'NULL'} AS root_lane_id,
-          cr.id AS entity_id,
-          cr.ts,
-          cr.dur,
-          cr.utid,
-          cr.stack_depth,
-          cr.name,
-          cr.table_name,
-          thread.name AS thread_name,
-          process.name AS process_name
-        FROM _critical_path_stack(${Math.trunc(root.utid || 0)}, ${Math.trunc(root.ts)}, ${Math.trunc(root.dur)}, 1, 1, 1, 1) AS cr
-        LEFT JOIN thread USING(utid)
-        LEFT JOIN process USING(upid)
-        WHERE cr.name IS NOT NULL
-          AND cr.dur > 0
-          AND cr.utid IS NOT NULL
-          AND cr.utid != ${Math.trunc(root.utid || 0)}
-        ORDER BY cr.ts ASC, cr.stack_depth ASC, cr.utid ASC
-        LIMIT ${MAX_CRITICAL_PATH_ROWS_PER_ROOT}
-      `;
-      const result = await this.traceProcessorService.query(traceId, sql);
-      rows.push(
-        ...rowsToObjects(result).map((row) => ({
-          rootEventId: String(row.root_event_id || ''),
-          rootLaneId: toOptionalString(row.root_lane_id) || undefined,
-          entityId: safeNumber(row.entity_id),
-          ts: toNumber(row.ts, 0),
-          dur: toNumber(row.dur, 0),
-          utid: safeNumber(row.utid),
-          stackDepth: safeNumber(row.stack_depth),
-          name: String(row.name || ''),
-          tableName: toOptionalString(row.table_name) || undefined,
-          threadName: toOptionalString(row.thread_name) || undefined,
-          processName: toOptionalString(row.process_name) || undefined,
-        }))
-      );
-    }
-    return rows;
-  }
-
-  private buildCriticalPathTasks(rows: CriticalPathStackRow[]): ObservedFlowCriticalTask[] {
-    const segments = new Map<string, CriticalTaskAccumulator>();
-    for (const row of rows) {
-      const key = `${row.rootEventId}:${row.ts}:${row.dur}:${row.utid}`;
-      let segment = segments.get(key);
-      if (!segment) {
-        segment = {
-          rootEventId: row.rootEventId,
-          rootLaneId: row.rootLaneId,
-          ts: row.ts,
-          dur: row.dur,
-          utid: row.utid,
-          threadName: row.threadName,
-          processName: row.processName,
-          tableName: row.tableName,
-          stackDepth: row.stackDepth,
-          names: new Set<string>(),
-        };
-        segments.set(key, segment);
-      }
-      segment.threadName ??= row.threadName;
-      segment.processName ??= row.processName;
-      segment.tableName ??= row.tableName;
-      segment.stackDepth = Math.min(segment.stackDepth ?? row.stackDepth ?? 0, row.stackDepth ?? 0);
-      segment.names.add(row.name);
-      const state = stripPrefix(row.name, 'blocking thread_state:');
-      if (state) {
-        segment.state = state;
-        segment.threadStateId ??= row.entityId;
-      }
-      const processName = stripPrefix(row.name, 'blocking process_name:');
-      if (processName) segment.processName = processName;
-      const threadName = stripPrefix(row.name, 'blocking thread_name:');
-      if (threadName) segment.threadName = threadName;
-    }
-
-    return Array.from(segments.values())
-      .map((segment, index) => {
-        const names = Array.from(segment.names);
-        const sliceName = names.find((name) => !name.startsWith('blocking ') && !name.startsWith('cpu:'));
-        return {
-          id: `critical-task-path-${segment.rootEventId}-${index + 1}-${segment.ts}`,
-          kind: 'critical_path_segment' as const,
-          rootEventId: segment.rootEventId,
-          rootLaneId: segment.rootLaneId,
-          name: sliceName || segment.state || segment.threadName || 'official critical path segment',
-          ts: segment.ts,
-          dur: segment.dur,
-          durMs: nsToMs(segment.dur),
-          processName: segment.processName,
-          threadName: segment.threadName,
-          utid: segment.utid,
-          threadStateId: segment.threadStateId,
-          state: segment.state,
-          tableName: segment.tableName,
-          stackDepth: segment.stackDepth,
-          evidenceSource: 'official_critical_path_stack',
-          confidence: 0.8,
-        };
-      })
-      .filter((task) => task.dur > 0)
+  private buildCriticalPathTasks(
+    root: ObservedFlowEvent,
+    segments: CriticalPathSegment[]
+  ): ObservedFlowCriticalTask[] {
+    return segments
+      .filter((segment) => segment.dur > 0)
+      .map((segment, index) => ({
+        id: `critical-task-path-${root.id}-${index + 1}-${segment.startTs}`,
+        kind: 'critical_path_segment' as const,
+        rootEventId: root.id,
+        rootLaneId: root.laneId,
+        name: segment.slices[0] || segment.state || segment.threadName || 'official critical path segment',
+        ts: segment.startTs,
+        dur: segment.dur,
+        durMs: segment.durationMs,
+        processName: segment.processName ?? undefined,
+        threadName: segment.threadName ?? undefined,
+        utid: segment.utid,
+        threadStateId: segment.threadStateId ?? undefined,
+        state: segment.state ?? undefined,
+        evidenceSource: 'official_critical_path_stack',
+        confidence: 0.8,
+      }))
       .sort((a, b) => a.ts - b.ts || b.dur - a.dur);
   }
 

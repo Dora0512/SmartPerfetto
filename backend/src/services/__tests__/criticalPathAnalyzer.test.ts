@@ -822,6 +822,37 @@ describe('resolveDirectWaker', () => {
     }
   });
 
+  it('reads a Running row\'s waker from the wakeup row that ends where it starts', async () => {
+    const tp = service(`
+      (1, 1, 100, 50, 'S', NULL, NULL, NULL),
+      (2, 1, 150, 10, 'R', 2, 9, 1),
+      (3, 1, 160, 40, 'Running', NULL, NULL, 0),
+      (9, 2, 140, 20, 'Running', NULL, NULL, 0)
+    `);
+
+    const result = await resolveDirectWaker(tp, 'trace-1', {threadStateId: 3});
+
+    // irq_context comes from the wakeup row, not from the Running row.
+    expect(result.hop).toMatchObject({utid: 2, threadStateId: 9, threadName: 'binder:system', kind: 'irq', irqContext: true});
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('reports no waker for a Running row after a preemption or with no adjacent wakeup row', async () => {
+    const tp = service(`
+      (1, 1, 100, 50, 'Running', NULL, NULL, 0),
+      (2, 1, 150, 10, 'R+', NULL, NULL, 0),
+      (3, 1, 160, 40, 'Running', NULL, NULL, 0),
+      (4, 1, 300, 10, 'R', 2, NULL, 0),
+      (5, 1, 311, 10, 'Running', NULL, NULL, 0)
+    `);
+
+    for (const threadStateId of [3, 5]) {
+      const result = await resolveDirectWaker(tp, 'trace-1', {threadStateId});
+      expect(result.hop).toBeNull();
+      expect(result.warnings).toEqual([{code: 'no_recorded_waker'}]);
+    }
+  });
+
   it('reports a missing row as unavailable', async () => {
     const result = await resolveDirectWaker(service(`(1, 1, 100, 50, 'S', NULL, NULL, NULL)`), 'trace-1', {threadStateId: 42});
 
