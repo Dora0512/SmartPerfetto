@@ -39,26 +39,95 @@ export function builtInSkillFragment(file: string): string {
   return content;
 }
 
+/** One `${path}` or `${path|default}` placeholder found in SQL. */
+export interface SqlPlaceholder {
+  /** The whole token, e.g. `${max_rows|50}`. */
+  match: string;
+  path: string;
+  /** The text after `|`, when the placeholder declares one. */
+  defaultValue?: string;
+  /** Whether the token sits inside a single-quoted SQL string literal. */
+  insideQuotes: boolean;
+}
+
+/** True when `offset` in `sql` lies inside a single-quoted literal (`''` escapes a quote). */
+function insideSingleQuotes(sql: string, offset: number): boolean {
+  let inSingle = false;
+  for (let i = 0; i < offset; i++) {
+    if (sql[i] !== "'") continue;
+    if (inSingle && sql[i + 1] === "'") {
+      i++;
+      continue;
+    }
+    inSingle = !inSingle;
+  }
+  return inSingle;
+}
+
 /**
- * Compose fragments into one statement: `WITH <leading CTEs>, <fragments...> <select>`.
- * `${name}` placeholders are bound to numbers only; a placeholder left unbound
- * is an error, never silently sent to the processor.
+ * The one placeholder scanner for Skill SQL and fragments: every `${...}`
+ * token is handed to `resolve`, which returns its SQL text or throws. Skill
+ * steps and the critical-path engine bind values differently; they find and
+ * parse placeholders the same way.
+ */
+export function substituteSqlPlaceholders(sql: string, resolve: (placeholder: SqlPlaceholder) => string): string {
+  return sql.replace(/\$\{([^}]+)\}/g, (match: string, body: string, offset: number, full: string) => {
+    const raw = String(body ?? '').trim();
+    const pipe = raw.indexOf('|');
+    return resolve({
+      match,
+      path: pipe >= 0 ? raw.slice(0, pipe).trim() : raw,
+      ...(pipe >= 0 ? {defaultValue: raw.slice(pipe + 1).trim()} : {}),
+      insideQuotes: insideSingleQuotes(full, offset),
+    });
+  });
+}
+
+/**
+ * Put fragment CTE bodies (bare `name AS (...)`, no WITH) in front of `sql`:
+ * after its own WITH (leading comments kept) or as a new WITH clause.
+ * Separators go on their own line: a fragment may end in a `--` comment, which
+ * would otherwise swallow the comma.
+ */
+export function injectFragmentCtes(sql: string, fragmentBodies: string[]): string {
+  if (fragmentBodies.length === 0) return sql;
+  const fragmentBlock = fragmentBodies.join('\n,\n');
+  const trimmed = sql.trimStart();
+  // Leading comment lines (e.g. a root_cause_summary step's header) precede WITH.
+  const noLeadingComments = trimmed.replace(/^(?:(?:--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)\s*)*/, '');
+  const withMatch = noLeadingComments.match(/^WITH(?:\s+RECURSIVE)?\s+/i);
+  if (withMatch) {
+    const commentPrefix = trimmed.slice(0, trimmed.length - noLeadingComments.length);
+    const afterWith = noLeadingComments.slice(withMatch[0].length);
+    return `${commentPrefix}${withMatch[0].trim()}\n${fragmentBlock}\n,\n${afterWith}`;
+  }
+  return `WITH\n${fragmentBlock}\n${trimmed}`;
+}
+
+/**
+ * Compose built-in fragments behind leading CTEs and a final select. Every
+ * placeholder is bound to one of `numbers` (or a numeric `|default`); anything
+ * else, including a process-scope binding, is an error rather than SQL sent to
+ * the processor with a placeholder still in it.
  */
 export function composeFragmentSql(input: {
   leadingCtes: string[];
   fragments: string[];
   select: string;
   numbers?: Record<string, number>;
+  /** Fragment text by file name; the built-in fragments by default. */
+  load?: (file: string) => string;
 }): string {
+  const load = input.load ?? builtInSkillFragment;
   const bound = input.fragments.map((file) =>
-    builtInSkillFragment(file).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (placeholder, name: string) => {
-      const value = input.numbers?.[name];
-      if (value === undefined || !Number.isFinite(value)) {
-        throw new Error(`fragment ${file} needs a numeric ${placeholder}`);
+    substituteSqlPlaceholders(load(file), (placeholder) => {
+      const value = input.numbers?.[placeholder.path];
+      if (value !== undefined && Number.isFinite(value)) return String(Math.trunc(value));
+      if (value === undefined && placeholder.defaultValue !== undefined && /^-?\d+$/.test(placeholder.defaultValue)) {
+        return placeholder.defaultValue;
       }
-      return String(Math.trunc(value));
+      throw new Error(`fragment ${file} needs a numeric ${placeholder.match}`);
     })
   );
-  // Separators go on their own line: a fragment may end in a `--` comment.
-  return `WITH\n${[...input.leadingCtes, ...bound].join('\n,\n')}\n${input.select}`;
+  return injectFragmentCtes(input.select, [...input.leadingCtes, ...bound]);
 }
