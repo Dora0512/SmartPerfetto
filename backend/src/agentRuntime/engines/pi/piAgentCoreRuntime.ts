@@ -9,7 +9,7 @@ import {resolveAgentRuntimeBudgetConfig} from '../../../config';
 import {analysisDeliveryFingerprint, type AnalysisCompletion, type AnalysisCandidateIdentity, type AnalysisDeliveryContext} from '../../../types/analysisDelivery';
 import {attachFinalizationContext} from '../../analysisFinalizationContext';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
-import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
+import {resolveRuntimeTurnPolicy, usesLightweightToolCatalog, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
 import {
   acceptNativeDeclarationCompletion,
@@ -2073,7 +2073,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     const sessionContext = sessionContextManager.getOrCreate(sessionId, traceId);
     const previousTurns = sessionContext.getAllTurns?.() ?? [];
     const quickMode = policy.budgetMode === 'quick';
-    const focusResult = policy.allowAutomaticPrefetch
+    const focusResult = policy.preflight !== 'none'
       ? await detectFocusApps(this.traceProcessorService, traceId, {timeRange: focusAppTimeRangeFromSelection(options.selectionContext)})
       : {apps: [], method: 'none' as const, primaryApp: undefined};
     executionLease.throwIfAborted();
@@ -2114,7 +2114,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     );
 
     let architecture = getLruCacheEntry(this.architectureCache, traceId);
-    if (!architecture && policy.allowAutomaticPrefetch) {
+    if (!architecture && policy.preflight !== 'none') {
       try {
         architecture = await createArchitectureDetector().detect({
           traceId,
@@ -2139,7 +2139,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     }
 
     let traceCompleteness: Awaited<ReturnType<typeof probeTraceCompleteness>> | undefined;
-    if (policy.allowAutomaticPrefetch) {
+    if (policy.preflight !== 'none') {
       try {
         traceCompleteness = await probeTraceCompleteness(
           this.traceProcessorService,
@@ -2245,7 +2245,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       hypotheses,
       sceneType,
       uncertaintyFlags,
-      lightweight: policy.onDemandContext,
+      lightweight: usesLightweightToolCatalog(policy),
       allowNewEvidence: policy.allowNewEvidence,
       strategyRegistry,
       skillNotesBudget,

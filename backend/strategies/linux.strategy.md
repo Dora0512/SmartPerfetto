@@ -40,9 +40,6 @@ keywords:
   - 调度延迟
   - 缓存未命中
   - 分支预测
-compound_patterns:
-  - "(linux|kernel|内核).*(调度|runqueue|PMU|perf|内存)"
-  - "(sched|runqueue|pmu|perf).*(latency|counter|miss|压力)"
 
 phase_hints:
   - id: sched_latency

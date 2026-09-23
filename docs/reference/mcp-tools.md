@@ -51,6 +51,7 @@ Full mode 中，`execute_sql` 和 `invoke_skill` 仍要求先提交分析计划�
 | `invoke_skill` | 执行 YAML Skill 分析管线 | 首选证据收集路径，返回 DataEnvelope / artifacts |
 | `list_skills` | 列出可用 Skills | 可按 category 过滤；Skill 数量以文件树为准 |
 | `detect_architecture` | 检测当前 trace 的渲染架构 | 影响策略和渲染管线分析 |
+| `analyze_wait_chain` | 分析某线程在某区间的运行/可运行/睡眠/不可中断分布、最长等待、唤醒来源和递归唤醒链 | 复用 critical-path 引擎；`wake_source_class` 是候选标签不是根因；缺 `sched_waking` 时返回 `available: false` |
 | `lookup_sql_schema` | 搜索 Perfetto SQL schema / stdlib index | quick 和 full 都可用 |
 | `query_perfetto_source` | 搜索 Perfetto stdlib SQL 源码 | 源码缺失时依赖打包索引兜底 |
 | `list_stdlib_modules` | 列出 Perfetto stdlib modules | 避免把完整模块列表塞进系统 prompt |

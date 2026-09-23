@@ -24,24 +24,25 @@ optional_capabilities:
   - power_rails
   - battery_counters
 keywords:
+  - network
+  - okhttp
+  - cronet
+  - dns
+  - tls
+  - tcp
   - 网络
+  - 请求
   - 流量
   - 数据包
-  - network
   - traffic
   - packet
   - wifi
   - cellular
   - 4g
   - 5g
-  - tcp
   - udp
-  - dns
-  - tls
   - ttfb
   - httpdns
-  - okhttp
-  - cronet
   - httpengine
   - http/3
   - quic
@@ -49,14 +50,6 @@ keywords:
   - networkcallback
   - networkcapabilities
   - local network permission
-compound_patterns:
-  - "网络.*(流量|耗电|唤醒|请求|包)"
-  - "network.*(traffic|power|wakeup|packet)"
-  - "(网络|network).*(慢|延迟|latency|slow|请求慢|request.*slow)"
-  - "(请求|request).*(慢|耗时|延迟|latency|slow)"
-  - "(OkHttp|Cronet|HttpEngine|HTTPDNS|NetworkCallback|NetworkCapabilities).*(DNS|TLS|TTFB|request|请求|cache|缓存|validated|metered|bandwidth|带宽)"
-  - "(DNS|TLS|TTFB|HTTPDNS|ECH|HTTP/3|HTTP3|QUIC).*(网络|请求|耗时|失败|latency|slow|failure)"
-  - "(local network permission|ACCESS_LOCAL_NETWORK|Certificate Transparency|Encrypted Client Hello).*(Android|targetSdk|网络|请求|失败|permission|policy)"
 
 final_report_contract:
   required_sections:
@@ -167,6 +160,11 @@ invoke_skill("network_analysis", { package: "<包名>" })
 ```
 
 重点看接口分布、方向、协议、socket tag、活跃周期。如果用户关心具体时间段，必须传入 `start_ts` / `end_ts`。
+
+如果问题是"请求期间 App 在等什么"，对发起请求的线程跑一次 `analyze_wait_chain({ process_name, thread_name, start_ts, end_ts })`，
+窗口取该请求区间。`wake_source_class = network_receive_candidate` 只是候选标签：它和 `timer_or_device_wake`
+共享同一个 IRQ 上下文唤醒信号，只靠睡眠线程的角色区分，必须再叠加 request-level telemetry 或 rx 包时间相关
+才能升级为网络结论。
 
 输出时把证据类型写清楚：
 1. `trace_direct`: packet/activity/traffic 证据，可用于流量、频繁活跃、功耗相关性。

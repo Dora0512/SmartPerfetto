@@ -133,7 +133,7 @@ import { buildRuntimeCaseBackgroundContext } from '../../../services/caseEvoluti
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
 import {buildComplexityClassifierInput} from '../../../agentv3/queryComplexityContext';
 import {runOpenCodeIntentTransport, type OpenCodeClassifierHost, type OpenCodeIntentTransportInput} from './openCodeIntentTransport';
-import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
+import {resolveRuntimeTurnPolicy, usesLightweightToolCatalog, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {attachFinalizationContext} from '../../analysisFinalizationContext';
 import type {ReadonlyStrategyRegistrySnapshot} from '../../../services/selfEvolution/effectiveRuntimeRegistryContext';
 import {analysisDeliveryFingerprint, type AnalysisCompletion, type AnalysisDeliveryContext} from '../../../types/analysisDelivery';
@@ -3187,7 +3187,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     const sessionContext = sessionContextManager.getOrCreate(sessionId, traceId);
     const previousTurns = sessionContext.getAllTurns?.() || [];
     const quickMode = turnPolicy.budgetMode === 'quick';
-    const focusResult = turnPolicy.allowAutomaticPrefetch
+    const focusResult = turnPolicy.preflight !== 'none'
       ? await detectFocusApps(this.input.traceProcessorService, traceId, {
           timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
         })
@@ -3215,7 +3215,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     );
 
     let architecture = getLruCacheEntry(this.architectureCache, traceId);
-    if (!architecture && turnPolicy.allowAutomaticPrefetch) {
+    if (!architecture && turnPolicy.preflight !== 'none') {
       try {
         architecture = await createArchitectureDetector().detect({
           traceId,
@@ -3236,7 +3236,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     }
 
     let traceCompleteness: Awaited<ReturnType<typeof probeTraceCompleteness>> | undefined;
-    if (turnPolicy.allowAutomaticPrefetch) {
+    if (turnPolicy.preflight !== 'none') {
       try {
         traceCompleteness = await probeTraceCompleteness(
           this.input.traceProcessorService,
@@ -3279,7 +3279,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     const privateAnalysisContext = analysisContextUsesPrivateKnowledge(options);
     const allowMemoryPrefetch = turnPolicy.allowAutomaticPrefetch && !privateAnalysisContext;
     const recentSqlErrors = turnPolicy.allowAutomaticPrefetch ? loadLearnedSqlFixPairs(5, knowledgeScope, options) : [];
-    const skillNotesBudget = createRuntimeSkillNotesBudget(turnPolicy.onDemandContext);
+    const skillNotesBudget = createRuntimeSkillNotesBudget(turnPolicy.budgetMode === 'quick');
     const comparisonContext = turnPolicy.allowAutomaticPrefetch
       ? await buildRuntimeTracePairComparisonContext({
       traceProcessorService: this.input.traceProcessorService,
@@ -3327,7 +3327,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       hypotheses,
       sceneType,
       uncertaintyFlags,
-      lightweight: turnPolicy.onDemandContext,
+      lightweight: usesLightweightToolCatalog(turnPolicy),
       allowNewEvidence: turnPolicy.allowNewEvidence,
       skillNotesBudget,
       outputLanguage,
@@ -3392,6 +3392,10 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
           selectionContext: options.selectionContext,
           quickMemoryContext,
           knowledgeBaseContext,
+          // The probe already ran for every `preflight !== 'none'` turn; the
+          // on-demand variant chooses which memory context the prompt carries,
+          // not whether the run may say what the capture actually contains.
+          traceCompleteness,
           outputLanguage,
           codeAwareMode: options.codeAwareMode,
           codebaseIds: options.codebaseIds,

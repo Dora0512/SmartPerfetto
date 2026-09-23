@@ -4,6 +4,7 @@
 
 import type {CriticalPathAnalysis} from '../criticalPathAnalyzer';
 import {buildDeterministicCriticalPathSummary} from '../criticalPathAiSummary';
+import {projectCriticalPathAnalysis} from '../criticalPathLocalization';
 
 function fixture(): CriticalPathAnalysis {
   return {
@@ -61,5 +62,54 @@ describe('criticalPathAiSummary localization', () => {
       'The wait chain contains an I/O or page-cache candidate',
     );
     expect(analysis).toEqual(before);
+  });
+
+  it('renders the counterfactual as a best case with a bounded saving in both languages', () => {
+    const analysis: CriticalPathAnalysis = {
+      ...fixture(),
+      quantification: {
+        counterfactual: {
+          longestSegmentKey: '10|1000|40001000',
+          longestSegmentDurMs: 40,
+          bestCaseDurationMs: 10,
+          maxSavingMs: 40,
+          upperBoundMs: 10,
+          note: 'best case',
+        },
+        frameImpacts: [],
+        hypotheses: [],
+        warnings: [],
+      },
+    };
+
+    const en = buildDeterministicCriticalPathSummary(analysis, 'en');
+    expect(en).toContain('best-case task duration of 10.00 ms, a saving of at most 40.00 ms');
+    expect(en).not.toMatch(/upper bound/i);
+    const zh = buildDeterministicCriticalPathSummary(analysis, 'zh-CN');
+    expect(zh).toContain('任务时长最好可降至 10.00 ms，即至多节省 40.00 ms');
+    expect(zh).not.toContain('上界');
+  });
+
+  it('explains a window with no waiting time in English, also when handed an already projected analysis', () => {
+    const analysis: CriticalPathAnalysis = {
+      ...fixture(),
+      available: false,
+      unavailableReason: 'no_waiting_time',
+      blockingMs: 0,
+      externalBlockingPercentage: 0,
+      moduleBreakdown: [],
+      anomalies: [{
+        severity: 'info',
+        title: '选区内没有等待时间',
+        detail: '选中区间内该线程没有 Sleeping / Uninterruptible / Runnable 等待状态，没有等待链可分析。',
+        evidence: [],
+      }],
+    };
+
+    const summary = buildDeterministicCriticalPathSummary(analysis, 'en');
+    expect(summary).toContain('Rule findings: The selection contains no waiting time.');
+    expect(summary).not.toMatch(/\p{Script=Han}/u);
+    // The MCP tool projects first; the projection is idempotent for English.
+    expect(buildDeterministicCriticalPathSummary(projectCriticalPathAnalysis(analysis, 'en'), 'en')).toBe(summary);
   });
 });

@@ -38,14 +38,6 @@ keywords:
   - scroll start
   - initial response
   - 触摸响应
-compound_patterns:
-  - "滑动.*响应"
-  - "滑动.*延迟"
-  - "scroll.*response"
-  - "scroll.*latency"
-  - "首帧.*延迟"
-  - "首帧.*响应"
-  - "滑动.*首帧"
 
 final_report_contract:
   required_sections:

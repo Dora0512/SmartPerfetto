@@ -262,6 +262,26 @@ describe('semantic intent context assembly', () => {
       template: loadPromptTemplate('prompt-analysis-turn-intent')!, decisionSchema: {}})).not.toContain(source.content);
   });
 
+  // A description says what a scene means; keywords say what it is called,
+  // which is what a first-turn question actually contains. Eight per scene is
+  // the bound the catalog carries — the rest exist for authoring, not for the
+  // classifier — and the scene dimension is the only one they may anchor.
+  it('anchors the scene catalog with each scene\'s leading keywords only', () => {
+    const prompt = buildAnalysisTurnIntentPrompt({context, strategyRegistry: registry,
+      template: loadPromptTemplate('prompt-analysis-turn-intent')!, decisionSchema: {schemaVersion: 1}});
+    const network = registry.getStrategy('network')!;
+    expect(network.keywords.slice(0, 8)).toEqual(['network', 'okhttp', 'cronet', 'dns', 'tls', 'tcp', '网络', '请求']);
+    expect(prompt).toContain(JSON.stringify(network.keywords.slice(0, 8)));
+
+    const ninth = network.keywords[8];
+    const anchors = new Set(registry.getAllStrategies().flatMap(scene => scene.keywords.slice(0, 8)));
+    expect(anchors.has(ninth)).toBe(false);
+    expect(prompt).not.toContain(JSON.stringify(ninth));
+
+    expect(registry.getStrategy('general')!.keywords).toEqual([]);
+    expect(prompt).toContain('"id":"general","description"');
+  });
+
   it('includes actual selection and facts from a quick turn in the real prompt without raw payloads', () => {
     const selection = {kind: 'area' as const, startNs: 12, endNs: 42};
     const input = buildComplexityClassifierInput({

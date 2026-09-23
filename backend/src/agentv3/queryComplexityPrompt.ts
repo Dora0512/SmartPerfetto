@@ -9,6 +9,8 @@ import type {ReadonlyStrategyRegistrySnapshot} from '../services/selfEvolution/e
 type ComplexityPromptInput = string | ComplexityClassifierInput;
 const MAX_PREVIOUS_QUERY_CHARS = 240;
 const MAX_PREVIOUS_FINDING_CHARS = 200;
+/** Per scene; the classifier prompt carries every registered scene. */
+const CATALOG_KEYWORDS = 8;
 
 function formatPreviousQueries(input: ComplexityPromptInput): string {
   if (typeof input === 'string') return 'none';
@@ -82,6 +84,10 @@ export function buildAnalysisTurnIntentPrompt(input: {
     .map(strategy => ({
       id: strategy.scene,
       ...(strategy.classificationDescription ? {description: strategy.classificationDescription} : {}),
+      // Lexical anchors for the scene dimension only. A description says what a
+      // scene means; these say what it is called, which is what a first-turn
+      // question actually contains. The template governs how they may be used.
+      ...(strategy.keywords.length ? {keywords: strategy.keywords.slice(0, CATALOG_KEYWORDS)} : {}),
       capabilities: strategy.requiredCapabilities,
     }));
   const requestContext = {

@@ -20,5 +20,5 @@ Run `npm run trace:build` to materialize base-plus-overlay traces under `Trace/.
 | [Scheduler and CPU contention](./scheduler-cpu-contention/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 38 target(s) |
 | [Source analysis semantic ground truth](./source-analysis-semantic/) | startup | Android 16 / API 36 (tested API 35-36) | android-startup-light | 0 target(s) |
 | [Startup and process lifecycle](./startup-lifecycle/) | startup | Android 16 / API 36 (tested API 35-36) | android-startup-heavy | 24 target(s) |
-| [System scheduling evidence with explicit handoffs](./system-scheduling-evidence/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 4 target(s) |
+| [System scheduling evidence with explicit handoffs](./system-scheduling-evidence/) | cpu | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 5 target(s) |
 | [Thermal and userspace CPU frequency limit attribution](./thermal-frequency-limit/) | power | Android 16 / API 36 (tested API 35-36) | android-scroll-customer | 7 target(s) |

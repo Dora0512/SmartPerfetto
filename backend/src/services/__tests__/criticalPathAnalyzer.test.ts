@@ -5,7 +5,7 @@
 import {describe, expect, it} from '@jest/globals';
 import {analyzeCriticalPath, CriticalPathInputError} from '../criticalPathAnalyzer';
 import {resolveDirectWaker} from '../criticalPathWakerChain';
-import type {QueryResult} from '../traceProcessorService';
+import type {QueryResult, TraceProcessorService} from '../traceProcessorService';
 import {queryResult, sqliteTraceProcessor, type SqlRule} from '../../../tests/helpers/criticalPathTraceProcessorFixture';
 
 const MS = 1_000_000;
@@ -57,7 +57,7 @@ const stackCalls = (sqls: string[]): string[] => sqls.filter((sql) => /FROM _cri
 
 // Thread 1 (com.demo main) waits; thread 2 (system_server binder:system) serves it.
 const BASE_THREADS = `
-  INSERT INTO process VALUES (7, 'com.demo'), (8, 'system_server');
+  INSERT INTO process(upid, name) VALUES (7, 'com.demo'), (8, 'system_server');
   INSERT INTO thread VALUES
     (1, 1001, 7, 'main'),
     (2, 3001, 8, 'binder:system'),
@@ -288,6 +288,7 @@ describe('critical path analyzer', () => {
       io: 'empty',
       gc: 'empty',
       cpu: 'skipped',
+      wakeSource: 'empty',
     });
   });
 
@@ -323,7 +324,7 @@ describe('critical path analyzer module classification', () => {
 
   it('never derives IO or lock labels from thread names', async () => {
     const {tp} = sqliteTraceProcessor(
-      `INSERT INTO process VALUES (7, 'com.demo');
+      `INSERT INTO process(upid, name) VALUES (7, 'com.demo');
       INSERT INTO thread VALUES (1, 1001, 7, 'main'), (3, 1003, 7, 'RenderThread'),
         (4, 1004, 7, 'pool-1-thread-1'), (6, 1006, 7, 'Thread-3');
       INSERT INTO thread_state(id, utid, ts, dur, state) VALUES (110, 1, ${8000 * MS}, ${40 * MS}, 'S');
@@ -711,5 +712,126 @@ describe('resolveDirectWaker', () => {
     const result = await resolveDirectWaker(service(`(1, 1, 100, 50, 'S', NULL, NULL, NULL)`), 'trace-1', {threadStateId: 42});
 
     expect(result).toEqual({available: false, hop: null, warnings: ['thread_state 42 not found']});
+  });
+});
+
+// Android emits sched_blocked_reason only for D state, so every S-state wait on
+// the critical path arrives with blocked_function NULL. The wake-source layer is
+// the only kernel signal those waits have, and it is decided in TypeScript here
+// and in SQL in fragments/sleep_wake_source.sql.
+describe('wake-source attribution of S-state waits', () => {
+  // Three sleeping segments on one chain: a short hand-off (thread 11), a long
+  // IRQ-woken receive candidate (thread 12), and a longer hand-off (thread 13).
+  // Each wake sits on the R row that starts where the sleep ends.
+  const SHORT_HANDOFF_WAKE = `(311, 11, ${7004 * MS}, ${1 * MS}, 'R', 14, 0)`;
+  const NETWORK_WAKE = `(312, 12, ${7035 * MS}, ${1 * MS}, 'R', 15, 1)`;
+  const LONG_HANDOFF_WAKE = `(313, 13, ${7048 * MS}, ${1 * MS}, 'R', 14, 0)`;
+
+  /** Recursion is off so the flat segment list is exactly the three segments. */
+  function wakeChainService(wakes: string[], networkSlices: string[] = []): TraceProcessorService {
+    return sqliteTraceProcessor(
+      `INSERT INTO process(upid, pid, name) VALUES (7, 1001, 'com.demo');
+      INSERT INTO thread VALUES
+        (1, 1001, 7, 'main'),
+        (11, 5100, 7, 'pool-1-thread-1'),
+        (12, 5200, 7, 'OkHttp Dispatch'),
+        (13, 5300, 7, 'pool-1-thread-2'),
+        (14, 5900, 7, 'pool-2-thread-9'),
+        (15, 300, NULL, 'kworker/u16:3');
+      INSERT INTO thread_state(id, utid, ts, dur, state, waker_utid, irq_context) VALUES
+        (301, 1, ${7000 * MS}, ${50 * MS}, 'S', NULL, NULL),
+        (302, 11, ${7000 * MS}, ${4 * MS}, 'S', NULL, NULL),
+        (303, 12, ${7005 * MS}, ${30 * MS}, 'S', NULL, NULL),
+        (304, 13, ${7036 * MS}, ${12 * MS}, 'S', NULL, NULL)
+        ${wakes.map((wake) => `, ${wake}`).join('')};
+      `,
+      {rules: [
+        {
+          match: /FROM _critical_path_stack/i,
+          responder: () =>
+            stackResult([
+              {ts: 7000 * MS, dur: 4 * MS, utid: 11, state: 'S', thread: 'pool-1-thread-1', process: 'com.demo'},
+              {
+                ts: 7005 * MS, dur: 30 * MS, utid: 12, state: 'S', thread: 'OkHttp Dispatch', process: 'com.demo',
+                slices: networkSlices,
+              },
+              {ts: 7036 * MS, dur: 12 * MS, utid: 13, state: 'S', thread: 'pool-1-thread-2', process: 'com.demo'},
+            ]),
+        },
+      ]}
+    ).tp;
+  }
+
+  it('labels an IRQ-woken S wait on a network thread as a receive candidate', async () => {
+    const analysis = await analyzeCriticalPath(wakeChainService([NETWORK_WAKE]), 'trace-1', {
+      threadStateId: 301,
+      recursionEnabled: false,
+    });
+
+    expect(analysis.semanticSources?.wakeSource).toBe('present');
+    const segment = analysis.wakeupChain.find(entry => entry.threadName === 'OkHttp Dispatch');
+    expect(segment?.wakeSourceClass).toBe('network_receive_candidate');
+    expect(segment?.modules).toContain('网络收包等待候选');
+    // The wake source itself stays IRQ; only the sleeper's role narrows it.
+    expect(segment?.semantics?.wakeSources[0]).toMatchObject({
+      wakeSource: 'irq_or_softirq', threadRole: 'network', irqContext: true, durMs: 30, eventDurMs: 30,
+    });
+    const anomaly = analysis.anomalies.find(entry => entry.title === '等待链涉及网络收包等待候选');
+    expect(anomaly?.severity).toBe('info');
+    expect(anomaly?.evidence).toEqual(['com.demo / OkHttp Dispatch', '30.00 ms']);
+    // A candidate, never a cause: the detail has to say so.
+    expect(anomaly?.detail).toContain('定时器到期');
+  });
+
+  it('labels a same-process non-binder waker as a worker hand-off', async () => {
+    const analysis = await analyzeCriticalPath(wakeChainService([SHORT_HANDOFF_WAKE]), 'trace-1', {
+      threadStateId: 301,
+      recursionEnabled: false,
+    });
+
+    const segment = analysis.wakeupChain.find(entry => entry.threadName === 'pool-1-thread-1');
+    expect(segment?.wakeSourceClass).toBe('worker_handoff');
+    expect(segment?.modules).toContain('worker 交接等待');
+    expect(segment?.semantics?.wakeSources[0]).toMatchObject({
+      wakeSource: 'same_process_thread', wakerRole: 'worker', irqContext: false,
+    });
+    expect(analysis.anomalies.some(entry => entry.title === '等待链涉及网络收包等待候选')).toBe(false);
+  });
+
+  // Reporting the first segment of either class meant a 4 ms hand-off ahead of
+  // a 30 ms receive candidate hid the segment worth opening, and whichever
+  // class lost the race went unmentioned.
+  it('reports both wait classes, each naming its own longest segment', async () => {
+    const analysis = await analyzeCriticalPath(
+      wakeChainService([SHORT_HANDOFF_WAKE, NETWORK_WAKE, LONG_HANDOFF_WAKE]),
+      'trace-1',
+      {threadStateId: 301, recursionEnabled: false},
+    );
+
+    expect(analysis.wakeupChain.map(entry => entry.wakeSourceClass)).toEqual([
+      'worker_handoff', 'network_receive_candidate', 'worker_handoff',
+    ]);
+    const wakeAnomalies = analysis.anomalies.filter(entry =>
+      entry.title === '等待链涉及网络收包等待候选' || entry.title === '等待链涉及 worker 交接等待');
+    expect(wakeAnomalies.map(entry => ({title: entry.title, evidence: entry.evidence}))).toEqual([
+      {title: '等待链涉及网络收包等待候选', evidence: ['com.demo / OkHttp Dispatch', '30.00 ms']},
+      {title: '等待链涉及 worker 交接等待', evidence: ['com.demo / pool-1-thread-2', '12.00 ms']},
+    ]);
+  });
+
+  it('keeps a wake-source candidate behind the labels the segment already has', async () => {
+    // The network segment's only L3 signal is its wake source, a candidate
+    // rather than timed evidence: its keyword label stays first, the candidate
+    // follows, and the breakdown books the segment under the keyword label.
+    const analysis = await analyzeCriticalPath(
+      wakeChainService([NETWORK_WAKE], ['binder transaction']),
+      'trace-1',
+      {threadStateId: 301, recursionEnabled: false},
+    );
+
+    const segment = analysis.wakeupChain.find(entry => entry.threadName === 'OkHttp Dispatch');
+    expect(segment?.modules).toEqual(['Binder / IPC', '网络收包等待候选']);
+    expect(analysis.moduleBreakdown.find((item) => item.module === 'Binder / IPC')?.durationMs).toBe(30);
+    expect(analysis.moduleBreakdown.some((item) => item.module === '网络收包等待候选')).toBe(false);
   });
 });

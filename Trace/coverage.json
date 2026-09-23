@@ -184,6 +184,7 @@
       "present_fence_timing",
       "process_identity_resolver",
       "process_slice_cpu_hotspots",
+      "process_thread_wait_sources_in_range",
       "render_pipeline_latency",
       "render_thread_slices",
       "rendering_pipeline_detection",
@@ -418,6 +419,7 @@
       "present_fence_timing",
       "process_identity_resolver",
       "process_slice_cpu_hotspots",
+      "process_thread_wait_sources_in_range",
       "render_pipeline_latency",
       "render_thread_slices",
       "rendering_pipeline_detection",
@@ -496,7 +498,9 @@
     ],
     "graceful_empty": [],
     "unavailable": [],
-    "negative": [],
+    "negative": [
+      "process_thread_wait_sources_in_range"
+    ],
     "deferred": [
       "android_kernel_wakelock_summary",
       "binder_root_cause",
@@ -679,6 +683,7 @@
       "present_fence_timing",
       "process_identity_resolver",
       "process_slice_cpu_hotspots",
+      "process_thread_wait_sources_in_range",
       "render_pipeline_latency",
       "render_thread_slices",
       "rendering_pipeline_detection",
@@ -1498,11 +1503,14 @@
           },
           {
             "id": "waker_chain",
-            "sha256": "db8ceb0d24b1231f920c5e7a5d045b195c1d58ddd3e63a92160847bc54ed268f",
+            "sha256": "f2a29ec1415f0c09cf3e164b1de5ebe0c393ff7c6e40ef88d9e5df31b0b884ac",
             "required_columns": [
               "ts",
               "waker_thread_name",
               "waker_process_name",
+              "waker_role",
+              "wake_source",
+              "wait_class",
               "blocked_function",
               "total_sleep_dur_ms",
               "max_sleep_dur_ms",
@@ -4094,6 +4102,102 @@
         ]
       },
       {
+        "target": "process_thread_wait_sources_in_range",
+        "source_file": "backend/skills/atomic/process_thread_wait_sources_in_range.skill.yaml",
+        "modules": [
+          {
+            "name": "android.network_packets",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/network_packets.sql"
+          }
+        ],
+        "steps": [
+          {
+            "id": "wake_evidence_scope",
+            "sha256": "cfccc1006b00eba2ea2a3a6b4e303d679212b5d68d2e0f09a3bafeaaad362a1e",
+            "required_columns": [
+              "status",
+              "evidence_class",
+              "waker_rows",
+              "irq_wake_rows",
+              "sleep_rows",
+              "supported_claims",
+              "unsupported_claims"
+            ]
+          },
+          {
+            "id": "role_state_summary",
+            "sha256": "9440e2946d13b9c311ca48499ec1dcafa2fa923d59bbc895a807c08de1528dc0",
+            "required_columns": [
+              "thread_role",
+              "thread_count",
+              "running_ms",
+              "runnable_ms",
+              "sleeping_ms",
+              "uninterruptible_ms",
+              "state_rows"
+            ]
+          },
+          {
+            "id": "wait_class_summary",
+            "sha256": "d0c7fb86701f53b79734e3b3e6e792ab65dcf6b142384557ce7585520dda359b",
+            "required_columns": [
+              "thread_role",
+              "wait_class",
+              "wake_source",
+              "wait_count",
+              "thread_count",
+              "total_wait_ms",
+              "max_wait_ms"
+            ]
+          },
+          {
+            "id": "top_waits",
+            "sha256": "eabf9fe28044afee69c06bfa422f93ca3756c20925f1d5e69a4e645bcf8e3c29",
+            "required_columns": [
+              "wait_start_ts",
+              "dur_ns",
+              "wait_ms",
+              "thread_name",
+              "tid",
+              "thread_role",
+              "state",
+              "wait_class",
+              "wake_source",
+              "waker_thread_name",
+              "waker_process_name",
+              "waker_role",
+              "irq_context",
+              "process_name"
+            ]
+          },
+          {
+            "id": "packet_check",
+            "sha256": "a6f661e537f1b6c79fcd8a758785c987de145eeead20c21590b257adbab45c53",
+            "required_columns": [
+              "rx_packet_rows",
+              "status"
+            ]
+          },
+          {
+            "id": "network_packet_correlation",
+            "sha256": "0f8cdb90bf9a54061e8b61b2ac1e8511522edd03a0c8577b767e7f86f5c74efe",
+            "required_columns": [
+              "wait_start_ts",
+              "dur_ns",
+              "wait_ms",
+              "thread_name",
+              "thread_role",
+              "wait_class",
+              "evidence_class",
+              "packet_ts",
+              "packet_gap_ms",
+              "packet_length",
+              "packet_iface"
+            ]
+          }
+        ]
+      },
+      {
         "target": "render_pipeline_latency",
         "source_file": "backend/skills/atomic/render_pipeline_latency.skill.yaml",
         "modules": [
@@ -4717,7 +4821,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "aedaaf73ed30cd39ca24476de3c787c84872bd841a68ebced8499f3b463e6ca9",
+            "sha256": "f1bbaf788239459b91cc6763f6f0fc2c5f0b3e668f941f100e40651b394c0fd2",
             "required_columns": [
               "window_start_ts",
               "window_end_ts",

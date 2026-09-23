@@ -40,9 +40,6 @@ keywords:
   - 崩溃
   - 卡死
   - 杀进程
-compound_patterns:
-  - "(运行时|内存|ANR|OOM|LMK).*(正确性|泄漏|卡死|杀进程)"
-  - "(runtime|memory|anr|oom|lmk).*(correctness|leak|freeze|kill)"
 
 phase_hints:
   - id: anr_chain

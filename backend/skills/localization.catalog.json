@@ -7,11 +7,11 @@
     "authoredNarrativeRemainsVerbatim": true
   },
   "inventory": {
-    "skillCount": 248,
+    "skillCount": 249,
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
-    "stepCount": 1326,
-    "explicitColumnCount": 4723
+    "stepCount": 1334,
+    "explicitColumnCount": 4772
   },
   "skills": {
     "ams_module": {
@@ -5724,6 +5724,24 @@
               "label": {
                 "zh-CN": "唤醒者进程",
                 "en": "Waker Process Name"
+              }
+            },
+            "waker_role": {
+              "label": {
+                "zh-CN": "唤醒者角色",
+                "en": "Waker Role"
+              }
+            },
+            "wake_source": {
+              "label": {
+                "zh-CN": "唤醒来源",
+                "en": "Wake Source"
+              }
+            },
+            "wait_class": {
+              "label": {
+                "zh-CN": "等待类别（候选）",
+                "en": "Wait Class"
               }
             },
             "blocked_function": {
@@ -29033,6 +29051,382 @@
             }
           },
           "synthesizeLabels": {}
+        }
+      }
+    },
+    "process_thread_wait_sources_in_range": {
+      "displayName": {
+        "zh-CN": "线程等待来源归因",
+        "en": "Process Thread Wait Sources In Range"
+      },
+      "description": {
+        "zh-CN": "按唤醒来源归因进程内线程的 S/I 态等待：网络收包候选、worker 交接、binder 回复、系统服务、定时器",
+        "en": "Analyzes Process Thread Wait Sources In Range using trace metrics and supporting evidence."
+      },
+      "type": "composite",
+      "steps": {
+        "__synthesize_summary__": {
+          "title": {
+            "zh-CN": "洞见摘要",
+            "en": "Insight Summary"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "network_packet_correlation": {
+          "title": {
+            "zh-CN": "网络收包与等待唤醒的时间相关",
+            "en": "Network Packet Correlation"
+          },
+          "columns": {
+            "wait_start_ts": {
+              "label": {
+                "zh-CN": "等待开始",
+                "en": "Wait Start Ts"
+              }
+            },
+            "dur_ns": {
+              "label": {
+                "zh-CN": "等待(ns)",
+                "en": "Dur ns"
+              }
+            },
+            "wait_ms": {
+              "label": {
+                "zh-CN": "等待(ms)",
+                "en": "Wait ms"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "等待线程",
+                "en": "Thread Name"
+              }
+            },
+            "thread_role": {
+              "label": {
+                "zh-CN": "线程角色",
+                "en": "Thread Role"
+              }
+            },
+            "wait_class": {
+              "label": {
+                "zh-CN": "等待类别",
+                "en": "Wait Class"
+              }
+            },
+            "evidence_class": {
+              "label": {
+                "zh-CN": "证据类型",
+                "en": "Evidence Class"
+              }
+            },
+            "packet_ts": {
+              "label": {
+                "zh-CN": "rx 包时刻",
+                "en": "Packet Ts"
+              }
+            },
+            "packet_gap_ms": {
+              "label": {
+                "zh-CN": "包到唤醒间隔(ms)",
+                "en": "Packet Gap ms"
+              }
+            },
+            "packet_length": {
+              "label": {
+                "zh-CN": "包字节数",
+                "en": "Packet Length"
+              }
+            },
+            "packet_iface": {
+              "label": {
+                "zh-CN": "接口",
+                "en": "Packet Iface"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "packet_check": {
+          "title": {
+            "zh-CN": "检查网络包数据",
+            "en": "Packet Check"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "role_state_summary": {
+          "title": {
+            "zh-CN": "线程角色状态分布（窗口内）",
+            "en": "Role State Summary"
+          },
+          "columns": {
+            "thread_role": {
+              "label": {
+                "zh-CN": "线程角色",
+                "en": "Thread Role"
+              }
+            },
+            "thread_count": {
+              "label": {
+                "zh-CN": "线程数",
+                "en": "Thread Count"
+              }
+            },
+            "running_ms": {
+              "label": {
+                "zh-CN": "Runningms",
+                "en": "Running(ms)"
+              }
+            },
+            "runnable_ms": {
+              "label": {
+                "zh-CN": "Runnablems",
+                "en": "Runnable(ms)"
+              }
+            },
+            "sleeping_ms": {
+              "label": {
+                "zh-CN": "S/I 等待(ms)",
+                "en": "Sleeping ms"
+              }
+            },
+            "uninterruptible_ms": {
+              "label": {
+                "zh-CN": "D/DK 等待(ms)",
+                "en": "Uninterruptible ms"
+              }
+            },
+            "state_rows": {
+              "label": {
+                "zh-CN": "状态行数",
+                "en": "State Rows"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "root": {
+          "title": {
+            "zh-CN": "线程等待来源归因",
+            "en": "Process Thread Wait Sources In Range"
+          },
+          "columns": {},
+          "synthesizeLabels": {}
+        },
+        "top_waits": {
+          "title": {
+            "zh-CN": "最长 S/I 等待及其唤醒者",
+            "en": "Top Waits"
+          },
+          "columns": {
+            "wait_start_ts": {
+              "label": {
+                "zh-CN": "等待开始",
+                "en": "Wait Start Ts"
+              }
+            },
+            "dur_ns": {
+              "label": {
+                "zh-CN": "等待(ns)",
+                "en": "Dur ns"
+              }
+            },
+            "wait_ms": {
+              "label": {
+                "zh-CN": "等待(ms)",
+                "en": "Wait ms"
+              }
+            },
+            "thread_name": {
+              "label": {
+                "zh-CN": "等待线程",
+                "en": "Thread Name"
+              }
+            },
+            "tid": {
+              "label": {
+                "zh-CN": "TID",
+                "en": "TID"
+              }
+            },
+            "thread_role": {
+              "label": {
+                "zh-CN": "线程角色",
+                "en": "Thread Role"
+              }
+            },
+            "state": {
+              "label": {
+                "zh-CN": "状态",
+                "en": "State"
+              }
+            },
+            "wait_class": {
+              "label": {
+                "zh-CN": "等待类别（候选）",
+                "en": "Wait Class"
+              }
+            },
+            "wake_source": {
+              "label": {
+                "zh-CN": "唤醒来源",
+                "en": "Wake Source"
+              }
+            },
+            "waker_thread_name": {
+              "label": {
+                "zh-CN": "唤醒者线程",
+                "en": "Waker Thread Name"
+              }
+            },
+            "waker_process_name": {
+              "label": {
+                "zh-CN": "唤醒者进程",
+                "en": "Waker Process Name"
+              }
+            },
+            "waker_role": {
+              "label": {
+                "zh-CN": "唤醒者角色",
+                "en": "Waker Role"
+              }
+            },
+            "irq_context": {
+              "label": {
+                "zh-CN": "irq 上下文",
+                "en": "Irq Context"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "wait_class_summary": {
+          "title": {
+            "zh-CN": "S/I 等待按唤醒来源归类（候选）",
+            "en": "Wait Class Summary"
+          },
+          "columns": {
+            "thread_role": {
+              "label": {
+                "zh-CN": "线程角色",
+                "en": "Thread Role"
+              }
+            },
+            "wait_class": {
+              "label": {
+                "zh-CN": "等待类别（候选）",
+                "en": "Wait Class"
+              }
+            },
+            "wake_source": {
+              "label": {
+                "zh-CN": "唤醒来源",
+                "en": "Wake Source"
+              }
+            },
+            "wait_count": {
+              "label": {
+                "zh-CN": "等待次数",
+                "en": "Wait Count"
+              }
+            },
+            "thread_count": {
+              "label": {
+                "zh-CN": "涉及线程数",
+                "en": "Thread Count"
+              }
+            },
+            "total_wait_ms": {
+              "label": {
+                "zh-CN": "窗口内等待(ms)",
+                "en": "Total Wait ms"
+              }
+            },
+            "max_wait_ms": {
+              "label": {
+                "zh-CN": "最长单次等待(ms)",
+                "en": "Max Wait ms"
+              }
+            }
+          },
+          "synthesizeLabels": {
+            "field:wait_class": {
+              "zh-CN": "等待类别",
+              "en": "Wait Class"
+            },
+            "field:total_wait_ms": {
+              "zh-CN": "等待时长",
+              "en": "Total Wait ms"
+            }
+          }
+        },
+        "wake_evidence_scope": {
+          "title": {
+            "zh-CN": "唤醒来源证据范围",
+            "en": "Wake Evidence Scope"
+          },
+          "columns": {
+            "status": {
+              "label": {
+                "zh-CN": "唤醒证据",
+                "en": "Status"
+              }
+            },
+            "evidence_class": {
+              "label": {
+                "zh-CN": "证据类型",
+                "en": "Evidence Class"
+              }
+            },
+            "waker_rows": {
+              "label": {
+                "zh-CN": "带唤醒者的 R 行",
+                "en": "Waker Rows"
+              }
+            },
+            "irq_wake_rows": {
+              "label": {
+                "zh-CN": "irq 上下文唤醒行",
+                "en": "Irq Wake Rows"
+              }
+            },
+            "sleep_rows": {
+              "label": {
+                "zh-CN": "窗口内 S/I 等待行",
+                "en": "Sleep Rows"
+              }
+            },
+            "supported_claims": {
+              "label": {
+                "zh-CN": "可支持结论",
+                "en": "Supported Claims"
+              }
+            },
+            "unsupported_claims": {
+              "label": {
+                "zh-CN": "不可直接证明",
+                "en": "Unsupported Claims"
+              }
+            }
+          },
+          "synthesizeLabels": {
+            "field:status": {
+              "zh-CN": "唤醒证据",
+              "en": "Status"
+            },
+            "field:sleep_rows": {
+              "zh-CN": "S/I 等待行",
+              "en": "Sleep Rows"
+            }
+          }
         }
       }
     },

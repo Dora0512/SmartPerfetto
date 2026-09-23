@@ -26,9 +26,10 @@ export interface SqliteTraceProcessorOptions {
 }
 
 // The stdlib tables and columns the critical-path engine reads: task, range,
-// waker, thread lookup, the L3 loaders and the frame-impact join.
+// waker, thread lookup, the L3 loaders (including the wake-source thread roles,
+// which need `process.pid`) and the frame-impact join.
 const SCHEMA = `
-  CREATE TABLE process(upid INTEGER PRIMARY KEY, name TEXT);
+  CREATE TABLE process(upid INTEGER PRIMARY KEY, name TEXT, pid INTEGER);
   CREATE TABLE thread(utid INTEGER PRIMARY KEY, tid INTEGER, upid INTEGER, name TEXT);
   CREATE TABLE thread_state(
     id INTEGER PRIMARY KEY, utid INTEGER, ts INTEGER, dur INTEGER, state TEXT,

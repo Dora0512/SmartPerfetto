@@ -38,14 +38,6 @@ keywords:
   - 源码
   - source code
   - 这个slice
-compound_patterns:
-  - "这个.*是什么"
-  - ".*怎么.*工作"
-  - ".*是.*什么意思"
-  - "explain.*this"
-  - "what.*does.*this"
-  - ".*管线.*是"
-  - ".*pipeline.*is"
 
 plan_template:
   mandatory_aspects:

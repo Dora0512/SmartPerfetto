@@ -92,7 +92,7 @@ describe('typed turn prompt assembly', () => {
   function fixture(overrides: Partial<AnalysisTurnIntent> = {}): ClaudeAnalysisContext {
     const scene: StrategyDefinition = {
       scene: 'scrolling', classificationDescription: 'Frame delivery during scrolling.',
-      strategyKind: 'normal', priority: 1, effort: 'high', keywords: [], compoundPatterns: [],
+      strategyKind: 'normal', priority: 1, effort: 'high', keywords: [],
       requiredCapabilities: ['frames'], optionalCapabilities: [], phaseHints: [],
       planTemplate: null, verifierMisdiagnosisPatterns: [], detailSections: [],
       sourcePath: '/pinned/scrolling.strategy.md',
@@ -288,7 +288,41 @@ describe('typed turn prompt assembly', () => {
     expect(parts.segments.filter(segment => legacyLabels.includes(segment.label))).toEqual([]);
     expect(segmentData(parts, 'turn_policy')).toMatchObject({deliverable: 'answer', onDemandContext: true});
     expect(segmentData(parts, 'available_agents')).toEqual(['system-expert']);
-    expect(segmentData(parts, 'scene_context')).toBeUndefined();
+  });
+
+  // The scene a question belongs to is a trace fact, not a scene-wide budget:
+  // "why is this page slow" is bounded and still has to be read against it.
+  it('describes the scene for a bounded question that may still read, and not for existing_only', () => {
+    const bounded = buildSystemPromptParts(fixture());
+    expect(segmentData(bounded, 'turn_policy')).toMatchObject({
+      scope: 'bounded_question', evidenceAccess: 'read_new', preflight: 'trace_facts'});
+    expect(segmentData(bounded, 'scene_context')).toEqual({sceneId: 'scrolling',
+      description: 'Frame delivery during scrolling.', requiredCapabilities: ['frames'], optionalCapabilities: []});
+
+    const existingOnly = buildSystemPromptParts(fixture({evidenceAccess: 'existing_only'}));
+    expect(segmentData(existingOnly, 'turn_policy')).toMatchObject({preflight: 'none'});
+    expect(segmentData(existingOnly, 'scene_context')).toBeUndefined();
+  });
+
+  // A conversation turn with no attached trace read no trace facts, whatever
+  // the intent alone would have allowed. Recomputing the policy from the intent
+  // advertised `trace_facts` and a scene description for a run that had no
+  // trace to read either from.
+  it('reports the preflight the run performed, not the one the intent implies', () => {
+    const downgraded = buildSystemPromptParts({...fixture(), preflight: 'none'});
+    expect(segmentData(downgraded, 'turn_policy')).toMatchObject({
+      scope: 'bounded_question', evidenceAccess: 'read_new', preflight: 'none'});
+    expect(segmentData(downgraded, 'scene_context')).toBeUndefined();
+  });
+
+  it('does not let a caller widen the preflight the intent authorized', () => {
+    const widened = buildSystemPromptParts({...fixture(), preflight: 'full'});
+    expect(segmentData(widened, 'turn_policy')).toMatchObject({preflight: 'trace_facts'});
+
+    const existingOnly = buildSystemPromptParts({
+      ...fixture({evidenceAccess: 'existing_only'}), preflight: 'full'});
+    expect(segmentData(existingOnly, 'turn_policy')).toMatchObject({preflight: 'none'});
+    expect(segmentData(existingOnly, 'scene_context')).toBeUndefined();
   });
 
   it('supplies pinned semantic report obligations even through the quick entrypoint', () => {
@@ -310,7 +344,10 @@ describe('typed turn prompt assembly', () => {
     expect(segmentData(parts, 'scene_context')).toEqual({sceneId: 'scrolling',
       description: 'Frame delivery during scrolling.', requiredCapabilities: ['frames'], optionalCapabilities: []});
     expect(parts.segments.some(segment => segment.label === 'scene_strategy_core')).toBe(false);
-    expect(segmentData(buildSystemPromptParts({...context, onDemandContext: true}), 'scene_context')).toBeUndefined();
+    // A caller density hint narrows presentation; it does not remove the scene
+    // the question is about. Only `existing_only` does.
+    expect(segmentData(buildSystemPromptParts({...context, onDemandContext: true}), 'scene_context'))
+      .toEqual(segmentData(parts, 'scene_context'));
   });
 
   it('does not allow a caller density hint to widen a bounded question', () => {

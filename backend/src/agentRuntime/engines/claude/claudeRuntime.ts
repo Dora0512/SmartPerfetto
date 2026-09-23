@@ -7,7 +7,7 @@ import { EventEmitter } from 'events';
 import {randomUUID} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {createAnalysisTurnIntentResolver, type AnalysisTurnIntent} from '../../analysisTurnIntent';
-import {resolveRuntimeTurnPolicy, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
+import {resolveRuntimeTurnPolicy, usesLightweightToolCatalog, type RuntimeTurnPolicy} from '../../runtimeTurnPolicy';
 import {createRuntimeTurnCloseoutTape, resolveRuntimeTurnBudget} from '../../runtimeTurnCloseout';
 import {
   acceptNativeDeclarationCompletion,
@@ -911,7 +911,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       executionLease.throwIfAborted();
       const resolvedPolicy = resolveRuntimeTurnPolicy(turnIntent, options.analysisMode ?? 'auto');
       const turnPolicy = options.assistantSurface === 'conversation' && options.conversationTraceAttached !== true
-        ? {...resolvedPolicy, allowAutomaticPrefetch: false} : resolvedPolicy;
+        ? {...resolvedPolicy, allowAutomaticPrefetch: false, preflight: 'none' as const} : resolvedPolicy;
       const quickBudgetConfig = createQuickConfig(resolvedConfig, sdkEnv);
       // A failed light-model classifier must not send the main answer back to
       // that same unavailable model. Provider identity remains pinned.
@@ -987,7 +987,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       const emptyFocusResult = {apps: [], primaryApp: undefined, method: 'none' as const,
         timeRange: focusAppTimeRangeFromSelection(options.selectionContext)};
       let focusResult: Awaited<ReturnType<typeof detectFocusApps>> = emptyFocusResult;
-      if (turnPolicy.allowAutomaticPrefetch) {
+      if (turnPolicy.preflight !== 'none') {
         const phase = runtimePerformance.startPhase('focus');
         try {
           focusResult = await detectFocusApps(this.traceProcessorService, traceId, {timeRange: emptyFocusResult.timeRange});
@@ -2477,7 +2477,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
 
     // Phase 0.5: Detect focus apps from trace data (reuse precomputed if available)
     let effectivePackageName = options.packageName;
-    const focusResult = precomputed.focusResult ?? (turnPolicy.allowAutomaticPrefetch
+    const focusResult = precomputed.focusResult ?? (turnPolicy.preflight !== 'none'
       ? await detectFocusApps(this.traceProcessorService, traceId, {
           timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
         })
@@ -2558,7 +2558,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           tracePairContext: options.tracePairContext}));
 
     // Phase 2: Architecture detection (LRU cached per traceId)
-    const architecturePromise = turnPolicy.allowAutomaticPrefetch ? runPreflightPhase('architecture', async () => {
+    const architecturePromise = turnPolicy.preflight !== 'none' ? runPreflightPhase('architecture', async () => {
       let architecture = getLruCacheEntry(this.architectureCache, traceId);
       if (!architecture) {
         try {
@@ -2580,7 +2580,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     }) : Promise.resolve(getLruCacheEntry(this.architectureCache, traceId));
 
     // Phase 2.5: Vendor detection (LRU cached per traceId, reuses SkillAnalysisAdapter.detectVendor)
-    const detectedVendorPromise = turnPolicy.allowAutomaticPrefetch ? schedulePreflight(async () => {
+    const detectedVendorPromise = turnPolicy.preflight !== 'none' ? schedulePreflight(async () => {
       await architecturePromise;
       executionLease?.throwIfAborted();
       let detectedVendor = getLruCacheEntry(this.vendorCache, traceId) ?? null;
@@ -2601,7 +2601,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     }) : Promise.resolve(getLruCacheEntry(this.vendorCache, traceId) ?? null);
 
     // Phase 2.9: Trace data completeness probe (identity-safe shared cache)
-    const traceCompletenessPromise = turnPolicy.allowAutomaticPrefetch ? runPreflightPhase('completeness', async () => {
+    const traceCompletenessPromise = turnPolicy.preflight !== 'none' ? runPreflightPhase('completeness', async () => {
       const architecture = await architecturePromise;
       try {
         return await probeTraceCompleteness(
@@ -2741,7 +2741,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     skillExecutor.setFragmentRegistry(
       sceneCoverageRegistry ? new Map(sceneCoverageRegistry.fragments) : effectiveSkillRegistry.getFragmentCache(),
     );
-    const notesBudget = createRuntimeSkillNotesBudget(turnPolicy.onDemandContext);
+    const notesBudget = createRuntimeSkillNotesBudget(turnPolicy.budgetMode === 'quick');
     const canInvokeTool = () => precomputed.acquisition?.open !== false &&
       precomputed.runActivity?.active !== false && !executionLease?.signal.aborted;
     const sceneRunContext = await activateSceneRuntime(options, {sessionId, traceId, runId: options.runId ?? '',
@@ -2784,7 +2784,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       referenceTraceId,
       comparisonContext,
       skillNotesBudget: notesBudget,
-      lightweight: turnPolicy.onDemandContext,
+      lightweight: usesLightweightToolCatalog(turnPolicy),
       allowNewEvidence: turnPolicy.allowNewEvidence,
       strategyRegistry,
       outputLanguage: runtimeConfig.outputLanguage,
@@ -2828,6 +2828,10 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     const traceInfo = this.traceProcessorService.getTrace?.(traceId);
     const analysisContextForRebuild: ClaudeAnalysisContext = {
       query, turnIntent, strategyRegistry, onDemandContext: turnPolicy.onDemandContext,
+      // The run's own preflight, not one recomputed from the intent: a
+      // conversation turn with no attached trace read no trace facts and the
+      // prompt must not advertise them.
+      preflight: turnPolicy.preflight,
       architecture,
       packageName: effectivePackageName,
       focusApps: focusResult.apps.length > 0 ? focusResult.apps : undefined,

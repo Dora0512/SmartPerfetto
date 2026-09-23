@@ -26,6 +26,7 @@ import {
   toOptionalString,
   type QueryRow,
 } from '../utils/traceProcessorRowUtils';
+import {classifyWaker} from './criticalPathWakerChain';
 import type {TraceProcessorService} from './traceProcessorService';
 
 export interface SegmentInput {
@@ -45,7 +46,7 @@ export type SemanticSourceStatus =
   | 'skipped'
   | 'not_checked';
 
-export type SemanticSourceName = 'binder' | 'monitor' | 'io' | 'gc' | 'cpu';
+export type SemanticSourceName = 'binder' | 'monitor' | 'io' | 'gc' | 'cpu' | 'wakeSource';
 export type SemanticSources = Record<SemanticSourceName, SemanticSourceStatus>;
 
 // Every duration below is attributable time: the event's overlap with the
@@ -93,6 +94,177 @@ export interface IoSignal {
   ioWait: boolean;
 }
 
+// Android's common kernel emits sched_blocked_reason only for
+// TASK_UNINTERRUPTIBLE (android14-6.1 try_to_wake_up, android16-6.12
+// __schedule), so thread_state.blocked_function is NULL on every S row and the
+// I/O signals above can say nothing about an interruptible wait. Socket receive
+// and epoll waits are S. What is left for them is the wake source, which
+// Perfetto records on the first R/R+ row after the sleep.
+//
+// THREAD_ROLE_PATTERNS mirrors backend/skills/fragments/thread_role.sql rule for
+// rule; threadRoleContract.test.ts parses the SQL and fails if the two drift.
+// The `main` role is resolved from tid = pid (pid > 0) and is deliberately not
+// a name pattern, and anything unmatched is `other`.
+export const THREAD_ROLE_PATTERNS: Readonly<Record<string, readonly string[]>> = {
+  render: ['RenderThread*'],
+  gc: ['HeapTaskDaemon*', 'FinalizerDaemon*', 'ReferenceQueueD*'],
+  jit: ['Jit thread pool*', 'Profile Saver*'],
+  binder: ['Binder:*', 'binder:*', 'HwBinder:*', 'hwbinder:*'],
+  network: ['OkHttp*', 'Okio*', 'Cronet*', 'ChromiumNet*', 'NetworkThread*', '*Network*'],
+  image: ['glide*', 'Glide*', 'Coil*', 'Fresco*', '*decode*', '*Decode*'],
+  worker: [
+    'pool-*',
+    'AsyncTask*',
+    'arch_disk_io*',
+    'RxCached*',
+    'DefaultDispatcher*',
+    'Dispatchers.Default*',
+    '*Dispatcher*',
+    '*Executor*',
+    '*Worker*',
+  ],
+  flutter_ui: ['1.ui'],
+  flutter_raster: ['1.raster'],
+  webview: ['CrRendererMain*'],
+  system: ['Signal Catcher*'],
+};
+
+// Evaluation order must match the SQL CASE: `network` before `worker` keeps an
+// OkHttp dispatcher out of the worker bucket, and `image` before `worker` keeps
+// a Glide executor out of it. It is the declaration order of the object above
+// rather than a second list, because a separate order array is a third rule set
+// that can drift from both SQL and the patterns it orders — `threadRoleContract`
+// would still see the SQL and the patterns agree while evaluation used another
+// sequence entirely.
+
+export type WaitClass =
+  | 'network_receive_candidate'
+  | 'timer_or_device_wake'
+  | 'worker_handoff'
+  | 'binder_reply'
+  | 'system_service'
+  | 'unknown';
+
+export type WakeSource =
+  | 'irq_or_softirq'
+  | 'same_process_thread'
+  | 'binder_thread'
+  | 'system_process'
+  | 'swapper'
+  | 'unknown';
+
+export interface WakeSourceSummary {
+  state: string | null;
+  durMs: number;
+  eventDurMs: number;
+  threadName: string | null;
+  threadRole: string;
+  wakerThreadName: string | null;
+  wakerProcessName: string | null;
+  wakerRole: string;
+  irqContext: boolean;
+  wakeSource: WakeSource;
+  waitClass: WaitClass;
+}
+
+// SQLite GLOB is case-sensitive and understands `*` and `?` only; the patterns
+// above use `*`, and `.` is a literal there as it is here.
+function globToRegExp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${escaped}$`);
+}
+
+const THREAD_ROLE_MATCHERS: ReadonlyArray<{role: string; matchers: RegExp[]}> = Object.entries(
+  THREAD_ROLE_PATTERNS
+).map(([role, patterns]) => ({role, matchers: patterns.map(globToRegExp)}));
+
+export function classifyThreadRole(
+  threadName: string | null,
+  tid: number | null,
+  processPid: number | null
+): string {
+  if (processPid !== null && processPid > 0 && tid !== null && tid === processPid) return 'main';
+  if (threadName === null) return 'other';
+  for (const {role, matchers} of THREAD_ROLE_MATCHERS) {
+    if (matchers.some((matcher) => matcher.test(threadName))) return role;
+  }
+  return 'other';
+}
+
+// Conservative list, mirroring the fragment: a platform service, the compositor,
+// the network daemon, or a vendor HAL.
+function isSystemProcessName(name: string | null): boolean {
+  if (!name) return false;
+  return (
+    name === 'system_server' ||
+    name.endsWith('surfaceflinger') ||
+    name.endsWith('netd') ||
+    name.startsWith('vendor.') ||
+    name.startsWith('android.hardware.') ||
+    name.startsWith('/vendor/bin/')
+  );
+}
+
+/**
+ * Who ended the wait. Mirrors the `wake_source` CASE in
+ * fragments/sleep_wake_source.sql; `threadRoleContract.test.ts` holds the two
+ * equal bucket by bucket.
+ *
+ * The idle and null-waker tests are ordered the other way round from SQL, which
+ * is safe only because a NULL `waker_utid` comes from a LEFT JOIN that also
+ * leaves the waker's name and tid NULL: `classifyWaker` then answers `unknown`,
+ * never `swapper`.
+ */
+function classifyWakeSource(input: {
+  irqContext: boolean;
+  wakerUtid: number | null;
+  wakerTid: number | null;
+  wakerThreadName: string | null;
+  wakerRole: string;
+  wakerUpid: number | null;
+  sleeperUpid: number | null;
+  wakerProcessName: string | null;
+}): WakeSource {
+  // classifyWaker already separates an IRQ/softirq wake from an idle-thread
+  // wake; only the remaining `thread` case needs a process-level decision.
+  const wakerKind = classifyWaker(input.wakerThreadName, input.wakerTid, input.irqContext);
+  if (wakerKind === 'irq') return 'irq_or_softirq';
+  if (wakerKind === 'swapper') return 'swapper';
+  if (input.wakerUtid === null) return 'unknown';
+  if (input.wakerRole === 'binder') return 'binder_thread';
+  if (input.wakerUpid !== null && input.wakerUpid === input.sleeperUpid) return 'same_process_thread';
+  if (isSystemProcessName(input.wakerProcessName)) return 'system_process';
+  return 'unknown';
+}
+
+/**
+ * What the wait plausibly was. Mirrors the `wait_class` CASE in the same
+ * fragment, and is a CANDIDATE label: an IRQ-context wake is equally a NET_RX
+ * softirq and a timer expiry, which is why only the sleeping thread's role
+ * narrows it at all.
+ */
+function classifyWaitClass(input: {
+  state: string | null;
+  irqContext: boolean;
+  threadRole: string;
+  wakerUtid: number | null;
+  wakerRole: string;
+  wakerUpid: number | null;
+  sleeperUpid: number | null;
+  wakerProcessName: string | null;
+}): WaitClass {
+  const interruptible = input.state === 'S' || input.state === 'I';
+  if (input.irqContext && input.threadRole === 'network' && interruptible) {
+    return 'network_receive_candidate';
+  }
+  if (input.irqContext) return 'timer_or_device_wake';
+  if (input.wakerUtid === null) return 'unknown';
+  if (input.wakerRole === 'binder') return 'binder_reply';
+  if (input.wakerUpid !== null && input.wakerUpid === input.sleeperUpid) return 'worker_handoff';
+  if (isSystemProcessName(input.wakerProcessName)) return 'system_service';
+  return 'unknown';
+}
+
 export interface GcEventSummary {
   gcType: string | null;
   isMarkCompact: boolean | null;
@@ -127,6 +299,7 @@ export interface SegmentSemantics {
   ioSignals: IoSignal[];
   gcEvents: GcEventSummary[];
   cpuCompetition: CpuCompetitionSummary[];
+  wakeSources: WakeSourceSummary[];
   sources: SemanticSources;
   warnings: string[];
 }
@@ -477,6 +650,128 @@ async function loadIoSignals(
   });
 }
 
+async function loadWakeSources(
+  tp: TraceProcessorService,
+  traceId: string,
+  segments: SegmentInput[]
+): Promise<LoaderResult<WakeSourceSummary>> {
+  // Only sleeping segments have a wake source worth attributing; a Runnable or
+  // Running segment was never waiting on anybody.
+  const isSleeping = (segment: SegmentInput): boolean => /^(?:S|I|D|DK)$/.test(segment.state ?? '');
+  const sleepingCount = segments.filter(isSleeping).length;
+  if (sleepingCount === 0) {
+    return {rows: [], status: 'skipped'};
+  }
+  const cte = buildSegmentValuesCte(segments, isSleeping);
+  // waker_utid and irq_context live on the first R/R+ row AFTER the sleep, so
+  // each wait is re-linked to the row starting at its end timestamp — the same
+  // successor-row join criticalPathWakerChain uses for the direct waker. A
+  // single wake can be split into R then R+, which MAX collapses back to one row.
+  const sql = `
+    WITH segs(idx, utid, tid, upid, ts_start, ts_end) AS (VALUES ${cte}),
+    waits AS (
+      SELECT
+        segs.idx AS segment_idx,
+        ts.id AS state_id,
+        ts.utid AS sleeper_utid,
+        ts.state AS state,
+        MIN(ts.ts + ts.dur, segs.ts_end) - MAX(ts.ts, segs.ts_start) AS dur_ns,
+        ts.dur AS event_dur_ns,
+        MAX(nxt.waker_utid) AS waker_utid,
+        MAX(nxt.irq_context) AS irq_context
+      FROM segs
+      JOIN thread_state AS ts
+        ON ts.utid = segs.utid
+       AND ts.ts < segs.ts_end
+       AND ts.ts + ts.dur > segs.ts_start
+      LEFT JOIN thread_state AS nxt
+        ON nxt.utid = ts.utid
+       AND nxt.ts = ts.ts + ts.dur
+       AND nxt.state IN ('R', 'R+')
+       AND nxt.waker_utid IS NOT NULL
+      WHERE ts.state IN ('S', 'I', 'D', 'DK')
+        AND ts.dur > 0
+      GROUP BY segs.idx, ts.id
+    )
+    SELECT
+      w.segment_idx,
+      w.state,
+      w.dur_ns,
+      w.event_dur_ns,
+      w.irq_context,
+      w.waker_utid,
+      thr.name AS thread_name,
+      thr.tid AS thread_tid,
+      proc.pid AS process_pid,
+      proc.upid AS sleeper_upid,
+      wthr.name AS waker_thread_name,
+      wthr.tid AS waker_tid,
+      wproc.name AS waker_process_name,
+      wproc.pid AS waker_process_pid,
+      wproc.upid AS waker_upid
+    FROM waits AS w
+    LEFT JOIN thread AS thr ON thr.utid = w.sleeper_utid
+    LEFT JOIN process AS proc ON proc.upid = thr.upid
+    LEFT JOIN thread AS wthr ON wthr.utid = w.waker_utid
+    LEFT JOIN process AS wproc ON wproc.upid = wthr.upid
+    ORDER BY w.dur_ns DESC
+    LIMIT ${Math.min(sleepingCount * 6, 120)};
+  `;
+  return tryQuery(tp, traceId, sql, (row) => {
+    const irqContext = toBool(row.irq_context) === true;
+    const threadName = toOptionalString(row.thread_name);
+    const threadRole = classifyThreadRole(
+      threadName,
+      toNullableNumber(row.thread_tid),
+      toNullableNumber(row.process_pid)
+    );
+    const wakerUtid = toNullableNumber(row.waker_utid);
+    const wakerThreadName = toOptionalString(row.waker_thread_name);
+    const wakerTid = toNullableNumber(row.waker_tid);
+    const wakerProcessName = toOptionalString(row.waker_process_name);
+    const wakerRole = wakerUtid === null
+      ? 'unknown'
+      : classifyThreadRole(wakerThreadName, wakerTid, toNullableNumber(row.waker_process_pid));
+    const wakerUpid = toNullableNumber(row.waker_upid);
+    const sleeperUpid = toNullableNumber(row.sleeper_upid);
+    const state = toOptionalString(row.state);
+    return {
+      segmentIdx: toNumber(row.segment_idx),
+      summary: {
+        state,
+        durMs: clippedMs(row.dur_ns),
+        eventDurMs: nsToMs(toNumber(row.event_dur_ns)),
+        threadName,
+        threadRole,
+        wakerThreadName,
+        wakerProcessName,
+        wakerRole,
+        irqContext,
+        wakeSource: classifyWakeSource({
+          irqContext,
+          wakerUtid,
+          wakerTid,
+          wakerThreadName,
+          wakerRole,
+          wakerUpid,
+          sleeperUpid,
+          wakerProcessName,
+        }),
+        waitClass: classifyWaitClass({
+          state,
+          irqContext,
+          threadRole,
+          wakerUtid,
+          wakerRole,
+          wakerUpid,
+          sleeperUpid,
+          wakerProcessName,
+        }),
+      },
+    };
+  });
+}
+
 async function loadGcEvents(
   tp: TraceProcessorService,
   traceId: string,
@@ -605,6 +900,10 @@ async function loadCpuCompetition(
   }));
 }
 
+function skippedSources(): SemanticSources {
+  return {binder: 'skipped', monitor: 'skipped', io: 'skipped', gc: 'skipped', cpu: 'skipped', wakeSource: 'skipped'};
+}
+
 function emptySemantics(segment: SegmentInput, key: string): SegmentSemantics {
   return {
     segmentKey: key,
@@ -617,7 +916,8 @@ function emptySemantics(segment: SegmentInput, key: string): SegmentSemantics {
     ioSignals: [],
     gcEvents: [],
     cpuCompetition: [],
-    sources: {binder: 'skipped', monitor: 'skipped', io: 'skipped', gc: 'skipped', cpu: 'skipped'},
+    wakeSources: [],
+    sources: skippedSources(),
     warnings: [],
   };
 }
@@ -642,18 +942,19 @@ export async function enrichSegmentsWithSemantics(
   if (unique.length === 0) {
     return {
       segments: result,
-      sources: {binder: 'skipped', monitor: 'skipped', io: 'skipped', gc: 'skipped', cpu: 'skipped'},
+      sources: skippedSources(),
       warnings: [],
     };
   }
 
-  // Run all five queries concurrently — each is independent.
-  const [binder, monitor, io, gc, cpu] = await Promise.all([
+  // Run all six queries concurrently — each is independent.
+  const [binder, monitor, io, gc, cpu, wakeSource] = await Promise.all([
     loadBinderTxns(tp, traceId, unique),
     loadMonitorContention(tp, traceId, unique),
     loadIoSignals(tp, traceId, unique),
     loadGcEvents(tp, traceId, unique, options.threadLookupFailed === true),
     loadCpuCompetition(tp, traceId, unique),
+    loadWakeSources(tp, traceId, unique),
   ]);
 
   const sources: SemanticSources = {
@@ -662,10 +963,11 @@ export async function enrichSegmentsWithSemantics(
     io: io.status,
     gc: gc.status,
     cpu: cpu.status,
+    wakeSource: wakeSource.status,
   };
   const warnings = Array.from(
     new Set(
-      [binder.warning, monitor.warning, io.warning, gc.warning, cpu.warning].filter(
+      [binder.warning, monitor.warning, io.warning, gc.warning, cpu.warning, wakeSource.warning].filter(
         (warning): warning is string => Boolean(warning)
       )
     )
@@ -691,6 +993,7 @@ export async function enrichSegmentsWithSemantics(
   distribute(io.rows, (sem) => sem.ioSignals);
   distribute(gc.rows, (sem) => sem.gcEvents);
   distribute(cpu.rows, (sem) => sem.cpuCompetition);
+  distribute(wakeSource.rows, (sem) => sem.wakeSources);
 
   return {segments: result, sources, warnings};
 }
@@ -700,4 +1003,7 @@ export const __INTERNAL__ = {
   classifyError,
   segmentKeyOf,
   buildSegmentValuesCte,
+  classifyWaitClass,
+  classifyWakeSource,
+  isSystemProcessName,
 };

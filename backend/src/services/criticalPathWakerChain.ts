@@ -43,15 +43,20 @@ export interface WakerChainResult {
   warnings: string[];
 }
 
-function classifyWaker(
+export function classifyWaker(
   threadName: string | null,
   tid: number | null,
   irqContext: boolean
 ): WakerKind {
   if (irqContext) return 'irq';
-  // swapper threads: tid=0 or name like 'swapper/N'
+  // Kernel idle threads: tid=0, or a `swapper`-prefixed comm. The prefix is the
+  // rule, not `swapper/N` exactly, because fragments/sleep_wake_source.sql tests
+  // `thread_name GLOB 'swapper*'` — an anchored `swapper(/\d+)?` here would put
+  // any other spelling into `same_process_thread` in TypeScript while SQL called
+  // the same wake `swapper`, and the two surfaces would answer differently about
+  // one trace.
   if (tid === 0) return 'swapper';
-  if (threadName && /^swapper(\/\d+)?$/.test(threadName)) return 'swapper';
+  if (threadName && /^swapper/.test(threadName)) return 'swapper';
   if (threadName) return 'thread';
   return 'unknown';
 }

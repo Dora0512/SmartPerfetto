@@ -186,7 +186,7 @@ describe('criticalPathSemantics overlap and attribution', () => {
     // Thread 7 was Running on CPU 1 until the segment began and ran on CPU 3
     // from the instant it ended. Only CPU 3 is the CPU it waited for.
     const {tp} = sqliteTraceProcessor(`
-      INSERT INTO process VALUES (4, 'other.process');
+      INSERT INTO process(upid, name) VALUES (4, 'other.process');
       INSERT INTO thread VALUES (9, 1009, 4, 'worker'), (10, 1010, 4, 'early'),
         (11, 1011, 4, 'late'), (12, 1012, 4, 'cpu1');
       INSERT INTO thread_state(utid, ts, dur, state, cpu) VALUES
@@ -247,6 +247,80 @@ describe('criticalPathSemantics overlap and attribution', () => {
   });
 });
 
+describe('criticalPathSemantics wake sources', () => {
+  // Thread 7 (com.demo, pid 1007) sleeps; thread 9 in the same process wakes it.
+  const THREADS = `
+    INSERT INTO process(upid, pid, name) VALUES (2, 1007, 'com.demo');
+    INSERT INTO thread VALUES (7, 1017, 2, 'pool-1-thread-1'), (8, 1018, 2, 'worker'), (9, 1019, 2, 'pool-2-thread-9');
+  `;
+
+  it('attaches only sleeps overlapping the half-open window, clips them and reads the waker off the successor row', async () => {
+    // S [4,10) ends where the straddled segment starts; S [12,26) straddles its
+    // end and is woken by thread 9 on the R row at 26; S [40,45) starts where
+    // segment B ends.
+    const {tp} = sqliteTraceProcessor(`${THREADS}
+      INSERT INTO thread_state(utid, ts, dur, state, waker_utid, irq_context) VALUES
+        (7, ${4 * MS}, ${6 * MS}, 'S', NULL, NULL),
+        (7, ${10 * MS}, ${2 * MS}, 'R', 9, 0),
+        (7, ${12 * MS}, ${14 * MS}, 'S', NULL, NULL),
+        (7, ${26 * MS}, ${4 * MS}, 'R', 9, 0),
+        (7, ${40 * MS}, ${5 * MS}, 'S', NULL, NULL),
+        (7, ${45 * MS}, ${1 * MS}, 'R', 9, 0);
+    `);
+    const straddling: SegmentInput = {utid: 7, tid: 1017, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'S'};
+    const b: SegmentInput = {...straddling, startTs: 30 * MS, endTs: 40 * MS};
+
+    const {segments, sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', [straddling, b]);
+
+    expect(sources.wakeSource).toBe('present');
+    expect(segments.get(segmentKeyOf(straddling))?.wakeSources).toEqual([
+      {
+        state: 'S',
+        durMs: 8,
+        eventDurMs: 14,
+        threadName: 'pool-1-thread-1',
+        threadRole: 'worker',
+        wakerThreadName: 'pool-2-thread-9',
+        wakerProcessName: 'com.demo',
+        wakerRole: 'worker',
+        irqContext: false,
+        wakeSource: 'same_process_thread',
+        waitClass: 'worker_handoff',
+      },
+    ]);
+    expect(segments.get(segmentKeyOf(b))?.wakeSources).toEqual([]);
+  });
+
+  it('numbers only sleeping segments against the full list, so a runnable segment ahead of them gets none', async () => {
+    const {tp, sqls} = sqliteTraceProcessor(`${THREADS}
+      INSERT INTO thread_state(utid, ts, dur, state, waker_utid, irq_context) VALUES
+        (8, ${10 * MS}, ${10 * MS}, 'S', NULL, NULL),
+        (8, ${20 * MS}, ${1 * MS}, 'R', 9, 1);
+    `);
+    const runnable: SegmentInput = {utid: 7, tid: 1017, upid: 2, startTs: 0, endTs: 10 * MS, state: 'R'};
+    const sleeping: SegmentInput = {utid: 8, tid: 1018, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'S'};
+
+    const {segments} = await enrichSegmentsWithSemantics(tp, 'trace-1', [runnable, sleeping]);
+
+    const wakeSql = sqls.find((sql) => /FROM waits AS w/.test(sql));
+    expect(wakeSql && publishedSegments(wakeSql)).toEqual([{idx: 1, utid: 8, tsStart: 10 * MS, tsEnd: 20 * MS}]);
+    expect(segments.get(segmentKeyOf(runnable))?.wakeSources).toEqual([]);
+    expect(segments.get(segmentKeyOf(sleeping))?.wakeSources).toEqual([
+      expect.objectContaining({irqContext: true, wakeSource: 'irq_or_softirq', waitClass: 'timer_or_device_wake'}),
+    ]);
+  });
+
+  it('skips the wake query when no segment is sleeping', async () => {
+    const {tp, sqls} = sqliteTraceProcessor(THREADS);
+    const runnable: SegmentInput = {utid: 7, tid: 1017, upid: 2, startTs: 0, endTs: 10 * MS, state: 'R'};
+
+    const {sources} = await enrichSegmentsWithSemantics(tp, 'trace-1', [runnable]);
+
+    expect(sources.wakeSource).toBe('skipped');
+    expect(sqls.some((sql) => /FROM waits AS w/.test(sql))).toBe(false);
+  });
+});
+
 describe('criticalPathSemantics source status and warnings', () => {
   const segment: SegmentInput = {utid: 7, tid: 1007, upid: 2, startTs: 10 * MS, endTs: 20 * MS, state: 'S'};
 
@@ -281,6 +355,7 @@ describe('criticalPathSemantics source status and warnings', () => {
       io: 'empty',
       gc: 'empty',
       cpu: 'skipped',
+      wakeSource: 'empty',
     });
     expect(enrichment.warnings).toEqual([
       'INCLUDE android.binder failed',
@@ -341,7 +416,7 @@ describe('criticalPathSemantics source status and warnings', () => {
 
     expect(sqls).toEqual([]);
     expect(enrichment.segments.size).toBe(0);
-    expect(Object.values(enrichment.sources)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
+    expect(Object.values(enrichment.sources)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
     expect(enrichment.warnings).toEqual([]);
   });
 });

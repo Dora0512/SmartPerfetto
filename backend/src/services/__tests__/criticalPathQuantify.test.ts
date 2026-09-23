@@ -31,7 +31,8 @@ function semantics(
     ioSignals: [],
     gcEvents: [],
     cpuCompetition: [],
-    sources: {binder: 'present', monitor: 'present', io: 'present', gc: 'present', cpu: 'present'},
+    wakeSources: [],
+    sources: {binder: 'present', monitor: 'present', io: 'present', gc: 'present', cpu: 'present', wakeSource: 'present'},
     warnings: [],
     ...signals,
   };

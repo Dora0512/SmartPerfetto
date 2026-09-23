@@ -110,7 +110,7 @@ function fixture(options: {body?: string; capture?: boolean; claim?: boolean; in
         contentLocations: [], claimIds: []}] : []})};
   }));
   const reportStrategy: StrategyDefinition = {scene: 'general', classificationDescription: 'General analysis.',
-    strategyKind: 'normal', priority: 1, effort: 'low', keywords: [], compoundPatterns: [], requiredCapabilities: [],
+    strategyKind: 'normal', priority: 1, effort: 'low', keywords: [], requiredCapabilities: [],
     optionalCapabilities: [], phaseHints: [], planTemplate: null, verifierMisdiagnosisPatterns: [], content: 'General analysis.',
     detailSections: [], sourcePath: '/fixture/general.strategy.md', finalReportContract: {requiredSections: [{
       id: 'detail', label: 'Detail', required: true, triggerPatterns: [], patterns: [], patternGroups: [], recoveryText: {zh: [], en: []},
@@ -227,7 +227,7 @@ describe('issued investigation ledger through finalization', () => {
       store.registerStandaloneEvidenceCapture(witness, {meta: envelope.meta, display: envelope.display, originRunId});
     }
     const strategy: StrategyDefinition = {scene: 'general', classificationDescription: 'General.', strategyKind: 'normal',
-      priority: 1, effort: 'low', keywords: [], compoundPatterns: [], requiredCapabilities: [], optionalCapabilities: [],
+      priority: 1, effort: 'low', keywords: [], requiredCapabilities: [], optionalCapabilities: [],
       phaseHints: [], planTemplate: null, verifierMisdiagnosisPatterns: [], content: 'General.', detailSections: [], sourcePath: '/fixture/general.strategy.md',
       investigationContract: {schemaVersion: 1, profileRefs: [], requirements: [{id: 'system-frequency', domain: 'cpu_frequency',
         description: 'Describe the selected CPU window.', required: true,

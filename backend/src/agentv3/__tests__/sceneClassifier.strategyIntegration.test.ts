@@ -40,8 +40,12 @@ describe('real strategy registry and native intent declaration contract', () => 
       .sort((left, right) => left.scene.localeCompare(right.scene))
       .map(definition => ({id: definition.scene,
         ...(definition.classificationDescription ? {description: definition.classificationDescription} : {}),
+        // Lexical anchors, bounded per scene: what a scene is called, next to
+        // what it means.
+        ...(definition.keywords.length ? {keywords: definition.keywords.slice(0, 8)} : {}),
         capabilities: definition.requiredCapabilities}));
     expect(catalog.length).toBeGreaterThan(0);
+    expect(catalog.some(entry => 'keywords' in entry)).toBe(true);
     expect(prompt).toContain(JSON.stringify(catalog));
     expect(prompt).toContain(JSON.stringify(context.query));
     expect(prompt).not.toMatch(/\{\{\w+\}\}/);

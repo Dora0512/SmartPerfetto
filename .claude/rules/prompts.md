@@ -92,8 +92,12 @@ entering the native prompt path. Missing or evicted data remains unavailable.
 
 - Prompt/template variables use `{{variable}}`.
 - Skill YAML parameter substitution uses `${param|default}`.
-- Strategy frontmatter may include `keywords`, `compound_patterns`, `priority`,
-  `investigation_contract`, and final-report contract fields.
+- Strategy frontmatter may include `keywords`, `priority`,
+  `investigation_contract`, and final-report contract fields. `keywords` are
+  lexical anchors: the first eight of each scene reach the classifier's scene
+  catalog, so put the words a user actually types first. `compound_patterns`
+  is not a frontmatter field; scene routing is semantic and no runtime path
+  evaluates regular expressions against the query.
 - `phase_hints` and `plan_template` are historical. They are parsed, pinned and
   fingerprinted, but no runtime path injects them into an analysis; their
   `critical_tools` admit and suggest nothing. Do not add an obligation there

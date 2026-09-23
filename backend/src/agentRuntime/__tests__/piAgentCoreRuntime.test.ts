@@ -2786,7 +2786,6 @@ describe('experimental Pi agent-core runtime contract', () => {
         {traceSide: 'current', traceName: 'Current Trace'}, {traceSide: 'reference', traceName: 'Reference Trace'},
       ], workspaceOpen: true,
     });
-    expect(traceProcessorService.query).not.toHaveBeenCalled();
   });
 
   it('inherits logical history without replaying Pi opaque transcripts on follow-up', async () => {
@@ -3128,7 +3127,10 @@ describe('experimental Pi agent-core runtime contract', () => {
     passVerification();
     const trace = createFakeTraceProcessorService();
     const events: string[] = [];
-    trace.query.mockImplementation(async () => { events.push('query'); return {columns: [], rows: []}; });
+    trace.query.mockImplementation(async () => {
+      events.push(piClassifierCalls.length === 0 ? 'before_classification' : 'preflight');
+      return {columns: [], rows: []};
+    });
     FakePiAgent.promptMessages = [{role: 'assistant', content: [{type: 'text', text: 'A concise observation'}]}];
     const snapshot = createEffectiveRuntimeRegistrySnapshot();
     const buildPrompt = jest.spyOn(systemPromptModule, 'buildSystemPrompt');
@@ -3139,7 +3141,10 @@ describe('experimental Pi agent-core runtime contract', () => {
       expect(piClassifierCalls).toHaveLength(1);
       expect(piClassifierCalls[0].context.tools).toEqual([]);
       expect(piClassifierCalls[0].options).toMatchObject({maxRetries: 0, maxTokens: 1024});
-      expect(events).toEqual([]);
+      // Nothing is queried before the intent is known; the trace facts a
+      // bounded question needs are gathered after it.
+      expect(events).not.toContain('before_classification');
+      expect(events).toContain('preflight');
       expect(FakePiAgent.instances[0].promptCount).toBe(2);
       expect(buildPrompt).toHaveBeenCalledWith(expect.objectContaining({
         onDemandContext: true, strategyRegistry: snapshot.strategyRegistry,
@@ -3154,7 +3159,7 @@ describe('experimental Pi agent-core runtime contract', () => {
     } finally { buildPrompt.mockRestore(); }
   });
 
-  it('uses the same pinned healthy main model after an unavailable classifier without automatic trace prefetch', async () => {
+  it('uses the same pinned healthy main model after an unavailable classifier without memory prefetch', async () => {
     passVerification();
     piClassifierResponses.push(new Error('model_not_found'));
     const trace = createFakeTraceProcessorService();
@@ -3163,7 +3168,7 @@ describe('experimental Pi agent-core runtime contract', () => {
     expect(piClassifierCalls).toHaveLength(1);
     expect(FakePiAgent.instances[0].state.model).toBe(piClassifierCalls[0].model);
     expect((FakePiAgent.instances[0].state.model as any).id).toBe('pi-test-model');
-    expect(trace.query).not.toHaveBeenCalled();
+    expect(trace.query).toHaveBeenCalled();
     expect(result.completion?.status).toBe('completed');
   });
 
@@ -3177,7 +3182,6 @@ describe('experimental Pi agent-core runtime contract', () => {
         analysisMode: 'fast', referenceTraceId: 'trace-reference',
       });
       expect(result.quickRun?.requestedMode).toBe('fast');
-      expect(trace.query).not.toHaveBeenCalled();
       expect(buildPrompt).toHaveBeenCalledWith(expect.objectContaining({comparison: expect.objectContaining({
         referenceTraceId: 'trace-reference', capabilityProbeStatus: 'not_checked',
       })}));
@@ -3887,7 +3891,6 @@ describe('experimental Pi agent-core runtime contract', () => {
     expect(result.turnIntent).toMatchObject({scope: 'bounded_question', deliverable: 'answer'});
     expect(result.quickRun).toBeUndefined();
     expect(FakePiAgent.instances[0].promptCount).toBe(2);
-    expect(trace.query).not.toHaveBeenCalled();
     expect(result.completion?.status).toBe('completed');
   });
 

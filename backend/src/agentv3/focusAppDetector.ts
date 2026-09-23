@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
+import { getLruCacheEntry, setLruCacheEntry } from '../agentRuntime/runtimeCache';
 import type { TraceProcessorService } from '../services/traceProcessorService';
 
 export interface DetectedFocusApp {
@@ -128,12 +129,50 @@ function withScope(apps: DetectedFocusApp[], timeRange: FocusAppTimeRange | unde
   }));
 }
 
+/**
+ * Focus detection walks up to three query tiers and has no cheaper form, so a
+ * bounded turn that asks two questions about one trace would run the whole
+ * ladder twice. Architecture and vendor already cache per trace; this closes
+ * the remaining preflight that did not.
+ *
+ * The key is the processor service (a different service is a different trace
+ * world, and it keeps one test's mock out of the next one), the trace, and the
+ * exact scope — a different selected range is a different answer, never a hit.
+ * A `none` result is never cached: it cannot tell "this trace has no focus
+ * app" from a transient query failure, and caching it would pin that failure
+ * to the trace for the life of the process.
+ */
+const FOCUS_CACHE_ENTRIES = 32;
+const focusResultCache = new WeakMap<TraceProcessorService, Map<string, FocusAppDetectionResult>>();
+
+function focusCacheKey(traceId: string, timeRange: FocusAppTimeRange | undefined): string {
+  return timeRange ? `${traceId}|${timeRange.startNs}-${timeRange.endNs}` : `${traceId}|full`;
+}
+
 export async function detectFocusApps(
   traceProcessorService: TraceProcessorService,
   traceId: string,
   options: FocusAppDetectionOptions = {},
 ): Promise<FocusAppDetectionResult> {
   const timeRange = normalizeTimeRange(options.timeRange);
+  const cacheKey = focusCacheKey(traceId, timeRange);
+  const cache = focusResultCache.get(traceProcessorService);
+  const cached = cache && getLruCacheEntry(cache, cacheKey);
+  if (cached) return cached;
+  const result = await detectFocusAppsUncached(traceProcessorService, traceId, timeRange);
+  if (result.method !== 'none') {
+    const store = cache ?? new Map<string, FocusAppDetectionResult>();
+    if (!cache) focusResultCache.set(traceProcessorService, store);
+    setLruCacheEntry(store, cacheKey, result, FOCUS_CACHE_ENTRIES);
+  }
+  return result;
+}
+
+async function detectFocusAppsUncached(
+  traceProcessorService: TraceProcessorService,
+  traceId: string,
+  timeRange: FocusAppTimeRange | undefined,
+): Promise<FocusAppDetectionResult> {
   const batteryDuration = scopedDurationExpr(timeRange, 'ts', 'safe_dur');
   const batteryWhere = scopedOverlapWhere(timeRange, 'ts', 'safe_dur', 'safe_dur > 50000000');
   const oomDuration = scopedDurationExpr(timeRange, 'oa.ts', 'oa.dur');

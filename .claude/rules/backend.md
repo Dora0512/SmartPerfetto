@@ -409,8 +409,15 @@ Important whitelisted examples:
 - Scope, deliverable and evidence access are separate intent dimensions.
   `existing_only` strictly prohibits new evidence acquisition while allowing
   retained artifact reads. `read_new` still requires the request's existing
-  authorization. Bounded or unavailable intent does not trigger automatic
-  prefetch. Planning is on demand; an explicitly submitted plan remains binding.
+  authorization. `RuntimeTurnPolicy.preflight` has three levels, and budget is
+  not one of its inputs: `none` under `existing_only` gathers nothing; `full`,
+  for a resolved `scene_wide` read, also prefetches memory-type context
+  (knowledge base, patterns, cases, SQL fix pairs); `trace_facts`, for a bounded
+  question or an unavailable classification, still detects the focus app,
+  architecture, vendor and trace completeness, because a narrow question is
+  still asked about a trace the model has never seen. `allowAutomaticPrefetch`
+  now means the memory tier only. Planning is on demand; an explicitly submitted
+  plan remains binding.
 
 Keep scoped selection questions lightweight. A selected slice/range is a scope
 signal, not an automatic quick/full decision.

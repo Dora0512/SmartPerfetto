@@ -14,6 +14,12 @@ function mockTraceProcessor(rowsByCall: unknown[][][]): TraceProcessorService {
   return { query } as unknown as TraceProcessorService;
 }
 
+/** Always answers tier 1, so every call that reaches the trace is visible. */
+function mockRepeatingTraceProcessor(packageName: string): TraceProcessorService {
+  const query = jest.fn(async () => ({ columns: [], rows: [[packageName, 4_000_000_000, 1]] }));
+  return { query } as unknown as TraceProcessorService;
+}
+
 describe('detectFocusApps', () => {
   it('requires complete selection bounds before deriving a focus app time range', () => {
     expect(focusAppTimeRangeFromSelection({
@@ -120,5 +126,42 @@ describe('detectFocusApps', () => {
     expect(frameSql.indexOf("NULLIF(m.package_name, '')")).toBeLessThan(frameSql.indexOf("NULLIF(m.process_name, '')"));
     expect(frameSql.indexOf("THEN SUBSTR(layer_name, 6")).toBeLessThan(frameSql.indexOf("NULLIF(m.process_name, '')"));
     expect(frameSql).not.toContain('50000000');
+  });
+
+  // Bounded turns run this preflight too, so a second question about the same
+  // trace must not walk the tier ladder again. The scope is part of the key:
+  // a different selected range is a different answer.
+  it('reuses a detected focus app per trace and scope without re-querying', async () => {
+    const service = mockRepeatingTraceProcessor('com.example.app');
+    const queryMock = service.query as jest.Mock;
+
+    expect((await detectFocusApps(service, 'trace-1')).primaryApp).toBe('com.example.app');
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect((await detectFocusApps(service, 'trace-1')).primaryApp).toBe('com.example.app');
+    expect(queryMock).toHaveBeenCalledTimes(1);
+
+    await detectFocusApps(service, 'trace-1', { timeRange: { startNs: 1, endNs: 2 } });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    await detectFocusApps(service, 'trace-2');
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    await detectFocusApps(service, 'trace-1', { timeRange: { startNs: 1, endNs: 2 } });
+    expect(queryMock).toHaveBeenCalledTimes(3);
+
+    // A different processor service is a different trace world.
+    const other = mockRepeatingTraceProcessor('com.other.app');
+    expect((await detectFocusApps(other, 'trace-1')).primaryApp).toBe('com.other.app');
+    expect(other.query).toHaveBeenCalledTimes(1);
+  });
+
+  // `none` cannot tell an empty trace from a transient failure, so caching it
+  // would pin that failure to the trace for the life of the process.
+  it('does not cache a result that found no focus app', async () => {
+    const service = mockTraceProcessor([[], [], [], [['com.example.app', 4_000_000_000, 1]]]);
+    const queryMock = service.query as jest.Mock;
+
+    expect((await detectFocusApps(service, 'trace-none')).method).toBe('none');
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    expect((await detectFocusApps(service, 'trace-none')).primaryApp).toBe('com.example.app');
+    expect(queryMock).toHaveBeenCalledTimes(4);
   });
 });

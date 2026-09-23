@@ -28,9 +28,6 @@ keywords:
   - scene replay
   - reconstruct user actions
   - user interaction timeline
-compound_patterns:
-  - '(还原|重建).*(用户操作|场景|操作过程|设备状态)'
-  - '(reconstruct|replay).*(user action|interaction|device state|scene)'
 final_report_contract:
   required_sections:
     - id: scene_timeline

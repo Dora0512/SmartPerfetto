@@ -11,17 +11,10 @@
 # 打破 "主线程隧道视野"：不预定义哪些线程是关键的，
 # 而是从数据出发，自动发现启动区间内 CPU 占用最高的 Top N 线程。
 #
-# 线程角色自动识别（GLOB 匹配）：
-#   main       — 主线程（tid = pid）
-#   render     — RenderThread（首帧渲染 GPU 指令提交）
-#   gc         — HeapTaskDaemon / FinalizerDaemon（GC 相关）
-#   jit        — Jit thread pool（JIT 编译）
-#   binder     — Binder:PID_N（IPC 线程池）
-#   worker     — AsyncTask / Coroutine / ThreadPool
-#   flutter_ui — Flutter UI 线程
-#   flutter_raster — Flutter Raster 线程
-#   webview    — CrRendererMain（WebView 渲染）
-#   other      — 其他
+# 线程角色由 fragments/thread_role.sql 统一给出（main / render / gc / jit /
+# binder / network / image / worker / flutter_ui / flutter_raster / webview /
+# system / other）。角色来自线程名，是"这个线程通常干什么"的提示，不构成
+# "它在这个窗口里干了什么"的证据。
 
 name: startup_critical_tasks
 version: "1.0"
@@ -147,6 +140,7 @@ process_scope:
   binding: effective_target_processes
 sql_fragments:
   - fragments/effective_target_processes.sql
+  - fragments/thread_role.sql
   - fragments/system_thread_state_spans.sql
   - fragments/system_sched_spans.sql
 sql: |
@@ -163,34 +157,15 @@ sql: |
   clipped_sched AS (SELECT s.*,s.clipped_start_ts AS ts,s.dur_ns AS dur FROM system_sched_spans s),
   process_threads AS (
     SELECT
-      t.utid,
-      t.tid,
-      t.name as thread_name,
+      tr.utid,
+      tr.tid,
+      tr.thread_name,
       p.upid,
       p.pid,
       p.name as process_name,
-      CASE
-        WHEN t.tid = p.pid THEN 'main'
-        WHEN t.name = 'RenderThread' THEN 'render'
-        WHEN t.name GLOB '*HeapTaskDaemon*' THEN 'gc'
-        WHEN t.name GLOB '*FinalizerDaemon*' THEN 'gc'
-        WHEN t.name GLOB '*ReferenceQueueDaemon*' THEN 'gc'
-        WHEN t.name GLOB 'Jit thread pool*' THEN 'jit'
-        WHEN t.name GLOB '*Profile Saver*' THEN 'jit'
-        WHEN t.name GLOB 'Binder:*' THEN 'binder'
-        WHEN t.name GLOB '*AsyncTask*' OR t.name GLOB 'pool-*-thread-*' THEN 'worker'
-        WHEN t.name GLOB '*DefaultDispatcher*' OR t.name GLOB '*Dispatchers.Default*' THEN 'worker'
-        WHEN t.name GLOB '*Executor*' OR t.name GLOB '*Worker*' THEN 'worker'
-        WHEN t.name GLOB 'OkHttp*' THEN 'worker'
-        WHEN t.name GLOB 'arch_disk_io*' THEN 'worker'
-        WHEN t.name = '1.ui' THEN 'flutter_ui'
-        WHEN t.name = '1.raster' THEN 'flutter_raster'
-        WHEN t.name = 'CrRendererMain' THEN 'webview'
-        WHEN t.name GLOB '*Signal Catcher*' THEN 'system'
-        ELSE 'other'
-      END as role
-    FROM thread t
-    JOIN effective_target_processes p ON t.upid = p.upid
+      tr.role
+    FROM thread_roles tr
+    JOIN effective_target_processes p ON tr.upid = p.upid
     WHERE (${__process_scope.upid} IS NOT NULL OR '${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*')
   ),
   -- Step 2: 计算每个线程的四象限分布

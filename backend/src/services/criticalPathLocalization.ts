@@ -21,6 +21,8 @@ const MODULE_EN = new Map<string, string>([
   ['电源 / 唤醒', 'Power / Wakeup'],
   ['锁 / Monitor', 'Locks / Monitor'],
   ['IO / 文件系统', 'I/O / File system'],
+  ['网络收包等待候选', 'Network-receive wait candidate'],
+  ['worker 交接等待', 'Worker hand-off wait'],
   ['未归类', 'Unclassified'],
 ]);
 
@@ -34,6 +36,8 @@ const TITLE_EN = new Map<string, string>([
   ['等待链涉及 Java 锁竞争', 'The wait chain contains Java lock contention'],
   ['GC 与等待链重叠', 'GC overlaps the wait chain'],
   ['存在调度或 CPU 竞争迹象', 'Scheduling or CPU contention is indicated'],
+  ['等待链涉及网络收包等待候选', 'The wait chain contains a network-receive wait candidate'],
+  ['等待链涉及 worker 交接等待', 'The wait chain contains a worker hand-off wait'],
   ['未发现明显异常', 'No clear anomaly was found'],
   ['Running 状态：无等待链可分析', 'Running state: no wait chain to analyze'],
   ['选区内没有等待时间', 'The selection contains no waiting time'],
@@ -83,6 +87,9 @@ const RECOMMENDATION_EN = new Map<string, string>([
   ],
 ]);
 
+// An unmapped label falls through as Chinese into an English answer, silently.
+// `criticalPathSummary.ts` reads its English labels from this projection rather
+// than keeping a second table, so every label is mapped in one place.
 function moduleName(value: string): string {
   return MODULE_EN.get(value) ?? value;
 }
@@ -170,6 +177,12 @@ function translateDetail(value: string): string {
   }
   if (value.startsWith('critical path 中出现 io_wait')) {
     return 'The critical path contains io_wait or an I/O/page-cache kernel blocked-function family. A blocked_function is a single-frame wchan; confirm it with synchronous read/write, fsync, SQLite/WAL, page-fault, or block-layer evidence.';
+  }
+  if (value.startsWith('critical path 中有 S 态等待由 irq 上下文唤醒')) {
+    return 'The critical path contains an S-state wait ended by an IRQ-context wake on a network-role thread. Android emits sched_blocked_reason only for D state, so an S-state wait has no blocked_function, and an IRQ-context wake is equally a timer expiry. Confirm a receive with rx-packet correlation or network-library request instrumentation.';
+  }
+  if (value.startsWith('critical path 中有 S 态等待由同进程线程唤醒')) {
+    return 'The critical path contains an S-state wait ended by another thread in the same process, which is a hand-off. A hand-off does not say who was slow; inspect what the upstream thread did during the wait.';
   }
   if (value.startsWith('Binder / IPC 在 critical path 中累计')) {
     return `Binder / IPC contributes ${number(0)} ms on the critical path, possibly from a cross-process service call, system service, or callback chain.`;

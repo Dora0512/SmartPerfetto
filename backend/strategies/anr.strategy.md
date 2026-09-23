@@ -39,9 +39,6 @@ keywords:
   - 冻屏
   - freeze
   - 卡死
-compound_patterns:
-  - "(ApplicationExitInfo|getHistoricalProcessExitReasons|ProfilingManager|ProfilingTrigger|Play Vitals|Android Vitals|client watchdog|SDK watchdog).*(ANR|not responding|无响应|卡死)"
-  - "(ANR|not responding|无响应|卡死).*(ApplicationExitInfo|getHistoricalProcessExitReasons|ProfilingManager|ProfilingTrigger|Play Vitals|Android Vitals|client watchdog|SDK watchdog)"
 
 final_report_contract:
   required_sections:

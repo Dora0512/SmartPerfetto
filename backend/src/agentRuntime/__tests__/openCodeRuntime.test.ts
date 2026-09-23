@@ -44,6 +44,8 @@ import {createClaudeMcpServer} from '../../agentv3/claudeMcpServer';
 import * as claudeMcpModule from '../../agentv3/claudeMcpServer';
 import * as turnIntentModule from '../analysisTurnIntent';
 import * as sqlKnowledgeBase from '../../services/sqlKnowledgeBase';
+import * as systemPromptModule from '../../agentv3/claudeSystemPrompt';
+import * as traceCompletenessProber from '../../agentv3/traceCompletenessProber';
 import * as runtimePromptContext from '../runtimePromptContext';
 import * as finalResultQualityGate from '../../services/finalResultQualityGate';
 import * as providerManager from '../../services/providerManager';
@@ -898,7 +900,7 @@ describe('OpenCode native turn intent and delivery', () => {
     expect(result.outputOrigin).toBe('sdk_final');
     expect(harness.configs.map(config => config.agent.smartperfetto.maxSteps)).toEqual([1, 8, 1]);
     expect(harness.prompts).toHaveLength(3);
-    expect(harness.traceProcessor.query).not.toHaveBeenCalled();
+    expect(harness.traceProcessor.query).toHaveBeenCalled();
     expect(harness.serverCloses.every(close => close.mock.calls.length === 1)).toBe(true);
     expect(fs.existsSync(path.dirname(harness.directories[0]))).toBe(false);
   }));
@@ -916,7 +918,7 @@ describe('OpenCode native turn intent and delivery', () => {
     expect(harness.getTools().map(tool => tool.name)).toEqual(expect.arrayContaining([
       'submit_plan', 'execute_sql_on', 'compare_skill', 'execute_sql', 'fetch_artifact',
     ]));
-    expect(harness.traceProcessor.query).not.toHaveBeenCalled();
+    expect(harness.traceProcessor.query).toHaveBeenCalled();
   }));
 
   it.each(['bounded_question', 'scene_wide'])('denies new evidence independently of %s context scope', async scope => withBackendDataDir(async () => {
@@ -941,6 +943,56 @@ describe('OpenCode native turn intent and delivery', () => {
     } finally {
       knowledge.mockRestore();
     }
+  }));
+
+  // `onDemandContext` picks which memory context the prompt carries — a
+  // compact quick-memory payload or the separate pattern/case sections — not
+  // whether the shared typed builder runs. Both entrypoints assemble the same
+  // typed contract, so this is a prompt-shape choice, not a policy one.
+  it('chooses the quick-memory prompt variant on demand while the shared typed builder still runs', async () => withBackendDataDir(async () => {
+    const quick = jest.spyOn(systemPromptModule, 'buildQuickSystemPrompt');
+    const full = jest.spyOn(systemPromptModule, 'buildSystemPrompt');
+    try {
+      const bounded = createNativeIntentHarness();
+      await bounded.runtime.analyze('same scope', 'prompt-variant-bounded', 'trace-opencode', {analysisMode: 'full'});
+      expect(quick).toHaveBeenCalledTimes(1);
+      expect(full).not.toHaveBeenCalled();
+      expect(quick.mock.calls[0][0]).toMatchObject({onDemandContext: true,
+        turnIntent: expect.objectContaining({scope: 'bounded_question'})});
+      quick.mockClear();
+
+      const wide = createNativeIntentHarness({decision: {...BOUNDED_INTENT, taskKind: 'investigation', scope: 'scene_wide'}});
+      await wide.runtime.analyze('the whole scene', 'prompt-variant-wide', 'trace-opencode', {analysisMode: 'full'});
+      expect(full).toHaveBeenCalledTimes(1);
+      expect(quick).not.toHaveBeenCalled();
+      expect(full.mock.calls[0][0]).toMatchObject({onDemandContext: false,
+        turnIntent: expect.objectContaining({scope: 'scene_wide'})});
+
+      for (const prompts of [bounded.prompts, wide.prompts]) {
+        expect(prompts[1].body.system).toContain('"context":"turn_policy"');
+      }
+    } finally { quick.mockRestore(); full.mockRestore(); }
+  }));
+
+  // The completeness probe runs for every `preflight !== 'none'` turn, so a
+  // bounded `read_new` turn pays for it. Leaving it out of the quick prompt
+  // spent the queries and then told the model nothing about which data the
+  // capture actually holds — the one thing a narrow question still needs.
+  it('gives a bounded read_new turn the completeness the probe already paid for', async () => withBackendDataDir(async () => {
+    const completeness = {capabilities: [], summary: 'probe-sentinel'} as never;
+    const probe = jest.spyOn(traceCompletenessProber, 'probeTraceCompleteness')
+      .mockResolvedValue(completeness);
+    const quick = jest.spyOn(systemPromptModule, 'buildQuickSystemPrompt');
+    try {
+      const harness = createNativeIntentHarness();
+      const result = await harness.runtime.analyze('why is this page slow', 'completeness-bounded',
+        'trace-opencode', {analysisMode: 'full'});
+
+      expect(result.turnIntent).toMatchObject({scope: 'bounded_question', evidenceAccess: 'read_new'});
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(quick).toHaveBeenCalledTimes(1);
+      expect(quick.mock.calls[0][0].traceCompleteness).toBe(completeness);
+    } finally { quick.mockRestore(); probe.mockRestore(); }
   }));
 
   it('passes the exact classifier registry pin to the actual MCP factory', async () => withBackendDataDir(async () => {
@@ -980,7 +1032,7 @@ describe('OpenCode native turn intent and delivery', () => {
       expect(gate.mock.calls[0][0].comparisonIdentity).toEqual({
         currentPackageName: 'com.current.app', referencePackageName: 'com.reference.app',
       });
-      expect(harness.traceProcessor.query).not.toHaveBeenCalled();
+      expect(harness.traceProcessor.query).toHaveBeenCalled();
     } finally {
       gate.mockRestore();
       pair.mockRestore();
@@ -1009,7 +1061,9 @@ describe('OpenCode native turn intent and delivery', () => {
     }
   }));
 
-  it.each(['resolved', 'unavailable'] as const)('does not automatically retrieve knowledge for %s on-demand turns', async status => withBackendDataDir(async () => {
+  // The trace facts a bounded turn is asked about are gathered; the scene-wide
+  // memory tier it cannot place is not.
+  it.each(['resolved', 'unavailable'] as const)('reads trace facts but no knowledge memory for %s on-demand turns', async status => withBackendDataDir(async () => {
     const getContextForAI = jest.fn(() => 'new context must not be fetched');
     const knowledge = jest.spyOn(sqlKnowledgeBase, 'getExtendedKnowledgeBase')
       .mockResolvedValue({getContextForAI} as any);
@@ -1021,7 +1075,7 @@ describe('OpenCode native turn intent and delivery', () => {
       });
       expect(result.turnIntent).toMatchObject({status, scope: 'bounded_question', evidenceAccess: 'read_new'});
       expect(harness.getTools().map(tool => tool.name)).toContain('execute_sql');
-      expect(harness.traceProcessor.query).not.toHaveBeenCalled();
+      expect(harness.traceProcessor.query).toHaveBeenCalled();
       expect(knowledge).not.toHaveBeenCalled();
       expect(getContextForAI).not.toHaveBeenCalled();
     } finally {
@@ -1036,7 +1090,7 @@ describe('OpenCode native turn intent and delivery', () => {
     expect(harness.prompts[0].body.model).toEqual({providerID: 'smartperfetto', modelID: 'light-model'});
     expect(harness.prompts[1].body.model).toEqual({providerID: 'smartperfetto', modelID: 'main-model'});
     expect(harness.configs[1].small_model).toBeUndefined();
-    expect(harness.traceProcessor.query).not.toHaveBeenCalled();
+    expect(harness.traceProcessor.query).toHaveBeenCalled();
   }));
 
   it.each(['length', 'tool-calls', 'unrecognized'])('does not certify native finish %s as completed', async finish => withBackendDataDir(async () => {

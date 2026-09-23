@@ -48,12 +48,6 @@ keywords:
   - wq
   - stale event
   - focused window
-compound_patterns:
-  - "点击.*响应"
-  - "响应.*时间"
-  - "输入.*慢"
-  - "(?:InputDispatcher|InputChannel|wait queue|wq|FINISHED|ACK).*(?:latency|delay|blocked|stuck|慢|延迟|阻塞|积压)"
-  - "(?:focused window|target window|stale event|输入焦点|目标窗口|陈旧事件).*(?:input|touch|key|输入|触摸|按键)"
 
 final_report_contract:
   required_sections:

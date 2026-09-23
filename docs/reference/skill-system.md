@@ -484,6 +484,17 @@ steps:
 - SQL 不以 `WITH` 开头 → 整体包装为 `WITH <fragments>\n<sql>`
 - Fragment 内的 `${变量}` 同样会被参数替换
 
+### 等待归因相关的两个 fragment
+
+- `fragments/thread_role.sql`：给 trace 里每个 utid 一个角色（main/render/gc/jit/
+  binder/network/image/worker/flutter_ui/flutter_raster/webview/system/other）。
+  唤醒者通常不在被分析进程里，所以它不按包名裁剪；角色来自线程名，是用途提示而非行为证据。
+- `fragments/sleep_wake_source.sql`：输入 `wake_source_scope(utid)` 与
+  `thread_roles`，把每个 S/I/D/DK 等待行回连到其结束时刻的 R/R+ 行，取出
+  `waker_utid` / `irq_context`，输出 `wake_source` 与候选 `wait_class`。
+  Android 内核只对 TASK_UNINTERRUPTIBLE 发 `sched_blocked_reason`，S 态没有
+  `blocked_function`，这是 S 态等待唯一的内核侧归因信号。
+
 ---
 
 ## 8. Prerequisites 与模块系统

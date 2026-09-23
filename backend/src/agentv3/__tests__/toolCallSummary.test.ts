@@ -87,6 +87,42 @@ describe('summarizeToolCallInput', () => {
     });
   });
 
+  describe('analyze_wait_chain', () => {
+    it('keeps the thread and the window so two calls are distinguishable', () => {
+      expect(summarizeToolCallInput('analyze_wait_chain', {
+        process_name: 'com.example.app', thread_name: 'OkHttp Dispatch',
+        start_ts: 1000, end_ts: 2000,
+      }).inputSummary).toBe('com.example.app/OkHttp Dispatch @ 1000..2000');
+    });
+
+    it('falls back through main_thread, utid, and thread_state_id', () => {
+      expect(summarizeToolCallInput('analyze_wait_chain', {main_thread: true}).inputSummary)
+        .toBe('main_thread');
+      expect(summarizeToolCallInput('analyze_wait_chain', {utid: 42}).inputSummary)
+        .toBe('utid:42');
+      expect(summarizeToolCallInput('analyze_wait_chain', {thread_state_id: '9182'}).inputSummary)
+        .toBe('thread_state:9182');
+      expect(summarizeToolCallInput('analyze_wait_chain', {}).inputSummary).toBe('?');
+    });
+
+    // The main thread of a package and any thread of that package are different
+    // targets; folding `main_thread` away made the two calls one plan step.
+    it('keeps main_thread in the selector alongside a process name', () => {
+      expect(summarizeToolCallInput('analyze_wait_chain', {
+        process_name: 'com.example.app', main_thread: true,
+      }).inputSummary).toBe('com.example.app/main_thread');
+      expect(summarizeToolCallInput('analyze_wait_chain', {process_name: 'com.example.app'})
+        .inputSummary).toBe('com.example.app');
+    });
+
+    it('distinguishes two windows on the same thread', () => {
+      const first = summarizeToolCallInput('analyze_wait_chain', {utid: 42, start_ts: 1, end_ts: 2});
+      const second = summarizeToolCallInput('analyze_wait_chain', {utid: 42, start_ts: 3, end_ts: 4});
+      expect(first.inputSummary).not.toBe(second.inputSummary);
+      expect(first.paramsHash).not.toBe(second.paramsHash);
+    });
+  });
+
   describe('unknown tools', () => {
     it('falls back to sorted field names without persisting values', () => {
       const result = summarizeToolCallInput('some_other_tool', { foo: 'PRIVATE_PLAN_CANARY', n: 42 });
