@@ -18,6 +18,11 @@
  *   - missing_config_suspected: schema missing or empty, likely trace config issue
  *   - not_applicable: architecture/version mismatch, not a config issue
  *   - insufficient_or_scene_absent: sparse data, ambiguous cause
+ *
+ * Separately, `dataLoss` reads trace_processor's data-loss stats and recovery
+ * metadata. It qualifies what the present data can prove (absence is not proof
+ * on a lossy trace) and never moves a capability between the buckets above,
+ * so it stays out of the capability manifest.
  */
 
 import type { RenderingArchitectureType } from '../agent/detectors/types';
@@ -47,7 +52,13 @@ import type {
   CapabilityManifestV1,
 } from '../types/capabilityManifest';
 import type {RunManifestAttributionSink} from '../types/selfEvolution';
-import type { CapabilityProbeResult, CapabilityStatus, TraceCompleteness } from './types';
+import type {
+  CapabilityProbeResult,
+  CapabilityStatus,
+  TraceCompleteness,
+  TraceDataLossDiagnosis,
+  TraceDataLossStat,
+} from './types';
 
 /** Minimum row count below which data is considered "insufficient". */
 const INSUFFICIENT_THRESHOLD = 3;
@@ -73,6 +84,35 @@ const TRACE_BOUNDS_SQL = [
   'LIMIT 1',
 ].join('\n');
 const CANONICAL_NON_NEGATIVE_INTEGER = /^(0|[1-9]\d*)$/;
+/**
+ * Data-loss stats are read by trace_processor severity, not by name, so stats
+ * added by newer runtimes (e.g. long_trace_mode_bytes_overwritten) are picked
+ * up without a registry change and older runtimes simply report fewer names.
+ * global_trace_sanity_check's data_loss_stats step shows the same rows as
+ * evidence; keep the two filters aligned.
+ */
+const DATA_LOSS_STAT_LIMIT = 16;
+const DATA_LOSS_STATS_SQL = [
+  'SELECT name, idx, value, COUNT(*) OVER () AS matching_rows',
+  'FROM stats',
+  "WHERE severity = 'data_loss' AND value > 0",
+  'ORDER BY value DESC, name, idx',
+  `LIMIT ${DATA_LOSS_STAT_LIMIT}`,
+].join('\n');
+const DATA_LOSS_QUERY_OPTIONS = {
+  ...CAPABILITY_METADATA_QUERY_OPTIONS,
+  maxRows: DATA_LOSS_STAT_LIMIT,
+  maxResponseBytes: 8192,
+} as const;
+// A metadata key unknown to an older runtime just yields no row.
+const TRACE_RECOVERY_REASON_SQL = [
+  'SELECT str_value AS recovery_reason',
+  'FROM metadata',
+  "WHERE name = 'trace_recovery_reason'",
+  'LIMIT 1',
+].join('\n');
+const STAT_NAME = /^[a-z][a-z0-9_]{0,127}$/;
+const RECOVERY_REASON_MAX_CHARS = 200;
 const SAFE_DETAIL_CODE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 export interface TraceCompletenessManifestDependencies {
@@ -99,6 +139,7 @@ interface TimelessTraceCompleteness {
   missingConfig: CapabilityProbeResult[];
   notApplicable: CapabilityProbeResult[];
   insufficient: CapabilityProbeResult[];
+  dataLoss: TraceDataLossDiagnosis;
   capabilityManifestResolution: TimelessCapabilityManifestResolution;
 }
 
@@ -488,30 +529,35 @@ function hasExactColumns(
     columns.every((column, index) => column === expected[index]);
 }
 
-async function probeReportedVersion(
+/** Read one string metadata value; any malformed or failed read yields undefined. */
+async function probeMetadataString<T>(
   tps: TraceProcessorService,
   traceId: string,
-): Promise<string | undefined> {
+  sql: string,
+  column: string,
+  sanitize: (value: unknown) => T | undefined,
+): Promise<T | undefined> {
   try {
-    const result = await tps.queryBounded(
-      traceId,
-      TRACE_PROCESSOR_VERSION_SQL,
-      CAPABILITY_METADATA_QUERY_OPTIONS,
-    );
-    if (
-      result.error ||
-      !hasExactColumns(result.columns, ['reported_version']) ||
-      result.rows.length > 1
-    ) {
+    const result = await tps.queryBounded(traceId, sql, CAPABILITY_METADATA_QUERY_OPTIONS);
+    if (result.error || !hasExactColumns(result.columns, [column]) || result.rows.length !== 1) {
       return undefined;
     }
-    if (result.rows.length === 0) return undefined;
     const row = result.rows[0];
     if (!Array.isArray(row) || row.length !== 1) return undefined;
-    return sanitizeCapabilityTraceProcessorReportedVersion(row[0]);
+    return sanitize(row[0]);
   } catch {
     return undefined;
   }
+}
+
+function probeReportedVersion(
+  tps: TraceProcessorService,
+  traceId: string,
+): Promise<string | undefined> {
+  return probeMetadataString(
+    tps, traceId, TRACE_PROCESSOR_VERSION_SQL, 'reported_version',
+    sanitizeCapabilityTraceProcessorReportedVersion,
+  );
 }
 
 async function probeClockRange(
@@ -548,6 +594,74 @@ async function probeClockRange(
   } catch {
     return undefined;
   }
+}
+
+function readDataLossStats(
+  result: {columns: string[]; rows: unknown[]; error?: string},
+): {stats: TraceDataLossStat[]; rowCount: number} | undefined {
+  if (
+    result.error ||
+    !hasExactColumns(result.columns, ['name', 'idx', 'value', 'matching_rows']) ||
+    result.rows.length > DATA_LOSS_STAT_LIMIT
+  ) {
+    return undefined;
+  }
+  const stats: TraceDataLossStat[] = [];
+  let rowCount = 0;
+  for (const row of result.rows) {
+    if (!Array.isArray(row) || row.length !== 4) return undefined;
+    const [name, idx, value, matchingRows] = row;
+    if (
+      typeof name !== 'string' || !STAT_NAME.test(name) ||
+      !(idx === null || Number.isSafeInteger(idx)) ||
+      typeof value !== 'number' || !Number.isFinite(value) || value <= 0 ||
+      !Number.isSafeInteger(matchingRows)
+    ) {
+      return undefined;
+    }
+    stats.push({name, idx: idx as number | null, value});
+    rowCount = matchingRows as number;
+  }
+  return {stats, rowCount};
+}
+
+// Trace-authored text reaches the prompt as data: strip control characters and
+// bound it rather than trusting the producer.
+function sanitizeRecoveryReason(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const reason = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+    .slice(0, RECOVERY_REASON_MAX_CHARS);
+  return reason.length > 0 ? reason : undefined;
+}
+
+/**
+ * Read capture loss recorded by trace_processor. A trace without data loss is
+ * the only one where "the event is absent" can be read as "it did not happen".
+ */
+async function probeDataLoss(
+  tps: TraceProcessorService,
+  traceId: string,
+): Promise<TraceDataLossDiagnosis> {
+  const [loss, recoveryReason] = await Promise.all([
+    tps.queryBounded(traceId, DATA_LOSS_STATS_SQL, DATA_LOSS_QUERY_OPTIONS)
+      .then(readDataLossStats, () => undefined),
+    probeMetadataString(
+      tps, traceId, TRACE_RECOVERY_REASON_SQL, 'recovery_reason', sanitizeRecoveryReason,
+    ),
+  ]);
+  const lossStats = loss?.rowCount ? loss : undefined;
+  if (!lossStats && recoveryReason === undefined) {
+    // Unreadable stats are not a clean bill of health.
+    return {status: loss === undefined ? 'unknown' : 'none_detected'};
+  }
+  // A recovered trace was not finalized cleanly, so it is lossy even when the
+  // stats themselves could not be read.
+  return {
+    status: 'data_loss_detected',
+    absenceEvidence: 'not_proof',
+    ...(lossStats ? {lossStats: lossStats.stats, lossStatRowCount: lossStats.rowCount} : {}),
+    ...(recoveryReason === undefined ? {} : {recoveryReason}),
+  };
 }
 
 function unavailableTraceResolution(
@@ -877,11 +991,14 @@ async function probeTimelessTraceCompleteness(
     }
   }
 
+  const dataLoss = await probeDataLoss(tps, traceId);
+
   const elapsed = Date.now() - t0;
   console.log(
     `[TraceCompleteness] Probed ${CAPABILITY_REGISTRY.length} capabilities in ${elapsed}ms: ` +
     `available=${available.length}, missing=${missingConfig.length}, ` +
-    `n/a=${notApplicable.length}, insufficient=${insufficient.length}`,
+    `n/a=${notApplicable.length}, insufficient=${insufficient.length}, ` +
+    `dataLoss=${dataLoss.status}`,
   );
 
   const legacyResult: Omit<TraceCompleteness, 'capabilityManifestResolution'> = {
@@ -911,6 +1028,7 @@ async function probeTimelessTraceCompleteness(
     missingConfig,
     notApplicable,
     insufficient,
+    dataLoss,
     capabilityManifestResolution,
   });
 }
@@ -975,6 +1093,7 @@ function materializeTraceCompleteness(
     notApplicable: cloneResults(template.notApplicable),
     insufficient: cloneResults(template.insufficient),
     diagnosedAt,
+    dataLoss: structuredClone(template.dataLoss),
     capabilityManifestResolution,
   };
 }

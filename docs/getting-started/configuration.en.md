@@ -762,7 +762,7 @@ TRACE_PROCESSOR_DOWNLOAD_BASE=https://your-mirror/perfetto-luci-artifacts ./star
 TRACE_PROCESSOR_DOWNLOAD_URL=https://your-mirror/trace_processor_shell ./start.sh
 ```
 
-Mirror downloads are still checked against the SHA256 pinned in `scripts/trace-processor-pin.env`.
+A mirror must keep the `<PERFETTO_ARTIFACT_VERSION>/<platform>/trace_processor_shell` layout. `PERFETTO_ARTIFACT_VERSION` in `scripts/trace-processor-pin.env` is either a release tag (e.g. `v58.2`) or the full commit SHA of a Google CI build of upstream main. The repository commits binaries only for Linux x64, macOS arm64 and Windows x64; other platforms (e.g. linux-arm64, mac-amd64), the npm CLI and Docker builds download from that directory, and Google does not promise to retain commit directories, so keep your own mirror for long-lived offline deployments. Mirror downloads are still checked against the SHA256 pinned in that file.
 
 ## Optional Android Internals Knowledge
 

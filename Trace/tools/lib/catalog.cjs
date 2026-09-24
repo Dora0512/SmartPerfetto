@@ -850,6 +850,7 @@ function resolveCaseTrace(repoRoot, selector) {
 
 module.exports = {
   discoverCoverageTargets,
+  runtimePerfettoRevision,
   loadCatalog,
   resolveCaseTrace,
   validateCatalog,

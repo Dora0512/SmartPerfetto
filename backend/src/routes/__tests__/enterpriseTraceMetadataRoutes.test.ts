@@ -717,7 +717,9 @@ describe('enterprise trace metadata routes', () => {
     expect(response.body.stats.processors.items.map((item: {httpPort: number}) => item.httpPort)).toEqual(publicPorts);
     expect(response.body.stats.portPool.allocated).toBe(2);
     expect(response.body.stats.portPool.allocations.map((item: {port: number}) => item.port)).toEqual(publicPorts);
-    expect(JSON.stringify(response.body)).not.toContain('9188');
+    // Match the port as a whole number: live RSS/memory byte counts in the same
+    // body can contain the digits 9188 (e.g. 1918812160).
+    expect(JSON.stringify(response.body)).not.toMatch(/(?<!\d)9188(?!\d)/);
     expect(JSON.stringify(response.body)).not.toContain(lease.id);
     expect(fakeTraceProcessorService.exposeNativePort.mock.calls).toEqual(publicPorts.map(port => [port]));
   });

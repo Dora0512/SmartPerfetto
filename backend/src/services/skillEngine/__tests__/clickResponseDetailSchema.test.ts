@@ -8,6 +8,8 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import {describe, expect, it} from '@jest/globals';
 import yaml from 'js-yaml';
+import {completeAndroidInputEventsFixture} from '../../../../tests/helpers/androidInputEventsFixture';
+import {withStepFragments} from '../../../../tests/helpers/skillFragmentSql';
 
 const skillPath = path.join(
   process.cwd(),
@@ -24,7 +26,7 @@ function inputPipelineTargetEventSql(): string {
     /WITH target_event AS \(\s*([\s\S]*?LIMIT 1)\s*\)\s*SELECT/,
   );
   expect(match).not.toBeNull();
-  return match![1];
+  return withStepFragments(match![1], step.sql_fragments);
 }
 
 describe('click_response_detail input event identity', () => {
@@ -44,6 +46,7 @@ describe('click_response_detail input event identity', () => {
           ('com.foo:remote', 100, 180, 20, 1, 'remote'),
           ('com.foo', 100, 180, 20, 2, 'main');
       `);
+      completeAndroidInputEventsFixture(db);
 
       const selector = inputPipelineTargetEventSql()
         .replace(/\$\{process_name\}/g, 'com.foo')

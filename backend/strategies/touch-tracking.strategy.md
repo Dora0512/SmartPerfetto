@@ -99,17 +99,22 @@ invoke_skill("input_to_frame_latency", { process_name: "<包名>" })
 
 如果该 Skill 不可用（trace 缺少 `sendMessage(*)`/`receiveMessage(*)` slices），使用 SQL 回退：
 ```sql
--- 查找 MOVE 事件与消费帧的关联
-WITH input_events AS (
+-- 查找 MOVE 事件与目标进程帧的关联。无 slice 时读 proto 输入表 android_motion_events：
+-- 它不记录接收进程，只能按目标进程的帧关联；action & 255 = 2 即 MOVE。
+WITH target_process AS (
+  SELECT upid, name AS process_name
+  FROM process
+  WHERE name = '{process_name}' OR name GLOB '{process_name}:*'
+),
+input_events AS (
   SELECT
-    ied.ts as input_ts,
-    ied.event_action,
-    ied.upid,
-    p.name as process_name
-  FROM android_input_event_dispatch ied
-  LEFT JOIN process p ON p.upid = ied.upid
-  WHERE ('{process_name}' = '' OR p.name = '{process_name}' OR p.name GLOB '{process_name}:*')
-    AND (ied.event_action = 'ACTION_MOVE' OR ied.event_action = '2')
+    m.ts as input_ts,
+    'MOVE' as event_action,
+    tp.upid,
+    tp.process_name
+  FROM android_motion_events m
+  CROSS JOIN target_process tp
+  WHERE (m.action & 255) = 2
 ),
 frame_match AS (
   SELECT

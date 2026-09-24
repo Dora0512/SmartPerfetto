@@ -7,7 +7,7 @@ const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {spawnSync} = require('node:child_process');
 
-const {loadCatalog, resolveCaseTrace} = require('./catalog.cjs');
+const {loadCatalog, resolveCaseTrace, runtimePerfettoRevision} = require('./catalog.cjs');
 const {buildConstructedTrace, materializeTrace, resolveTraceProcessor} = require('./generator.cjs');
 const {sha256File} = require('./hash.cjs');
 
@@ -54,9 +54,13 @@ function safeCaseFile(entry, relativePath, label) {
   return candidate;
 }
 
-function updateTraceHash(entry, sha256) {
+// A rebuild records the overlay it produced and the pinned runtime that just
+// reparsed it; validation rejects a manifest whose runtime differs from the pin.
+function updateBuildManifest(entry, {sha256, runtimeRevision}) {
   const manifest = JSON.parse(fs.readFileSync(entry.manifest_path, 'utf8'));
+  if (manifest.trace.sha256 === sha256 && manifest.construction.runtime_revision === runtimeRevision) return;
   manifest.trace.sha256 = sha256;
+  manifest.construction.runtime_revision = runtimeRevision;
   fs.writeFileSync(entry.manifest_path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -74,6 +78,10 @@ function buildCatalogCases(repoRoot, options = {}) {
   // An empty selection is a valid no-op for catalog-only fixtures. Resolve the
   // executable only when a trace will actually be built.
   const traceProcessor = selected.length > 0 ? traceProcessorProvenance(repoRoot) : null;
+  const runtimeRevision = runtimePerfettoRevision(repoRoot);
+  if (selected.length > 0 && !options.check && !runtimeRevision) {
+    throw new Error('scripts/trace-processor-pin.env has no PERFETTO_VERSION');
+  }
 
   for (const entry of selected) {
     const outputPath = safeGeneratedPath(repoRoot, entry.construction.output, entry.id);
@@ -96,7 +104,9 @@ function buildCatalogCases(repoRoot, options = {}) {
           `constructed overlay drift for ${entry.id}: manifest=${entry.trace.sha256}, generated=${build.provenance.overlay_sha256}`,
         );
       }
-      if (!options.check && !overlayHashMatches) updateTraceHash(entry, build.provenance.overlay_sha256);
+      if (!options.check) {
+        updateBuildManifest(entry, {sha256: build.provenance.overlay_sha256, runtimeRevision});
+      }
 
       const provenancePath = path.join(path.dirname(outputPath), 'build-provenance.json');
       const provenance = {
@@ -234,4 +244,11 @@ function updateCaseExpectations(repoRoot, options = {}) {
   return {case_id: caseId, output: path.relative(root, outputPath).split(path.sep).join('/'), changed};
 }
 
-module.exports = {buildCatalogCases, materializeCatalogCases, updateCaseExpectations, safeCaseFile, safeGeneratedPath};
+module.exports = {
+  buildCatalogCases,
+  materializeCatalogCases,
+  updateBuildManifest,
+  updateCaseExpectations,
+  safeCaseFile,
+  safeGeneratedPath,
+};

@@ -50,7 +50,7 @@
     "generator_version": 1,
     "seed": "startup-lifecycle-v1",
     "output": "Trace/.generated/constructed/startup-lifecycle/trace.pftrace",
-    "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+    "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
   },
   "coverage": {
     "skills": [
@@ -476,6 +476,8 @@
           "start_ts",
           "end_ts",
           "dur_ns",
+          "dur_without_trampoline_ms",
+          "trampoline_ms",
           "ttid_ms",
           "ttfd_ms",
           "rating",

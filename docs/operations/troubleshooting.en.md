@@ -73,7 +73,7 @@ TRACE_PROCESSOR_DOWNLOAD_BASE=https://your-mirror/perfetto-luci-artifacts ./star
 TRACE_PROCESSOR_DOWNLOAD_URL=https://your-mirror/trace_processor_shell ./start.sh
 ```
 
-Mirrored downloads are still checked against the SHA256 pinned in `scripts/trace-processor-pin.env`.
+A mirror must keep the `<PERFETTO_ARTIFACT_VERSION>/<platform>/trace_processor_shell` layout, where `PERFETTO_ARTIFACT_VERSION` is a release tag or a full upstream commit SHA. Mirrored downloads are still checked against the SHA256 pinned in `scripts/trace-processor-pin.env`.
 
 ## Docker AI Credentials
 

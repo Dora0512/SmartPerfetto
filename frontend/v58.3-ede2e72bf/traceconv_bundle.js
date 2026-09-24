@@ -19,13 +19,13 @@
 		}
 		return to;
 	};
-	var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", {
+	var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
 		value: mod,
 		enumerable: true
 	}) : target, mod));
 	//#endregion
 	//#region \0perfetto:version:ui/src/virtual/version
-	var VERSION = "v58.2-eb382a2ed";
+	var VERSION = "v58.3-ede2e72bf";
 	//#endregion
 	//#region ../../ui/src/base/utils.ts
 	function exists(value) {
@@ -98,12 +98,6 @@
 		});
 	}
 	//#endregion
-	//#region ../../ui/src/base/assert.ts
-	function ensureExists(x, msg) {
-		if (x === null || x === void 0) throw new Error(msg ?? "Value is null or undefined");
-		return x;
-	}
-	//#endregion
 	//#region ../../ui/src/traceconv/index.ts
 	var import_traceconv = /* @__PURE__ */ __toESM((/* @__PURE__ */ __commonJSMin(((exports, module) => {
 		var traceconv_wasm = (() => {
@@ -136,25 +130,27 @@
 				var $Module$$ = moduleArg, $ENVIRONMENT_IS_WEB$$ = !!globalThis.window, $ENVIRONMENT_IS_WORKER$$ = !!globalThis.WorkerGlobalScope, $ENVIRONMENT_IS_NODE$$ = globalThis.$g$?.$versions$?.node && "renderer" != globalThis.$g$?.type, $ENVIRONMENT_IS_SHELL$$ = !$ENVIRONMENT_IS_WEB$$ && !$ENVIRONMENT_IS_NODE$$ && !$ENVIRONMENT_IS_WORKER$$, $arguments_$$ = [], $thisProgram$$ = "./this.program";
 				$ENVIRONMENT_IS_WORKER$$ && (_scriptName = self.location.href);
 				var $scriptDirectory$$ = "", $readAsync$$, $readBinary$$;
-				if (!$ENVIRONMENT_IS_SHELL$$) if ($ENVIRONMENT_IS_WEB$$ || $ENVIRONMENT_IS_WORKER$$) {
-					try {
-						$scriptDirectory$$ = new URL(".", _scriptName).href;
-					} catch {}
-					if (!globalThis.window && !globalThis.WorkerGlobalScope) throw Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
-					$ENVIRONMENT_IS_WORKER$$ && ($readBinary$$ = ($url$jscomp$24$$) => {
-						var $xhr$$ = new XMLHttpRequest();
-						$xhr$$.open("GET", $url$jscomp$24$$, !1);
-						$xhr$$.responseType = "arraybuffer";
-						$xhr$$.send(null);
-						return new Uint8Array($xhr$$.response);
-					});
-					$readAsync$$ = async ($response$jscomp$2_url$jscomp$25$$) => {
-						$assert$$(!$isFileURI$$($response$jscomp$2_url$jscomp$25$$), "readAsync does not work with file:// URLs");
-						$response$jscomp$2_url$jscomp$25$$ = await fetch($response$jscomp$2_url$jscomp$25$$, { credentials: "same-origin" });
-						if ($response$jscomp$2_url$jscomp$25$$.ok) return $response$jscomp$2_url$jscomp$25$$.arrayBuffer();
-						throw Error($response$jscomp$2_url$jscomp$25$$.status + " : " + $response$jscomp$2_url$jscomp$25$$.url);
-					};
-				} else throw Error("environment detection error");
+				if (!$ENVIRONMENT_IS_SHELL$$) {
+					if ($ENVIRONMENT_IS_WEB$$ || $ENVIRONMENT_IS_WORKER$$) {
+						try {
+							$scriptDirectory$$ = new URL(".", _scriptName).href;
+						} catch {}
+						if (!globalThis.window && !globalThis.WorkerGlobalScope) throw Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
+						$ENVIRONMENT_IS_WORKER$$ && ($readBinary$$ = ($url$jscomp$24$$) => {
+							var $xhr$$ = new XMLHttpRequest();
+							$xhr$$.open("GET", $url$jscomp$24$$, !1);
+							$xhr$$.responseType = "arraybuffer";
+							$xhr$$.send(null);
+							return new Uint8Array($xhr$$.response);
+						});
+						$readAsync$$ = async ($response$jscomp$2_url$jscomp$25$$) => {
+							$assert$$(!$isFileURI$$($response$jscomp$2_url$jscomp$25$$), "readAsync does not work with file:// URLs");
+							$response$jscomp$2_url$jscomp$25$$ = await fetch($response$jscomp$2_url$jscomp$25$$, { credentials: "same-origin" });
+							if ($response$jscomp$2_url$jscomp$25$$.ok) return $response$jscomp$2_url$jscomp$25$$.arrayBuffer();
+							throw Error($response$jscomp$2_url$jscomp$25$$.status + " : " + $response$jscomp$2_url$jscomp$25$$.url);
+						};
+					} else throw Error("environment detection error");
+				}
 				var $out$$ = console.log.bind(console), $err$$ = console.error.bind(console);
 				$assert$$(!$ENVIRONMENT_IS_NODE$$, "node environment detected but not enabled at build time.  Add `node` to `-sENVIRONMENT` to enable.");
 				$assert$$(!$ENVIRONMENT_IS_SHELL$$, "shell environment detected but not enabled at build time.  Add `shell` to `-sENVIRONMENT` to enable.");
@@ -735,8 +731,8 @@
 							$parts$jscomp$1_path$jscomp$11$$ = $parts$jscomp$1_path$jscomp$11$$.split("/");
 							for (var $parent$jscomp$10$$ = $root$jscomp$4$$, $i$jscomp$13$$ = 0; $i$jscomp$13$$ < $parts$jscomp$1_path$jscomp$11$$.length - 1; $i$jscomp$13$$++) {
 								var $curr$$ = $parts$jscomp$1_path$jscomp$11$$.slice(0, $i$jscomp$13$$ + 1).join("/");
-								let $$jscomp$logical$assign$tmpm1962304358$3$$, $$jscomp$logical$assign$tmpindexm1962304358$3$$;
-								($$jscomp$logical$assign$tmpm1962304358$3$$ = $createdParents$$)[$$jscomp$logical$assign$tmpindexm1962304358$3$$ = $curr$$] || ($$jscomp$logical$assign$tmpm1962304358$3$$[$$jscomp$logical$assign$tmpindexm1962304358$3$$] = $WORKERFS$$.createNode($parent$jscomp$10$$, $parts$jscomp$1_path$jscomp$11$$[$i$jscomp$13$$], $WORKERFS$$.$DIR_MODE$, 0));
+								let $$jscomp$logical$assign$tmpm1173223056$3$$, $$jscomp$logical$assign$tmpindexm1173223056$3$$;
+								($$jscomp$logical$assign$tmpm1173223056$3$$ = $createdParents$$)[$$jscomp$logical$assign$tmpindexm1173223056$3$$ = $curr$$] || ($$jscomp$logical$assign$tmpm1173223056$3$$[$$jscomp$logical$assign$tmpindexm1173223056$3$$] = $WORKERFS$$.createNode($parent$jscomp$10$$, $parts$jscomp$1_path$jscomp$11$$[$i$jscomp$13$$], $WORKERFS$$.$DIR_MODE$, 0));
 								$parent$jscomp$10$$ = $createdParents$$[$curr$$];
 							}
 							return $parent$jscomp$10$$;
@@ -1056,26 +1052,29 @@
 						for (var $current_link$$ = $FS$$.root, $current_path$$ = "/", $i$jscomp$14$$ = 0; $i$jscomp$14$$ < $parts$jscomp$3_path$jscomp$13$$.length; $i$jscomp$14$$++) {
 							var $islast$$ = $i$jscomp$14$$ === $parts$jscomp$3_path$jscomp$13$$.length - 1;
 							if ($islast$$ && $opts$$.parent) break;
-							if ("." !== $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]) if (".." === $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]) if ($current_path$$ = $PATH$dirname$$($current_path$$), $FS$$.$isRoot$($current_link$$)) {
-								$parts$jscomp$3_path$jscomp$13$$ = $current_path$$ + "/" + $parts$jscomp$3_path$jscomp$13$$.slice($i$jscomp$14$$ + 1).join("/");
-								$nlinks$$--;
-								continue a;
-							} else $current_link$$ = $current_link$$.parent;
-							else {
-								$current_path$$ = $PATH$normalize$$($current_path$$ + "/" + $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]);
-								try {
-									$current_link$$ = $JSCompiler_StaticMethods_lookupNode$$($current_link$$, $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]);
-								} catch ($e$jscomp$12$$) {
-									if (44 === $e$jscomp$12$$?.$errno$ && $islast$$ && $opts$$.$noent_okay$) return { path: $current_path$$ };
-									throw $e$jscomp$12$$;
-								}
-								!$current_link$$.$mounted$ || $islast$$ && !$opts$$.$follow_mount$ || ($current_link$$ = $current_link$$.$mounted$.root);
-								if (40960 === ($current_link$$.mode & 61440) && (!$islast$$ || $opts$$.$follow$)) {
-									if (!$current_link$$.$node_ops$.$readlink$) throw new $FS$$.$ErrnoError$(52);
-									$current_link$$ = $current_link$$.$node_ops$.$readlink$($current_link$$);
-									"/" === $current_link$$.charAt(0) || ($current_link$$ = $PATH$dirname$$($current_path$$) + "/" + $current_link$$);
-									$parts$jscomp$3_path$jscomp$13$$ = $current_link$$ + "/" + $parts$jscomp$3_path$jscomp$13$$.slice($i$jscomp$14$$ + 1).join("/");
-									continue a;
+							if ("." !== $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]) {
+								if (".." === $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]) {
+									if ($current_path$$ = $PATH$dirname$$($current_path$$), $FS$$.$isRoot$($current_link$$)) {
+										$parts$jscomp$3_path$jscomp$13$$ = $current_path$$ + "/" + $parts$jscomp$3_path$jscomp$13$$.slice($i$jscomp$14$$ + 1).join("/");
+										$nlinks$$--;
+										continue a;
+									} else $current_link$$ = $current_link$$.parent;
+								} else {
+									$current_path$$ = $PATH$normalize$$($current_path$$ + "/" + $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]);
+									try {
+										$current_link$$ = $JSCompiler_StaticMethods_lookupNode$$($current_link$$, $parts$jscomp$3_path$jscomp$13$$[$i$jscomp$14$$]);
+									} catch ($e$jscomp$12$$) {
+										if (44 === $e$jscomp$12$$?.$errno$ && $islast$$ && $opts$$.$noent_okay$) return { path: $current_path$$ };
+										throw $e$jscomp$12$$;
+									}
+									!$current_link$$.$mounted$ || $islast$$ && !$opts$$.$follow_mount$ || ($current_link$$ = $current_link$$.$mounted$.root);
+									if (40960 === ($current_link$$.mode & 61440) && (!$islast$$ || $opts$$.$follow$)) {
+										if (!$current_link$$.$node_ops$.$readlink$) throw new $FS$$.$ErrnoError$(52);
+										$current_link$$ = $current_link$$.$node_ops$.$readlink$($current_link$$);
+										"/" === $current_link$$.charAt(0) || ($current_link$$ = $PATH$dirname$$($current_path$$) + "/" + $current_link$$);
+										$parts$jscomp$3_path$jscomp$13$$ = $current_link$$ + "/" + $parts$jscomp$3_path$jscomp$13$$.slice($i$jscomp$14$$ + 1).join("/");
+										continue a;
+									}
 								}
 							}
 						}
@@ -1209,6 +1208,18 @@
 						timestamp: Date.now()
 					});
 				}
+				function $JSCompiler_StaticMethods_readFile$$($length$jscomp$30_path$jscomp$34$$, $opts$jscomp$2$$ = {}) {
+					$opts$jscomp$2$$.flags = $opts$jscomp$2$$.flags || 0;
+					$opts$jscomp$2$$.encoding = $opts$jscomp$2$$.encoding || "binary";
+					"utf8" !== $opts$jscomp$2$$.encoding && "binary" !== $opts$jscomp$2$$.encoding && $abort$$(`Invalid encoding type "${$opts$jscomp$2$$.encoding}"`);
+					var $stream$jscomp$39$$ = $FS$$.open($length$jscomp$30_path$jscomp$34$$, $opts$jscomp$2$$.flags);
+					$length$jscomp$30_path$jscomp$34$$ = $FS$$.stat($length$jscomp$30_path$jscomp$34$$).size;
+					var $buf$$ = new Uint8Array($length$jscomp$30_path$jscomp$34$$);
+					$FS$$.read($stream$jscomp$39$$, $buf$$, 0, $length$jscomp$30_path$jscomp$34$$, 0);
+					"utf8" === $opts$jscomp$2$$.encoding && ($buf$$ = $UTF8ArrayToString$$($buf$$));
+					$FS$$.close($stream$jscomp$39$$);
+					return $buf$$;
+				}
 				function $JSCompiler_StaticMethods_analyzePath$$($path$jscomp$38$$, $dontResolveLastLink$jscomp$1$$) {
 					try {
 						var $lookup$jscomp$16$$ = $JSCompiler_StaticMethods_lookupPath$$($path$jscomp$38$$, { $follow$: !$dontResolveLastLink$jscomp$1$$ });
@@ -1238,11 +1249,13 @@
 					return $FS$$.create($name$jscomp$101_path$jscomp$40$$, $FS_getMode$$($canRead$jscomp$4$$, $canWrite$jscomp$4$$));
 				}
 				function $JSCompiler_StaticMethods_forceLoadFile$$($obj$jscomp$30$$) {
-					if (!($obj$jscomp$30$$.$isDevice$ || $obj$jscomp$30$$.$isFolder$ || $obj$jscomp$30$$.link || $obj$jscomp$30$$.$contents$)) if (globalThis.XMLHttpRequest) $abort$$("Lazy loading should have been performed (contents set) in createLazyFile, but it was not. Lazy loading only works in web workers. Use --embed-file or --preload-file in emcc on the main thread.");
-					else try {
-						$obj$jscomp$30$$.$contents$ = $readBinary$$($obj$jscomp$30$$.url);
-					} catch ($e$jscomp$24$$) {
-						throw new $FS$$.$ErrnoError$(29);
+					if (!($obj$jscomp$30$$.$isDevice$ || $obj$jscomp$30$$.$isFolder$ || $obj$jscomp$30$$.link || $obj$jscomp$30$$.$contents$)) {
+						if (globalThis.XMLHttpRequest) $abort$$("Lazy loading should have been performed (contents set) in createLazyFile, but it was not. Lazy loading only works in web workers. Use --embed-file or --preload-file in emcc on the main thread.");
+						else try {
+							$obj$jscomp$30$$.$contents$ = $readBinary$$($obj$jscomp$30$$.url);
+						} catch ($e$jscomp$24$$) {
+							throw new $FS$$.$ErrnoError$(29);
+						}
 					}
 				}
 				var $FS$$ = {
@@ -1561,12 +1574,14 @@
 							$path$jscomp$33$$ = $created_lookup$jscomp$14$$.path;
 						}
 						$created_lookup$jscomp$14$$ = !1;
-						if ($flags$jscomp$9_stream$jscomp$30$$ & 64) if ($flags$jscomp$inline_96_node$jscomp$48$$) {
-							if ($flags$jscomp$9_stream$jscomp$30$$ & 128) throw new $FS$$.$ErrnoError$(20);
-						} else {
-							if ($errCode$jscomp$11_isDirPath_mode$jscomp$inline_101_perms$jscomp$inline_246$$) throw new $FS$$.$ErrnoError$(31);
-							$flags$jscomp$inline_96_node$jscomp$48$$ = $FS$$.$mknod$($path$jscomp$33$$, $mode$jscomp$39$$ | 511, 0);
-							$created_lookup$jscomp$14$$ = !0;
+						if ($flags$jscomp$9_stream$jscomp$30$$ & 64) {
+							if ($flags$jscomp$inline_96_node$jscomp$48$$) {
+								if ($flags$jscomp$9_stream$jscomp$30$$ & 128) throw new $FS$$.$ErrnoError$(20);
+							} else {
+								if ($errCode$jscomp$11_isDirPath_mode$jscomp$inline_101_perms$jscomp$inline_246$$) throw new $FS$$.$ErrnoError$(31);
+								$flags$jscomp$inline_96_node$jscomp$48$$ = $FS$$.$mknod$($path$jscomp$33$$, $mode$jscomp$39$$ | 511, 0);
+								$created_lookup$jscomp$14$$ = !0;
+							}
 						}
 						if (!$flags$jscomp$inline_96_node$jscomp$48$$) throw new $FS$$.$ErrnoError$(44);
 						8192 === ($flags$jscomp$inline_96_node$jscomp$48$$.mode & 61440) && ($flags$jscomp$9_stream$jscomp$30$$ &= -513);
@@ -1657,18 +1672,6 @@
 						if (!$stream$jscomp$38$$.$stream_ops$.$ioctl$) throw new $FS$$.$ErrnoError$(59);
 						return $stream$jscomp$38$$.$stream_ops$.$ioctl$($stream$jscomp$38$$, $cmd$$, $arg$jscomp$10$$);
 					},
-					$readFile$($length$jscomp$30_path$jscomp$34$$, $opts$jscomp$2$$ = {}) {
-						$opts$jscomp$2$$.flags = $opts$jscomp$2$$.flags || 0;
-						$opts$jscomp$2$$.encoding = $opts$jscomp$2$$.encoding || "binary";
-						"utf8" !== $opts$jscomp$2$$.encoding && "binary" !== $opts$jscomp$2$$.encoding && $abort$$(`Invalid encoding type "${$opts$jscomp$2$$.encoding}"`);
-						var $stream$jscomp$39$$ = $FS$$.open($length$jscomp$30_path$jscomp$34$$, $opts$jscomp$2$$.flags);
-						$length$jscomp$30_path$jscomp$34$$ = $FS$$.stat($length$jscomp$30_path$jscomp$34$$).size;
-						var $buf$$ = new Uint8Array($length$jscomp$30_path$jscomp$34$$);
-						$FS$$.read($stream$jscomp$39$$, $buf$$, 0, $length$jscomp$30_path$jscomp$34$$, 0);
-						"utf8" === $opts$jscomp$2$$.encoding && ($buf$$ = $UTF8ArrayToString$$($buf$$));
-						$FS$$.close($stream$jscomp$39$$);
-						return $buf$$;
-					},
 					$writeFile$($path$jscomp$35_stream$jscomp$40$$, $data$jscomp$83$$, $opts$jscomp$3$$ = {}) {
 						$opts$jscomp$3$$.flags = $opts$jscomp$3$$.flags || 577;
 						$path$jscomp$35_stream$jscomp$40$$ = $FS$$.open($path$jscomp$35_stream$jscomp$40$$, $opts$jscomp$3$$.flags, $opts$jscomp$3$$.mode);
@@ -1713,10 +1716,10 @@
 					$createDevice$($parent$jscomp$31_path$jscomp$42$$, $mode$jscomp$42_name$jscomp$103$$, $input$jscomp$11$$, $output$jscomp$4$$) {
 						$parent$jscomp$31_path$jscomp$42$$ = $PATH$join2$$("string" == typeof $parent$jscomp$31_path$jscomp$42$$ ? $parent$jscomp$31_path$jscomp$42$$ : $JSCompiler_StaticMethods_getPath$$($parent$jscomp$31_path$jscomp$42$$), $mode$jscomp$42_name$jscomp$103$$);
 						$mode$jscomp$42_name$jscomp$103$$ = $FS_getMode$$(!!$input$jscomp$11$$, !!$output$jscomp$4$$);
-						var $$jscomp$logical$assign$tmpm1962304358$6_dev$jscomp$11$$;
-						($$jscomp$logical$assign$tmpm1962304358$6_dev$jscomp$11$$ = $FS$$.$createDevice$).$major$ ?? ($$jscomp$logical$assign$tmpm1962304358$6_dev$jscomp$11$$.$major$ = 64);
-						$$jscomp$logical$assign$tmpm1962304358$6_dev$jscomp$11$$ = $FS$$.$makedev$($FS$$.$createDevice$.$major$++, 0);
-						$JSCompiler_StaticMethods_registerDevice$$($$jscomp$logical$assign$tmpm1962304358$6_dev$jscomp$11$$, {
+						var $$jscomp$logical$assign$tmpm1173223056$6_dev$jscomp$11$$;
+						($$jscomp$logical$assign$tmpm1173223056$6_dev$jscomp$11$$ = $FS$$.$createDevice$).$major$ ?? ($$jscomp$logical$assign$tmpm1173223056$6_dev$jscomp$11$$.$major$ = 64);
+						$$jscomp$logical$assign$tmpm1173223056$6_dev$jscomp$11$$ = $FS$$.$makedev$($FS$$.$createDevice$.$major$++, 0);
+						$JSCompiler_StaticMethods_registerDevice$$($$jscomp$logical$assign$tmpm1173223056$6_dev$jscomp$11$$, {
 							open($stream$jscomp$45$$) {
 								$stream$jscomp$45$$.seekable = !1;
 							},
@@ -1748,7 +1751,7 @@
 								return $i$jscomp$17$$;
 							}
 						});
-						return $JSCompiler_StaticMethods_mkdev$$($parent$jscomp$31_path$jscomp$42$$, $mode$jscomp$42_name$jscomp$103$$, $$jscomp$logical$assign$tmpm1962304358$6_dev$jscomp$11$$);
+						return $JSCompiler_StaticMethods_mkdev$$($parent$jscomp$31_path$jscomp$42$$, $mode$jscomp$42_name$jscomp$103$$, $$jscomp$logical$assign$tmpm1173223056$6_dev$jscomp$11$$);
 					},
 					$createLazyFile$($parent$jscomp$32_stream_ops$$, $name$jscomp$104$$, $url$jscomp$29$$, $canRead$jscomp$6$$, $canWrite$jscomp$6$$) {
 						function $writeChunks$$($contents$jscomp$5_stream$jscomp$49$$, $buffer$jscomp$31$$, $offset$jscomp$42$$, $length$jscomp$34_size$jscomp$25$$, $position$jscomp$11$$) {
@@ -1973,6 +1976,32 @@
 					var $func$jscomp$7$$ = $Module$$["_" + $ident$jscomp$1$$];
 					$assert$$($func$jscomp$7$$, "Cannot call unknown function " + $ident$jscomp$1$$ + ", make sure it is exported");
 					return $func$jscomp$7$$;
+				}, $ccall$$ = ($func$jscomp$8_ident$jscomp$2$$, $returnType$$, $argTypes_ret$jscomp$11$$, $args$jscomp$8$$) => {
+					var $toC$$ = {
+						string: ($str$jscomp$16$$) => {
+							var $ret$jscomp$12$$ = 0;
+							null !== $str$jscomp$16$$ && void 0 !== $str$jscomp$16$$ && 0 !== $str$jscomp$16$$ && ($ret$jscomp$12$$ = $stringToUTF8OnStack$$($str$jscomp$16$$));
+							return $ret$jscomp$12$$;
+						},
+						array: ($arr$jscomp$3$$) => {
+							var $ret$jscomp$13$$ = $__emscripten_stack_alloc$$($arr$jscomp$3$$.length);
+							$assert$$(0 <= $arr$jscomp$3$$.length, "writeArrayToMemory array must have a length (should be an array or typed array)");
+							$HEAP8$$.set($arr$jscomp$3$$, $ret$jscomp$13$$ >>> 0);
+							return $ret$jscomp$13$$;
+						}
+					};
+					$func$jscomp$8_ident$jscomp$2$$ = $getCFunc$$($func$jscomp$8_ident$jscomp$2$$);
+					var $cArgs$$ = [], $stack$jscomp$1$$ = 0;
+					$assert$$("array" !== $returnType$$, "Return type should not be \"array\".");
+					if ($args$jscomp$8$$) for (var $i$jscomp$23$$ = 0; $i$jscomp$23$$ < $args$jscomp$8$$.length; $i$jscomp$23$$++) {
+						var $converter$$ = $toC$$[$argTypes_ret$jscomp$11$$[$i$jscomp$23$$]];
+						$converter$$ ? (0 === $stack$jscomp$1$$ && ($stack$jscomp$1$$ = $_emscripten_stack_get_current$$()), $cArgs$$[$i$jscomp$23$$] = $converter$$($args$jscomp$8$$[$i$jscomp$23$$])) : $cArgs$$[$i$jscomp$23$$] = $args$jscomp$8$$[$i$jscomp$23$$];
+					}
+					$argTypes_ret$jscomp$11$$ = $func$jscomp$8_ident$jscomp$2$$(...$cArgs$$);
+					return $argTypes_ret$jscomp$11$$ = function($ret$jscomp$15$$) {
+						0 !== $stack$jscomp$1$$ && $__emscripten_stack_restore$$($stack$jscomp$1$$);
+						return "string" === $returnType$$ ? $UTF8ToString$$($ret$jscomp$15$$) : "pointer" === $returnType$$ ? $ret$jscomp$15$$ >>> 0 : "boolean" === $returnType$$ ? !!$ret$jscomp$15$$ : $ret$jscomp$15$$;
+					}($argTypes_ret$jscomp$11$$);
 				}, $wasmTableMirror$$ = [], $functionsInTableMap$$, $freeTableIndexes$$ = [], $uleb128EncodeWithLen$$ = ($arr$jscomp$4$$) => {
 					const $n$jscomp$4$$ = $arr$jscomp$4$$.length;
 					$assert$$(16384 > $n$jscomp$4$$);
@@ -2083,33 +2112,8 @@
 				if ($Module$$.preInit) for ("function" == typeof $Module$$.preInit && ($Module$$.preInit = [$Module$$.preInit]); 0 < $Module$$.preInit.length;) $Module$$.preInit.shift()();
 				$consumedModuleProp$$("preInit");
 				$Module$$.callMain = $callMain$$;
-				$Module$$.ccall = ($func$jscomp$8_ident$jscomp$2$$, $returnType$$, $argTypes_ret$jscomp$11$$, $args$jscomp$8$$) => {
-					var $toC$$ = {
-						string: ($str$jscomp$16$$) => {
-							var $ret$jscomp$12$$ = 0;
-							null !== $str$jscomp$16$$ && void 0 !== $str$jscomp$16$$ && 0 !== $str$jscomp$16$$ && ($ret$jscomp$12$$ = $stringToUTF8OnStack$$($str$jscomp$16$$));
-							return $ret$jscomp$12$$;
-						},
-						array: ($arr$jscomp$3$$) => {
-							var $ret$jscomp$13$$ = $__emscripten_stack_alloc$$($arr$jscomp$3$$.length);
-							$assert$$(0 <= $arr$jscomp$3$$.length, "writeArrayToMemory array must have a length (should be an array or typed array)");
-							$HEAP8$$.set($arr$jscomp$3$$, $ret$jscomp$13$$ >>> 0);
-							return $ret$jscomp$13$$;
-						}
-					};
-					$func$jscomp$8_ident$jscomp$2$$ = $getCFunc$$($func$jscomp$8_ident$jscomp$2$$);
-					var $cArgs$$ = [], $stack$jscomp$1$$ = 0;
-					$assert$$("array" !== $returnType$$, "Return type should not be \"array\".");
-					if ($args$jscomp$8$$) for (var $i$jscomp$23$$ = 0; $i$jscomp$23$$ < $args$jscomp$8$$.length; $i$jscomp$23$$++) {
-						var $converter$$ = $toC$$[$argTypes_ret$jscomp$11$$[$i$jscomp$23$$]];
-						$converter$$ ? (0 === $stack$jscomp$1$$ && ($stack$jscomp$1$$ = $_emscripten_stack_get_current$$()), $cArgs$$[$i$jscomp$23$$] = $converter$$($args$jscomp$8$$[$i$jscomp$23$$])) : $cArgs$$[$i$jscomp$23$$] = $args$jscomp$8$$[$i$jscomp$23$$];
-					}
-					$argTypes_ret$jscomp$11$$ = $func$jscomp$8_ident$jscomp$2$$(...$cArgs$$);
-					return $argTypes_ret$jscomp$11$$ = function($ret$jscomp$15$$) {
-						0 !== $stack$jscomp$1$$ && $__emscripten_stack_restore$$($stack$jscomp$1$$);
-						return "string" === $returnType$$ ? $UTF8ToString$$($ret$jscomp$15$$) : "pointer" === $returnType$$ ? $ret$jscomp$15$$ >>> 0 : "boolean" === $returnType$$ ? !!$ret$jscomp$15$$ : $ret$jscomp$15$$;
-					}($argTypes_ret$jscomp$11$$);
-				};
+				$Module$$.ccall = $ccall$$;
+				$Module$$.cwrap = ($ident$jscomp$3$$, $returnType$jscomp$1$$, $argTypes$jscomp$1$$, $opts$jscomp$5$$) => (...$args$jscomp$9$$) => $ccall$$($ident$jscomp$3$$, $returnType$jscomp$1$$, $argTypes$jscomp$1$$, $args$jscomp$9$$, $opts$jscomp$5$$);
 				$Module$$.addFunction = ($func$jscomp$13$$, $bytes$jscomp$inline_137_module$jscomp$inline_138_sig$jscomp$1_wrapped$$) => {
 					$assert$$("undefined" != typeof $func$jscomp$13$$);
 					if (!$functionsInTableMap$$) {
@@ -2155,22 +2159,25 @@
 					$functionsInTableMap$$.set($func$jscomp$13$$, $ret$jscomp$16$$);
 					return $ret$jscomp$16$$;
 				};
-				$Module$$.FS_unlink = (...$args$jscomp$12$$) => $FS$$.$unlink$(...$args$jscomp$12$$);
+				$Module$$.FS_unlink = (...$args$jscomp$13$$) => $FS$$.$unlink$(...$args$jscomp$13$$);
+				$Module$$.FS_readFile = (...$args$jscomp$15$$) => $JSCompiler_StaticMethods_readFile$$(...$args$jscomp$15$$);
 				$Module$$.FS = $FS$$;
-				$Module$$.FS_lookupPath = (...$args$jscomp$11$$) => $JSCompiler_StaticMethods_lookupPath$$(...$args$jscomp$11$$);
-				$Module$$.FS_mount = (...$args$jscomp$10$$) => $FS$$.$mount$(...$args$jscomp$10$$);
-				$Module$$.FS_mkdir = (...$args$jscomp$9$$) => $JSCompiler_StaticMethods_mkdir$$(...$args$jscomp$9$$);
+				$Module$$.FS_lookupPath = (...$args$jscomp$12$$) => $JSCompiler_StaticMethods_lookupPath$$(...$args$jscomp$12$$);
+				$Module$$.FS_mount = (...$args$jscomp$11$$) => $FS$$.$mount$(...$args$jscomp$11$$);
+				$Module$$.FS_mkdir = (...$args$jscomp$10$$) => $JSCompiler_StaticMethods_mkdir$$(...$args$jscomp$10$$);
+				$Module$$.FS_readdir = (...$args$jscomp$14$$) => $FS$$.$readdir$(...$args$jscomp$14$$);
 				$Module$$.WORKERFS = $WORKERFS$$;
-				"writeI53ToI64 writeI53ToI64Clamped writeI53ToI64Signaling writeI53ToU64Clamped writeI53ToU64Signaling readI53FromU64 convertI32PairToI53 convertI32PairToI53Checked convertU32PairToI53 getTempRet0 setTempRet0 createNamedFunction withStackSave inetPton4 inetNtop4 inetPton6 inetNtop6 readSockaddr writeSockaddr runMainThreadEmAsm jstoi_q autoResumeAudioContext getDynCaller dynCall runtimeKeepalivePush runtimeKeepalivePop callUserCallback maybeExit asmjsMangle HandleAllocator addOnInit addOnPostCtor addOnPreMain addOnExit STACK_SIZE STACK_ALIGN POINTER_SIZE ASSERTIONS cwrap removeFunction intArrayToString AsciiToString stringToAscii UTF16ToString stringToUTF16 lengthBytesUTF16 UTF32ToString stringToUTF32 lengthBytesUTF32 registerKeyEventCallback maybeCStringToJsString findEventTarget getBoundingClientRect fillMouseEventData registerMouseEventCallback registerWheelEventCallback registerUiEventCallback registerFocusEventCallback fillDeviceOrientationEventData registerDeviceOrientationEventCallback fillDeviceMotionEventData registerDeviceMotionEventCallback screenOrientation fillOrientationChangeEventData registerOrientationChangeEventCallback fillFullscreenChangeEventData registerFullscreenChangeEventCallback JSEvents_requestFullscreen JSEvents_resizeCanvasForFullscreen registerRestoreOldStyle hideEverythingExceptGivenElement restoreHiddenElements setLetterbox softFullscreenResizeWebGLRenderTarget doRequestFullscreen fillPointerlockChangeEventData registerPointerlockChangeEventCallback registerPointerlockErrorEventCallback requestPointerLock fillVisibilityChangeEventData registerVisibilityChangeEventCallback registerTouchEventCallback fillGamepadEventData registerGamepadEventCallback registerBeforeUnloadEventCallback fillBatteryEventData registerBatteryEventCallback setCanvasElementSize getCanvasElementSize getCallstack convertPCtoSourceLocation wasiRightsToMuslOFlags wasiOFlagsToMuslOFlags safeSetTimeout setImmediateWrapped safeRequestAnimationFrame clearImmediateWrapped registerPostMainLoop registerPreMainLoop getPromise makePromise idsToPromises makePromiseCallback ExceptionInfo findMatchingCatch Browser_asyncPrepareDataCounter arraySum addDays getSocketFromFD getSocketAddress FS_mkdirTree _setNetworkCallback heapObjectForWebGLType toTypedArrayIndex webgl_enable_ANGLE_instanced_arrays webgl_enable_OES_vertex_array_object webgl_enable_WEBGL_draw_buffers webgl_enable_WEBGL_multi_draw webgl_enable_EXT_polygon_offset_clamp webgl_enable_EXT_clip_control webgl_enable_WEBGL_polygon_mode emscriptenWebGLGet computeUnpackAlignedImageSize colorChannelsInGlTextureFormat emscriptenWebGLGetTexPixelData emscriptenWebGLGetUniform webglGetUniformLocation webglPrepareUniformLocationsBeforeFirstUse webglGetLeftBracePos emscriptenWebGLGetVertexAttrib __glGetActiveAttribOrUniform writeGLArray registerWebGlEventCallback runAndAbortIfError ALLOC_NORMAL ALLOC_STACK allocate writeStringToMemory writeAsciiToMemory allocateUTF8 allocateUTF8OnStack demangle stackTrace getNativeTypeSize".split(" ").forEach(function($sym$jscomp$2$$) {
+				"writeI53ToI64 writeI53ToI64Clamped writeI53ToI64Signaling writeI53ToU64Clamped writeI53ToU64Signaling readI53FromU64 convertI32PairToI53 convertI32PairToI53Checked convertU32PairToI53 getTempRet0 setTempRet0 createNamedFunction withStackSave inetPton4 inetNtop4 inetPton6 inetNtop6 readSockaddr writeSockaddr runMainThreadEmAsm jstoi_q autoResumeAudioContext getDynCaller dynCall runtimeKeepalivePush runtimeKeepalivePop callUserCallback maybeExit asmjsMangle HandleAllocator addOnInit addOnPostCtor addOnPreMain addOnExit STACK_SIZE STACK_ALIGN POINTER_SIZE ASSERTIONS removeFunction intArrayToString AsciiToString stringToAscii UTF16ToString stringToUTF16 lengthBytesUTF16 UTF32ToString stringToUTF32 lengthBytesUTF32 registerKeyEventCallback maybeCStringToJsString findEventTarget getBoundingClientRect fillMouseEventData registerMouseEventCallback registerWheelEventCallback registerUiEventCallback registerFocusEventCallback fillDeviceOrientationEventData registerDeviceOrientationEventCallback fillDeviceMotionEventData registerDeviceMotionEventCallback screenOrientation fillOrientationChangeEventData registerOrientationChangeEventCallback fillFullscreenChangeEventData registerFullscreenChangeEventCallback JSEvents_requestFullscreen JSEvents_resizeCanvasForFullscreen registerRestoreOldStyle hideEverythingExceptGivenElement restoreHiddenElements setLetterbox softFullscreenResizeWebGLRenderTarget doRequestFullscreen fillPointerlockChangeEventData registerPointerlockChangeEventCallback registerPointerlockErrorEventCallback requestPointerLock fillVisibilityChangeEventData registerVisibilityChangeEventCallback registerTouchEventCallback fillGamepadEventData registerGamepadEventCallback registerBeforeUnloadEventCallback fillBatteryEventData registerBatteryEventCallback setCanvasElementSize getCanvasElementSize getCallstack convertPCtoSourceLocation wasiRightsToMuslOFlags wasiOFlagsToMuslOFlags safeSetTimeout setImmediateWrapped safeRequestAnimationFrame clearImmediateWrapped registerPostMainLoop registerPreMainLoop getPromise makePromise idsToPromises makePromiseCallback ExceptionInfo findMatchingCatch Browser_asyncPrepareDataCounter arraySum addDays getSocketFromFD getSocketAddress FS_mkdirTree _setNetworkCallback heapObjectForWebGLType toTypedArrayIndex webgl_enable_ANGLE_instanced_arrays webgl_enable_OES_vertex_array_object webgl_enable_WEBGL_draw_buffers webgl_enable_WEBGL_multi_draw webgl_enable_EXT_polygon_offset_clamp webgl_enable_EXT_clip_control webgl_enable_WEBGL_polygon_mode emscriptenWebGLGet computeUnpackAlignedImageSize colorChannelsInGlTextureFormat emscriptenWebGLGetTexPixelData emscriptenWebGLGetUniform webglGetUniformLocation webglPrepareUniformLocationsBeforeFirstUse webglGetLeftBracePos emscriptenWebGLGetVertexAttrib __glGetActiveAttribOrUniform writeGLArray registerWebGlEventCallback runAndAbortIfError ALLOC_NORMAL ALLOC_STACK allocate writeStringToMemory writeAsciiToMemory allocateUTF8 allocateUTF8OnStack demangle stackTrace getNativeTypeSize".split(" ").forEach(function($sym$jscomp$2$$) {
 					$unexportedRuntimeSymbol$$($sym$jscomp$2$$);
 				});
-				"run out err abort wasmExports HEAPF32 HEAPF64 HEAP8 HEAP16 HEAPU16 HEAP32 HEAPU32 HEAP64 HEAPU64 writeStackCookie checkStackCookie readI53FromI64 INT53_MAX INT53_MIN bigintToI53Checked stackSave stackRestore stackAlloc ptrToString zeroMemory exitJS getHeapMax growMemory ENV ERRNO_CODES strError DNS Protocols Sockets timers warnOnce readEmAsmArgsArray readEmAsmArgs runEmAsmFunction getExecutableName handleException keepRuntimeAlive asyncLoad alignMemory mmapAlloc wasmTable wasmMemory getUniqueRunDependency noExitRuntime addRunDependency removeRunDependency addOnPreRun addOnPostRun convertJsFunctionToWasm freeTableIndexes functionsInTableMap getEmptyTableSlot updateTableMap getFunctionAddress setValue getValue PATH PATH_FS UTF8Decoder UTF8ArrayToString UTF8ToString stringToUTF8Array stringToUTF8 lengthBytesUTF8 intArrayFromString UTF16Decoder stringToNewUTF8 stringToUTF8OnStack writeArrayToMemory JSEvents specialHTMLTargets findCanvasEventTarget currentFullscreenStrategy restoreOldWindowedStyle jsStackTrace UNWIND_CACHE ExitStatus getEnvStrings checkWasiClock doReadv doWritev initRandomFill randomFill emSetImmediate emClearImmediate_deps emClearImmediate promiseMap uncaughtExceptionCount exceptionLast exceptionCaught Browser requestFullscreen requestFullScreen setCanvasSize getUserMedia createContext getPreloadedImageData__data wget MONTH_DAYS_REGULAR MONTH_DAYS_LEAP MONTH_DAYS_REGULAR_CUMULATIVE MONTH_DAYS_LEAP_CUMULATIVE isLeapYear ydayFromDate SYSCALLS preloadPlugins FS_createPreloadedFile FS_preloadFile FS_modeStringToFlags FS_getMode FS_fileDataToTypedArray FS_stdin_getChar_buffer FS_stdin_getChar FS_createPath FS_createDevice FS_readFile FS_root FS_mounts FS_devices FS_streams FS_nextInode FS_nameTable FS_currentPath FS_initialized FS_ignorePermissions FS_filesystems FS_syncFSRequests FS_getPath FS_hashName FS_hashAddNode FS_hashRemoveNode FS_lookupNode FS_createNode FS_destroyNode FS_isRoot FS_isMountpoint FS_isFile FS_isDir FS_isLink FS_isChrdev FS_isBlkdev FS_isFIFO FS_isSocket FS_flagsToPermissionString FS_nodePermissions FS_mayLookup FS_mayCreate FS_mayDelete FS_mayOpen FS_checkOpExists FS_nextfd FS_getStreamChecked FS_getStream FS_createStream FS_closeStream FS_dupStream FS_doSetAttr FS_chrdev_stream_ops FS_major FS_minor FS_makedev FS_registerDevice FS_getDevice FS_getMounts FS_syncfs FS_unmount FS_lookup FS_mknod FS_statfs FS_statfsStream FS_statfsNode FS_create FS_mkdev FS_symlink FS_rename FS_rmdir FS_readdir FS_readlink FS_stat FS_fstat FS_lstat FS_doChmod FS_chmod FS_lchmod FS_fchmod FS_doChown FS_chown FS_lchown FS_fchown FS_doTruncate FS_truncate FS_ftruncate FS_utime FS_open FS_close FS_isClosed FS_llseek FS_read FS_write FS_mmap FS_msync FS_ioctl FS_writeFile FS_cwd FS_chdir FS_createDefaultDirectories FS_createDefaultDevices FS_createSpecialDirectories FS_createStandardStreams FS_staticInit FS_init FS_quit FS_findObject FS_analyzePath FS_createFile FS_createDataFile FS_forceLoadFile FS_createLazyFile MEMFS TTY PIPEFS SOCKFS tempFixedLengthArray miniTempWebGLFloatBuffers miniTempWebGLIntBuffers GL AL GLUT EGL GLEW IDBStore SDL SDL_gfx print printErr jstoi_s".split(" ").forEach($unexportedRuntimeSymbol$$);
-				var $ASM_CONSTS$$ = { 4887036: () => "undefined" !== typeof wasmOffsetConverter }, $_main$$ = $Module$$._main = $makeInvalidEarlyAccess$$("_main"), $_strerror$$ = $makeInvalidEarlyAccess$$("_strerror"), $_malloc$$ = $makeInvalidEarlyAccess$$("_malloc"), $_free$$ = $makeInvalidEarlyAccess$$("_free"), $_fflush$$ = $makeInvalidEarlyAccess$$("_fflush");
+				"run out err abort wasmExports HEAPF32 HEAPF64 HEAP8 HEAP16 HEAPU16 HEAP32 HEAPU32 HEAP64 HEAPU64 writeStackCookie checkStackCookie readI53FromI64 INT53_MAX INT53_MIN bigintToI53Checked stackSave stackRestore stackAlloc ptrToString zeroMemory exitJS getHeapMax growMemory ENV ERRNO_CODES strError DNS Protocols Sockets timers warnOnce readEmAsmArgsArray readEmAsmArgs runEmAsmFunction getExecutableName handleException keepRuntimeAlive asyncLoad alignMemory mmapAlloc wasmTable wasmMemory getUniqueRunDependency noExitRuntime addRunDependency removeRunDependency addOnPreRun addOnPostRun convertJsFunctionToWasm freeTableIndexes functionsInTableMap getEmptyTableSlot updateTableMap getFunctionAddress setValue getValue PATH PATH_FS UTF8Decoder UTF8ArrayToString UTF8ToString stringToUTF8Array stringToUTF8 lengthBytesUTF8 intArrayFromString UTF16Decoder stringToNewUTF8 stringToUTF8OnStack writeArrayToMemory JSEvents specialHTMLTargets findCanvasEventTarget currentFullscreenStrategy restoreOldWindowedStyle jsStackTrace UNWIND_CACHE ExitStatus getEnvStrings checkWasiClock doReadv doWritev initRandomFill randomFill emSetImmediate emClearImmediate_deps emClearImmediate promiseMap uncaughtExceptionCount exceptionLast exceptionCaught Browser requestFullscreen requestFullScreen setCanvasSize getUserMedia createContext getPreloadedImageData__data wget MONTH_DAYS_REGULAR MONTH_DAYS_LEAP MONTH_DAYS_REGULAR_CUMULATIVE MONTH_DAYS_LEAP_CUMULATIVE isLeapYear ydayFromDate SYSCALLS preloadPlugins FS_createPreloadedFile FS_preloadFile FS_modeStringToFlags FS_getMode FS_fileDataToTypedArray FS_stdin_getChar_buffer FS_stdin_getChar FS_createPath FS_createDevice FS_root FS_mounts FS_devices FS_streams FS_nextInode FS_nameTable FS_currentPath FS_initialized FS_ignorePermissions FS_filesystems FS_syncFSRequests FS_getPath FS_hashName FS_hashAddNode FS_hashRemoveNode FS_lookupNode FS_createNode FS_destroyNode FS_isRoot FS_isMountpoint FS_isFile FS_isDir FS_isLink FS_isChrdev FS_isBlkdev FS_isFIFO FS_isSocket FS_flagsToPermissionString FS_nodePermissions FS_mayLookup FS_mayCreate FS_mayDelete FS_mayOpen FS_checkOpExists FS_nextfd FS_getStreamChecked FS_getStream FS_createStream FS_closeStream FS_dupStream FS_doSetAttr FS_chrdev_stream_ops FS_major FS_minor FS_makedev FS_registerDevice FS_getDevice FS_getMounts FS_syncfs FS_unmount FS_lookup FS_mknod FS_statfs FS_statfsStream FS_statfsNode FS_create FS_mkdev FS_symlink FS_rename FS_rmdir FS_readlink FS_stat FS_fstat FS_lstat FS_doChmod FS_chmod FS_lchmod FS_fchmod FS_doChown FS_chown FS_lchown FS_fchown FS_doTruncate FS_truncate FS_ftruncate FS_utime FS_open FS_close FS_isClosed FS_llseek FS_read FS_write FS_mmap FS_msync FS_ioctl FS_writeFile FS_cwd FS_chdir FS_createDefaultDirectories FS_createDefaultDevices FS_createSpecialDirectories FS_createStandardStreams FS_staticInit FS_init FS_quit FS_findObject FS_analyzePath FS_createFile FS_createDataFile FS_forceLoadFile FS_createLazyFile MEMFS TTY PIPEFS SOCKFS tempFixedLengthArray miniTempWebGLFloatBuffers miniTempWebGLIntBuffers GL AL GLUT EGL GLEW IDBStore SDL SDL_gfx print printErr jstoi_s".split(" ").forEach($unexportedRuntimeSymbol$$);
+				var $ASM_CONSTS$$ = { 4989812: () => "undefined" !== typeof wasmOffsetConverter }, $_main$$ = $Module$$._main = $makeInvalidEarlyAccess$$("_main"), $_strerror$$ = $makeInvalidEarlyAccess$$("_strerror"), $_malloc$$ = $makeInvalidEarlyAccess$$("_malloc"), $_free$$ = $makeInvalidEarlyAccess$$("_free"), $_fflush$$ = $makeInvalidEarlyAccess$$("_fflush");
 				$Module$$._SynqPerfettoParseAlloc = $makeInvalidEarlyAccess$$("_SynqPerfettoParseAlloc");
 				$Module$$._SynqPerfettoParseFree = $makeInvalidEarlyAccess$$("_SynqPerfettoParseFree");
 				$Module$$._SynqPerfettoParse = $makeInvalidEarlyAccess$$("_SynqPerfettoParse");
 				$Module$$._synq_extent_on_shift = $makeInvalidEarlyAccess$$("_synq_extent_on_shift");
 				$Module$$._SynqPerfettoGetToken = $makeInvalidEarlyAccess$$("_SynqPerfettoGetToken");
+				$Module$$._synq_extent_record_list_append = $makeInvalidEarlyAccess$$("_synq_extent_record_list_append");
 				$Module$$._synq_extent_on_reduce = $makeInvalidEarlyAccess$$("_synq_extent_on_reduce");
 				$Module$$._synq_extent_fold_below_into_top = $makeInvalidEarlyAccess$$("_synq_extent_fold_below_into_top");
 				$Module$$._SynqPerfettoParseInit = $makeInvalidEarlyAccess$$("_SynqPerfettoParseInit");
@@ -2480,13 +2487,23 @@
 							return -$e$jscomp$40$$.$errno$;
 						}
 					},
+					__syscall_renameat: function($olddirfd$$, $oldpath$jscomp$2$$, $newdirfd$$, $newpath$jscomp$1$$) {
+						$oldpath$jscomp$2$$ >>>= 0;
+						$newpath$jscomp$1$$ >>>= 0;
+						try {
+							return $oldpath$jscomp$2$$ = $UTF8ToString$$($oldpath$jscomp$2$$), $newpath$jscomp$1$$ = $UTF8ToString$$($newpath$jscomp$1$$), $oldpath$jscomp$2$$ = $SYSCALLS$calculateAt$$($olddirfd$$, $oldpath$jscomp$2$$), $newpath$jscomp$1$$ = $SYSCALLS$calculateAt$$($newdirfd$$, $newpath$jscomp$1$$), $FS$$.$rename$($oldpath$jscomp$2$$, $newpath$jscomp$1$$), 0;
+						} catch ($e$jscomp$41$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$41$$.name) throw $e$jscomp$41$$;
+							return -$e$jscomp$41$$.$errno$;
+						}
+					},
 					__syscall_rmdir: function($path$jscomp$51$$) {
 						$path$jscomp$51$$ >>>= 0;
 						try {
 							return $path$jscomp$51$$ = $UTF8ToString$$($path$jscomp$51$$), $FS$$.$rmdir$($path$jscomp$51$$), 0;
-						} catch ($e$jscomp$41$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$41$$.name) throw $e$jscomp$41$$;
-							return -$e$jscomp$41$$.$errno$;
+						} catch ($e$jscomp$42$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$42$$.name) throw $e$jscomp$42$$;
+							return -$e$jscomp$42$$.$errno$;
 						}
 					},
 					__syscall_stat64: function($path$jscomp$52$$, $buf$jscomp$8$$) {
@@ -2494,9 +2511,9 @@
 						$buf$jscomp$8$$ >>>= 0;
 						try {
 							return $path$jscomp$52$$ = $UTF8ToString$$($path$jscomp$52$$), $SYSCALLS$writeStat$$($buf$jscomp$8$$, $FS$$.stat($path$jscomp$52$$));
-						} catch ($e$jscomp$42$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$42$$.name) throw $e$jscomp$42$$;
-							return -$e$jscomp$42$$.$errno$;
+						} catch ($e$jscomp$43$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$43$$.name) throw $e$jscomp$43$$;
+							return -$e$jscomp$43$$.$errno$;
 						}
 					},
 					__syscall_unlinkat: function($dirfd$jscomp$6$$, $path$jscomp$53$$, $flags$jscomp$16$$) {
@@ -2504,13 +2521,14 @@
 						try {
 							$path$jscomp$53$$ = $UTF8ToString$$($path$jscomp$53$$);
 							$path$jscomp$53$$ = $SYSCALLS$calculateAt$$($dirfd$jscomp$6$$, $path$jscomp$53$$);
-							if ($flags$jscomp$16$$) if (512 === $flags$jscomp$16$$) $FS$$.$rmdir$($path$jscomp$53$$);
-							else return -28;
-							else $FS$$.$unlink$($path$jscomp$53$$);
+							if ($flags$jscomp$16$$) {
+								if (512 === $flags$jscomp$16$$) $FS$$.$rmdir$($path$jscomp$53$$);
+								else return -28;
+							} else $FS$$.$unlink$($path$jscomp$53$$);
 							return 0;
-						} catch ($e$jscomp$43$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$43$$.name) throw $e$jscomp$43$$;
-							return -$e$jscomp$43$$.$errno$;
+						} catch ($e$jscomp$44$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$44$$.name) throw $e$jscomp$44$$;
+							return -$e$jscomp$44$$.$errno$;
 						}
 					},
 					__syscall_utimensat: function($atime$jscomp$inline_165_dirfd$jscomp$7$$, $path$jscomp$54$$, $times$$, $flags$jscomp$17$$) {
@@ -2538,9 +2556,9 @@
 								});
 							}
 							return 0;
-						} catch ($e$jscomp$44$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$44$$.name) throw $e$jscomp$44$$;
-							return -$e$jscomp$44$$.$errno$;
+						} catch ($e$jscomp$45$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$45$$.name) throw $e$jscomp$45$$;
+							return -$e$jscomp$45$$.$errno$;
 						}
 					},
 					_abort_js: () => $abort$$("native code called abort()"),
@@ -2586,9 +2604,9 @@
 							$HEAP32$$[$allocated$jscomp$1$$ >>> 2 >>> 0] = $res$$.$allocated$;
 							$HEAPU32$$[$addr$jscomp$1$$ >>> 2 >>> 0] = $ptr$jscomp$8$$;
 							return 0;
-						} catch ($e$jscomp$45$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$45$$.name) throw $e$jscomp$45$$;
-							return -$e$jscomp$45$$.$errno$;
+						} catch ($e$jscomp$46$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$46$$.name) throw $e$jscomp$46$$;
+							return -$e$jscomp$46$$.$errno$;
 						}
 					},
 					_munmap_js: function($addr$jscomp$2_addr$jscomp$inline_170$$, $len$jscomp$8_len$jscomp$inline_172$$, $prot$jscomp$4$$, $flags$jscomp$19$$, $fd$jscomp$20$$, $offset$jscomp$47_offset$jscomp$inline_174$$) {
@@ -2601,9 +2619,9 @@
 								if (!$FS$$.isFile($stream$jscomp$58$$.node.mode)) throw new $FS$$.$ErrnoError$(43);
 								$flags$jscomp$19$$ & 2 || $FS$$.$msync$($stream$jscomp$58$$, $HEAPU8$$.slice($addr$jscomp$2_addr$jscomp$inline_170$$, $addr$jscomp$2_addr$jscomp$inline_170$$ + $len$jscomp$8_len$jscomp$inline_172$$), $offset$jscomp$47_offset$jscomp$inline_174$$, $len$jscomp$8_len$jscomp$inline_172$$, $flags$jscomp$19$$);
 							}
-						} catch ($e$jscomp$46$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$46$$.name) throw $e$jscomp$46$$;
-							return -$e$jscomp$46$$.$errno$;
+						} catch ($e$jscomp$47$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$47$$.name) throw $e$jscomp$47$$;
+							return -$e$jscomp$47$$.$errno$;
 						}
 					},
 					_timegm_js: function($tmPtr$jscomp$2$$) {
@@ -2745,9 +2763,9 @@
 							var $stream$jscomp$59$$ = $JSCompiler_StaticMethods_getStreamChecked$$($fd$jscomp$21$$);
 							$FS$$.close($stream$jscomp$59$$);
 							return 0;
-						} catch ($e$jscomp$48$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$48$$.name) throw $e$jscomp$48$$;
-							return $e$jscomp$48$$.$errno$;
+						} catch ($e$jscomp$49$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$49$$.name) throw $e$jscomp$49$$;
+							return $e$jscomp$49$$.$errno$;
 						}
 					},
 					fd_fdstat_get: function($fd$jscomp$22$$, $pbuf$$) {
@@ -2759,9 +2777,9 @@
 							$HEAP64$$[$pbuf$$ + 8 >>> 3 >>> 0] = BigInt(0);
 							$HEAP64$$[$pbuf$$ + 16 >>> 3 >>> 0] = BigInt(0);
 							return 0;
-						} catch ($e$jscomp$49$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$49$$.name) throw $e$jscomp$49$$;
-							return $e$jscomp$49$$.$errno$;
+						} catch ($e$jscomp$50$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$50$$.name) throw $e$jscomp$50$$;
+							return $e$jscomp$50$$.$errno$;
 						}
 					},
 					fd_read: function($fd$jscomp$23_iov$jscomp$inline_189$$, $iov$jscomp$1_ret$jscomp$inline_192$$, $iovcnt$jscomp$1_iovcnt$jscomp$inline_190$$, $pnum$$) {
@@ -2788,9 +2806,9 @@
 							}
 							$HEAPU32$$[$pnum$$ >>> 2 >>> 0] = $num$jscomp$7$$;
 							return 0;
-						} catch ($e$jscomp$50$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$50$$.name) throw $e$jscomp$50$$;
-							return $e$jscomp$50$$.$errno$;
+						} catch ($e$jscomp$51$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$51$$.name) throw $e$jscomp$51$$;
+							return $e$jscomp$51$$.$errno$;
 						}
 					},
 					fd_seek: function($fd$jscomp$24$$, $offset$jscomp$50$$, $whence$jscomp$3$$, $newOffset$$) {
@@ -2803,18 +2821,18 @@
 							$HEAP64$$[$newOffset$$ >>> 3 >>> 0] = BigInt($stream$jscomp$63$$.position);
 							$stream$jscomp$63$$.$getdents$ && 0 === $offset$jscomp$50$$ && 0 === $whence$jscomp$3$$ && ($stream$jscomp$63$$.$getdents$ = null);
 							return 0;
-						} catch ($e$jscomp$51$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$51$$.name) throw $e$jscomp$51$$;
-							return $e$jscomp$51$$.$errno$;
+						} catch ($e$jscomp$52$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$52$$.name) throw $e$jscomp$52$$;
+							return $e$jscomp$52$$.$errno$;
 						}
 					},
 					fd_sync: function($fd$jscomp$25$$) {
 						try {
 							var $stream$jscomp$64$$ = $JSCompiler_StaticMethods_getStreamChecked$$($fd$jscomp$25$$);
 							return $stream$jscomp$64$$.$stream_ops$?.$fsync$?.($stream$jscomp$64$$);
-						} catch ($e$jscomp$52$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$52$$.name) throw $e$jscomp$52$$;
-							return $e$jscomp$52$$.$errno$;
+						} catch ($e$jscomp$53$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$53$$.name) throw $e$jscomp$53$$;
+							return $e$jscomp$53$$.$errno$;
 						}
 					},
 					fd_write: function($fd$jscomp$26_iov$jscomp$inline_199$$, $iov$jscomp$3_ret$jscomp$inline_202$$, $iovcnt$jscomp$3_iovcnt$jscomp$inline_200$$, $pnum$jscomp$1$$) {
@@ -2841,9 +2859,9 @@
 							}
 							$HEAPU32$$[$pnum$jscomp$1$$ >>> 2 >>> 0] = $num$jscomp$8$$;
 							return 0;
-						} catch ($e$jscomp$53$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$53$$.name) throw $e$jscomp$53$$;
-							return $e$jscomp$53$$.$errno$;
+						} catch ($e$jscomp$54$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$54$$.name) throw $e$jscomp$54$$;
+							return $e$jscomp$54$$.$errno$;
 						}
 					},
 					proc_exit: $_proc_exit$$,
@@ -2851,9 +2869,9 @@
 						$buffer$jscomp$35$$ >>>= 0;
 						try {
 							return $randomFill$$($HEAPU8$$.subarray($buffer$jscomp$35$$ >>> 0, $buffer$jscomp$35$$ + ($size$jscomp$29$$ >>> 0) >>> 0)), 0;
-						} catch ($e$jscomp$54$$) {
-							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$54$$.name) throw $e$jscomp$54$$;
-							return $e$jscomp$54$$.$errno$;
+						} catch ($e$jscomp$55$$) {
+							if ("undefined" == typeof $FS$$ || "ErrnoError" !== $e$jscomp$55$$.name) throw $e$jscomp$55$$;
+							return $e$jscomp$55$$.$errno$;
 						}
 					}
 				};
@@ -2871,26 +2889,26 @@
 					return $wasmExports$jscomp$2$$;
 				}
 				var $calledRun$$;
-				function $callMain$$($JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$ = []) {
+				function $callMain$$($JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$ = []) {
 					$assert$$(0 == $runDependencies$$, "cannot call main when async dependencies remain! (listen on Module[\"onRuntimeInitialized\"])");
 					$assert$$("undefined" === typeof $onPreRuns$$ || 0 == $onPreRuns$$.length, "cannot call main when preRun functions remain to be called");
 					var $entryFunction$$ = $_main$$;
-					$JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$.unshift($thisProgram$$);
-					var $argc$$ = $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$.length, $argv$$ = $__emscripten_stack_alloc$$(4 * ($argc$$ + 1)), $argv_ptr$$ = $argv$$, $arg$jscomp$12$$;
-					for ($arg$jscomp$12$$ of $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$) $HEAPU32$$[$argv_ptr$$ >>> 2 >>> 0] = $stringToUTF8OnStack$$($arg$jscomp$12$$), $argv_ptr$$ += 4;
+					$JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$.unshift($thisProgram$$);
+					var $argc$$ = $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$.length, $argv$$ = $__emscripten_stack_alloc$$(4 * ($argc$$ + 1)), $argv_ptr$$ = $argv$$, $arg$jscomp$12$$;
+					for ($arg$jscomp$12$$ of $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$) $HEAPU32$$[$argv_ptr$$ >>> 2 >>> 0] = $stringToUTF8OnStack$$($arg$jscomp$12$$), $argv_ptr$$ += 4;
 					$HEAPU32$$[$argv_ptr$$ >>> 2 >>> 0] = 0;
 					try {
 						var $ret$jscomp$17$$ = $entryFunction$$($argc$$, $argv$$);
 						$exitJS$$($ret$jscomp$17$$, !0);
 						return $ret$jscomp$17$$;
-					} catch ($e$jscomp$56$$) {
-						$JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$ = $e$jscomp$56$$;
-						if ($JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$ instanceof $ExitStatus$$ || "unwind" == $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$) $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$ = $EXITSTATUS$$;
-						else throw $checkStackCookie$$(), $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$ instanceof WebAssembly.RuntimeError && 0 >= $_emscripten_stack_get_current$$() && $err$$("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 2097152)"), $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$;
-						return $JSCompiler_inline_result$jscomp$20_args$jscomp$13_e$jscomp$inline_208$$;
+					} catch ($e$jscomp$57$$) {
+						$JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$ = $e$jscomp$57$$;
+						if ($JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$ instanceof $ExitStatus$$ || "unwind" == $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$) $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$ = $EXITSTATUS$$;
+						else throw $checkStackCookie$$(), $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$ instanceof WebAssembly.RuntimeError && 0 >= $_emscripten_stack_get_current$$() && $err$$("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 2097152)"), $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$;
+						return $JSCompiler_inline_result$jscomp$20_args$jscomp$16_e$jscomp$inline_208$$;
 					}
 				}
-				function $run$$($args$jscomp$14$$ = $arguments_$$) {
+				function $run$$($args$jscomp$17$$ = $arguments_$$) {
 					function $doRun$$() {
 						$assert$$(!$calledRun$$);
 						$calledRun$$ = !0;
@@ -2906,7 +2924,7 @@
 							$readyPromiseResolve$$?.($Module$$);
 							$Module$$.onRuntimeInitialized?.();
 							$consumedModuleProp$$("onRuntimeInitialized");
-							$Module$$.noInitialRun || $callMain$$($args$jscomp$14$$);
+							$Module$$.noInitialRun || $callMain$$($args$jscomp$17$$);
 							$checkStackCookie$$();
 							if ($Module$$.postRun) for ("function" == typeof $Module$$.postRun && ($Module$$.postRun = [$Module$$.postRun]); $Module$$.postRun.length;) {
 								var $cb$jscomp$inline_268$$ = $Module$$.postRun.shift();
@@ -2941,7 +2959,7 @@
 							if (!$info$jscomp$1$$) return;
 							$TTY$ttys$$[$info$jscomp$1$$.object.$rdev$]?.output?.length && ($has$$ = !0);
 						}
-					} catch ($e$jscomp$57$$) {}
+					} catch ($e$jscomp$58$$) {}
 					$out$$ = $oldOut$$;
 					$err$$ = $oldErr$$;
 					$has$$ && $warnOnce$$("stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the Emscripten FAQ), or make sure to emit a newline when you printf etc.");
@@ -2960,6 +2978,7 @@
 						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.SynqPerfettoParse, "missing Wasm export: SynqPerfettoParse");
 						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.synq_extent_on_shift, "missing Wasm export: synq_extent_on_shift");
 						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.SynqPerfettoGetToken, "missing Wasm export: SynqPerfettoGetToken");
+						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.synq_extent_record_list_append, "missing Wasm export: synq_extent_record_list_append");
 						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.synq_extent_on_reduce, "missing Wasm export: synq_extent_on_reduce");
 						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.synq_extent_fold_below_into_top, "missing Wasm export: synq_extent_fold_below_into_top");
 						$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_215$$.SynqPerfettoParseInit, "missing Wasm export: SynqPerfettoParseInit");
@@ -2987,6 +3006,7 @@
 						$Module$$._SynqPerfettoParse = $createExportWrapper$$("SynqPerfettoParse", 3);
 						$Module$$._synq_extent_on_shift = $createExportWrapper$$("synq_extent_on_shift", 3);
 						$Module$$._SynqPerfettoGetToken = $createExportWrapper$$("SynqPerfettoGetToken", 3);
+						$Module$$._synq_extent_record_list_append = $createExportWrapper$$("synq_extent_record_list_append", 3);
 						$Module$$._synq_extent_on_reduce = $createExportWrapper$$("synq_extent_on_reduce", 2);
 						$Module$$._synq_extent_fold_below_into_top = $createExportWrapper$$("synq_extent_fold_below_into_top", 1);
 						$Module$$._SynqPerfettoParseInit = $createExportWrapper$$("SynqPerfettoParseInit", 2);
@@ -3073,11 +3093,7 @@
 			error
 		});
 	}
-	function fsNodeToBuffer(fsNode) {
-		const fileSize = ensureExists(fsNode.usedBytes);
-		return new Uint8Array(fsNode.contents.buffer, 0, fileSize);
-	}
-	async function runTraceconv(trace, args) {
+	async function runTraceconv(trace, args, outDir) {
 		const module = await (0, import_traceconv.default)({
 			noInitialRun: true,
 			locateFile: (s) => s,
@@ -3090,6 +3106,7 @@
 			name: "trace.proto",
 			data: trace
 		}] }, "/fs");
+		if (outDir !== void 0) module.FS_mkdir(outDir);
 		updateStatus("Converting trace");
 		module.callMain(args);
 		updateStatus("Trace conversion completed");
@@ -3108,8 +3125,7 @@
 		args.push("/fs/trace.proto", outPath);
 		try {
 			const module = await runTraceconv(trace, args);
-			const fsNode = module.FS_lookupPath(outPath).node;
-			downloadFile(fsNodeToBuffer(fsNode), `trace.${format}`);
+			downloadFile(module.FS_readFile(outPath), `trace.${format}`);
 			module.FS_unlink(outPath);
 		} finally {
 			notifyJobCompleted();
@@ -3126,10 +3142,7 @@
 		args.push("/fs/trace.proto", outPath);
 		try {
 			const module = await runTraceconv(trace, args);
-			const fsNode = module.FS_lookupPath(outPath).node;
-			const data = fsNode.contents.buffer;
-			const size = fsNode.usedBytes;
-			openTraceInLegacy(new Uint8Array(data, 0, size));
+			openTraceInLegacy(module.FS_readFile(outPath));
 			module.FS_unlink(outPath);
 		} finally {
 			notifyJobCompleted();
@@ -3140,6 +3153,7 @@
 		return true;
 	}
 	async function ConvertTraceToPprof(trace, profileType, pid, ts) {
+		const outDir = "/profiles";
 		const args = [
 			"profile",
 			`--${profileType}`,
@@ -3147,20 +3161,15 @@
 			`${pid}`,
 			`--timestamps`,
 			`${ts}`,
+			`--output-dir`,
+			outDir,
 			"/fs/trace.proto"
 		];
 		try {
-			const module = await runTraceconv(trace, args);
-			const heapDirName = Object.keys(module.FS_lookupPath("/tmp/").node.contents)[0];
-			if (heapDirName === void 0) throw new Error(`No profiles generated; the trace has no profile matching type=${profileType} pid=${pid} ts=${ts}`);
-			const heapDirContents = module.FS_lookupPath(`/tmp/${heapDirName}`).node.contents;
-			const heapDumpFiles = Object.keys(heapDirContents);
-			for (let i = 0; i < heapDumpFiles.length; ++i) {
-				const heapDump = heapDumpFiles[i];
-				const fileNode = module.FS_lookupPath(`/tmp/${heapDirName}/${heapDump}`).node;
-				const fileName = `/heap_dump.${i}.${pid}.pb`;
-				downloadFile(fsNodeToBuffer(fileNode), fileName);
-			}
+			const module = await runTraceconv(trace, args, outDir);
+			const profiles = module.FS_readdir(outDir).filter((name) => name !== "." && name !== "..");
+			if (profiles.length === 0) throw new Error(`No profiles generated; the trace has no profile matching type=${profileType} pid=${pid} ts=${ts}`);
+			for (const profile of profiles) downloadFile(module.FS_readFile(`${outDir}/${profile}`), profile);
 		} finally {
 			notifyJobCompleted();
 		}
@@ -3179,4 +3188,4 @@
 })();
 
 //# sourceMappingURL=traceconv_bundle.js.map
-;(self.__SOURCEMAPS=self.__SOURCEMAPS||{})['traceconv_bundle.js']={"version":3,"sources":["../../src/base/utils.ts","../../src/base/logging.ts","../../src/base/assert.ts","ui/tsc/gen/traceconv.js","../../src/traceconv/index.ts"],"mappings":";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;AAkBA;AACE;AACF;;;ACSA;AAEA;AACE;AAGF;AAEA;AACE;AACA;AACA;AACA;AACA;AAEA;AACE;AAMA;AAEE;AACA;AACA;AACF;AAEE;AACA;AACF;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACF;AAIA;AACA;AACA;AAEA;AACE;AACA;AACA;AACA;AACE;AAeA;AACA;AAKA;AACA;AACA;AACA;AACE;AACA;AACF;AAMA;AACE;AACA;AACF;AACA;AAAY;AAAiB;AAAuB;AACtD;AAMA;AACA;AAGF;AAIA;AAEI;AACA;AACA;AACF;AAEJ;;;ACxFA;AACE;AAGA;AACF;;;;ACpDA;AAIE;AACA;AACE;AAEJ;AACE;AACE;AACA;AAGA;AACA;AACF;AACA;AACA;AAGA;AAC6F;AAAiE;AAAuE;AAA0D;AAE/R;AACE;AACA;AAGA;AACA;AAGA;AACA;AAGF;AACF;AACA;AACA;AACA;AACA;AAEI;AACE;AACF;AAEA;AAGA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACF;AACF;AAIF;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACA;AACA;AACE;AAAoH;AAAiB;AACnI;AACF;AAAC;AACH;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AAAkH;AAAiB;AACjI;AACA;AACA;AACF;AAAC;AACH;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AAEI;AACA;AACF;AAGF;AAGE;AAGE;AAGJ;AACF;AACA;AACE;AACE;AACA;AACF;AACE;AACF;AACF;AACA;AACE;AACA;AAEI;AACA;AACF;AACE;AACF;AAEF;AACF;AACA;AACE;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AAGF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACE;AACA;AACF;AACA;AAKA;AACF;AACE;AACA;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AAGA;AACA;AACF;AACE;AACF;AACE;AACE;AACA;AAGA;AAGA;AACA;AACF;AACA;AACA;AACF;AACE;AACE;AAEA;AAEA;AACF;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AAGA;AACA;AACF;AACE;AACA;AACA;AAGA;AAGA;AACE;AACA;AACE;AACA;AAEO;AACL;AACA;AACA;AACF;AACF;AAGF;AACA;AACF;AACE;AACE;AACA;AACF;AACA;AACF;AACE;AACA;AACA;AAGA;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACE;AAGA;AACA;AACF;AACE;AAGA;AACA;AACA;AACF;AACE;AAGA;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AACA;AACE;AAAuB;AAAU;AAAW;AAAY;AACxD;AACF;AACA;AAAyB;AACvB;AACA;AAGA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AAGA;AACE;AACE;AACF;AACE;AACF;AACA;AAGA;AAGA;AACA;AACF;AACA;AACA;AACF;AAAG;AACD;AAGA;AACE;AAGF;AACE;AACF;AACA;AACA;AACF;AAAC;AAA6B;AAC5B;AACE;AACE;AACA;AACA;AACE;AACA;AACF;AACA;AACF;AACA;AACF;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AAAQ;AAAiB;AAAa;AAAe;AAAiB;AAAQ;AAAG;AAAI;AAAK;AAAI;AAAG;AAAG;AAAG;AAAG;AAAI;AAAI;AAAI;AAAG;AAAI;AAAI;AAAI;AAAI;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAC;AAAC;AAC1L;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAC;AAA8B;AAC7B;AACF;AAAG;AACD;AACF;AAAC;AACC;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAAe;AAAkB;AAC/B;AACF;AAAG;AACD;AACA;AACA;AAGA;AAAiD;AAAK;AAAM;AAAyC;AAAyC;AAAuC;AAAqC;AAAuC;AAAuC;AAAqC;AAAyC;AAAuC;AAAG;AAAgD;AAAG;AAAM;AAAM;AAC/d;AAAuC;AAAG;AAAQ;AAAyC;AAAiC;AAAmC;AAAqC;AAAqC;AAAC;AAAG;AAAM;AAAM;AAAyC;AAAyC;AAAyC;AAAG;AAAS;AAAG;AAAU;AAAM;AAAyC;AAAuC;AAAG;AAAgC;AAAC;AACvgB;AACA;AAGA;AACA;AACA;AACF;AAAG;AAAY;AACb;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AAA2D;AAAQ;AAAS;AAAS;AAAO;AAG5F;AAEF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACE;AACF;AAEA;AACE;AAKA;AACF;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACF;AAAG;AACD;AAAQ;AAAK;AAAM;AAA4C;AACjE;AAAG;AACD;AACA;AACA;AACF;AAAG;AACD;AAGA;AACF;AAAC;AAAG;AAAc;AAChB;AACA;AAGA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGA;AACA;AACA;AAEO;AAEA;AACL;AACA;AACA;AAEA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AAGA;AACF;AAAG;AACD;AAGA;AACA;AACE;AACA;AACA;AAGA;AACE;AAGA;AACF;AACF;AAGA;AAAQ;AAAsC;AAA6B;AAC7E;AAAG;AACD;AACA;AACF;AAAC;AAAC;AACA;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAAkB;AAAkB;AAAmB;AAAe;AACpE;AACE;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AAGA;AAGA;AAKA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AAAY;AACb;AAAQ;AAAS;AAA4B;AAA6B;AAAW;AAAO;AAAS;AAAU;AAA6B;AAA6C;AAA6C;AAA6C;AAAgB;AAAiD;AACtV;AAAG;AACD;AAAgC;AAAQ;AAAS;AAAS;AAAO;AAGnE;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAGA;AACF;AAAG;AACD;AACF;AAAC;AAAG;AAAc;AAChB;AAGA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAGA;AACF;AAAC;AAAC;AACA;AACA;AACF;AAAqB;AAAU;AAAW;AAAU;AAAU;AAAQ;AAAU;AAAS;AAAY;AAAS;AAAW;AAAU;AAAe;AAAW;AAAU;AAAW;AAAa;AAAU;AAAW;AAAU;AAAW;AAAY;AAAW;AAAW;AAAW;AAAW;AAAW;AAAY;AAAU;AAAW;AAAW;AAAU;AAAW;AAAU;AAAS;AAAW;AAAW;AAAU;AAAY;AAAc;AAAY;AAAY;AAAY;AAAa;AAC3e;AAAY;AAAY;AAAW;AAAW;AAAW;AAAY;AAAY;AAAa;AAAa;AAAc;AAAY;AAAY;AAAa;AAAW;AAAW;AAAY;AAAY;AAAa;AAAY;AAAU;AAAY;AAAW;AAAW;AAAc;AAAa;AAAW;AAAc;AAAY;AAAa;AAAa;AAAa;AAAa;AAAa;AAAc;AAAW;AAAc;AAAiB;AAAU;AAAgB;AACpe;AAAe;AAAY;AAAgB;AAAe;AAAa;AAAgB;AAAe;AAAiB;AAAc;AAAiB;AAAgB;AAAa;AAAc;AAAe;AAAiB;AAAgB;AAAY;AAAiB;AAAa;AAAoB;AAAqB;AAAiB;AAAc;AAAY;AAAa;AAAkB;AAAY;AAAW;AAAW;AAAa;AAAe;AAAW;AAAc;AAAc;AACnf;AAAe;AAAY;AACzB;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACA;AACA;AACE;AAEO;AACL;AACA;AAGA;AACF;AACF;AACF;AACE;AACA;AAKA;AACF;AACE;AACA;AAEI;AAGA;AACF;AAEF;AACA;AACE;AACE;AACA;AACA;AAEA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACF;AACE;AAEF;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACA;AAGA;AACE;AACA;AAGF;AACA;AACF;AACA;AACE;AACA;AAGE;AACE;AACE;AACA;AACF;AACA;AACF;AAEJ;AACA;AACE;AAGA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AAGA;AAGM;AACA;AACA;AACF;AAGK;AACL;AACA;AACE;AACF;AACE;AAGA;AACF;AACA;AACA;AACE;AAGA;AACA;AACA;AACA;AACF;AACF;AAEJ;AACA;AAAQ;AAAsB;AAAoB;AACpD;AACA;AACF;AACA;AACE;AACE;AAGA;AACA;AACF;AACF;AACA;AACE;AAGA;AACF;AACA;AACE;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AAGA;AACE;AACF;AAEA;AACF;AACA;AACE;AACE;AACF;AACE;AACF;AACA;AAGA;AACE;AAGA;AAGF;AAGA;AACF;AACA;AACE;AAGA;AACF;AACA;AACE;AACA;AAGA;AACF;AACA;AACE;AACA;AACA;AAEI;AAKA;AACF;AAEF;AACA;AACF;AACA;AACE;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACE;AACA;AACA;AACF;AACA;AACF;AACA;AACE;AAAc;AAAc;AAAe;AAAc;AAAa;AAAc;AAAyB;AAA+B;AAAW;AAAS;AAAa;AAC7K;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACA;AACF;AACA;AACE;AAA+E;AAAgE;AAAoB;AAAmC;AACxM;AACA;AACE;AACA;AACF;AACA;AACE;AAGA;AAGA;AACA;AAGA;AAA+E;AAAsB;AAAoB;AAC3H;AACA;AACE;AACE;AACA;AACF;AAEA;AAAuB;AAAa;AAAa;AAAS;AAAW;AAAW;AAAa;AAAmB;AAAmB;AAAmB;AACtJ;AACE;AAEF;AACE;AACF;AACA;AACF;AACA;AACE;AACA;AACA;AACF;AACA;AACE;AAII;AACE;AACF;AACE;AACF;AAGN;AACA;AAAa;AAAW;AAAa;AAAc;AAAY;AAAe;AAAkB;AAAmB;AAAkB;AAAwB;AAAoB;AAAoB;AACnM;AACA;AACE;AACA;AACA;AAEI;AACA;AACF;AAEJ;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAAqB;AAA6D;AAAqB;AACxG;AACA;AACF;AAAG;AACD;AACF;AAAC;AAAG;AAAiD;AAAkD;AAAgD;AAAiE;AACtN;AACE;AACA;AACA;AACF;AACA;AACE;AACM;AAC8D;AAKtE;AACA;AACA;AACA;AACA;AACA;AAGF;AAAG;AACD;AAGA;AACA;AAGA;AACE;AACA;AACA;AACA;AAGA;AAGF;AACA;AAAmC;AAAmC;AAAwC;AAA4B;AAAW;AACrJ;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACA;AAEI;AACA;AACA;AACF;AAEF;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AACA;AAGA;AAGA;AACA;AAGA;AAGA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAEI;AAGA;AACA;AACE;AACF;AACE;AAGF;AACF;AAEJ;AAAG;AACD;AAGA;AACA;AAGA;AACA;AACA;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AAGA;AACA;AACA;AAGA;AACA;AAGA;AACE;AACF;AAEA;AACE;AACA;AAGA;AAGA;AAGA;AAGA;AAGA;AACA;AACE;AACF;AACE;AACF;AACE;AACF;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AAGA;AAGA;AAGA;AACA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACA;AAGA;AAGA;AAGA;AACA;AACF;AAAG;AACD;AACA;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAAsF;AAAsB;AAAe;AAC7H;AAAG;AACD;AAGA;AACA;AACF;AAAG;AACD;AAGA;AACE;AAAgD;AAAK;AAAQ;AAAO;AAAU;AAAQ;AAAS;AAC/F;AAGA;AACF;AACA;AACA;AAEO;AACL;AACA;AAA6F;AAAyD;AAAe;AACrK;AACA;AACF;AACA;AACA;AAEQ;AAC6B;AAGjC;AAGA;AACA;AACF;AAEF;AAGA;AACA;AAGA;AAA2T;AAAK;AAAK;AAAI;AAKzU;AACA;AACA;AAA+E;AAA+C;AAAoF;AAA0C;AAAa;AAAY;AAAoE;AAAe;AAAQ;AAChX;AACA;AACA;AACF;AAAG;AACD;AAGA;AACA;AACE;AACF;AACE;AACF;AACE;AACF;AACA;AACF;AAAG;AACD;AAGA;AAGA;AAGA;AACA;AACA;AACF;AAAG;AACD;AACA;AAGA;AAGA;AAGA;AAGA;AAGA;AACA;AAEO;AAGP;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGA;AAGA;AAGA;AAGA;AAGA;AACA;AACA;AAEO;AAGP;AACA;AACA;AACF;AAAG;AACD;AAGA;AAGA;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AAAiC;AAClC;AACA;AAGA;AAGA;AACA;AAGA;AACF;AAAG;AACD;AACA;AACA;AAGF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AACE;AACA;AACE;AACA;AACE;AACF;AACE;AAGF;AACA;AACF;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAAsG;AACpG;AACF;AAAG;AACD;AACF;AAAG;AACD;AACE;AACE;AACF;AACE;AACF;AACA;AAGA;AAGA;AACA;AACF;AACA;AACA;AACF;AAAG;AACD;AAEI;AACF;AACE;AACF;AAEF;AACA;AACF;AAAC;AACD;AACF;AAAG;AACD;AACE;AACA;AAGA;AACA;AACA;AAKE;AAIF;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACE;AACE;AACA;AACF;AACF;AACA;AACE;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AAGA;AACA;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AACA;AACA;AACF;AAGA;AACA;AACA;AACE;AACF;AACA;AACA;AAEI;AACA;AACF;AAEF;AACE;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACA;AAAQ;AAAuB;AAAc;AAC/C;AACA;AACA;AACF;AAAC;AACD;AACE;AAGA;AACA;AACE;AAGA;AACF;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACA;AACF;AAAoC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AAAuC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AACnL;AACA;AAGA;AAEO;AAGP;AACF;AACE;AAGF;AACA;AACE;AACA;AAGA;AACA;AAEO;AAEA;AAGL;AAEF;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AAAc;AAAiB;AAAoB;AAAU;AAAS;AAAuB;AAA2E;AAAoC;AAC5M;AAGA;AACA;AAGA;AACF;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AAAQ;AAA2B;AAAoB;AAAkB;AAC3E;AAAuB;AAAO;AAAO;AAAO;AAAO;AAAO;AAAK;AAC7D;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AAAmE;AAAc;AAAmH;AAAgB;AACpN;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AAAgC;AAC9B;AACA;AACA;AAAwC;AAAa;AAA+B;AAAwD;AAA2C;AACvL;AACF;AAAG;AACD;AACF;AAAC;AACD;AACF;AACF;AACA;AAAuB;AAAgB;AAAoB;AAC3D;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AAAc;AACZ;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAC;AACD;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AACA;AACE;AACA;AACA;AAEI;AACA;AACA;AACA;AACA;AACF;AAEJ;AACA;AAGA;AAGS;AACL;AACE;AACA;AACF;AACE;AAGA;AACF;AACA;AACF;AAEF;AACE;AACF;AACE;AAGA;AACA;AAAqJ;AAAG;AAAI;AAA2G;AAA8L;AAErc;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACkI;AAChI;AACF;AAAG;AACD;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACA;AACA;AAGA;AACA;AAGA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AAAsG;AAAsB;AAAe;AAC3I;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACE;AACE;AACA;AAGA;AAGA;AACF;AACA;AAEA;AAEA;AAEA;AAEA;AACA;AAEF;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AAGA;AACA;AAGA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AAGA;AACA;AAGA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACF;AAEO;AACL;AACE;AACF;AACE;AAGA;AACF;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACE;AAEA;AACE;AAGA;AACE;AAA0D;AAAG;AAAI;AAAK;AAAI;AAAG;AAAG;AAAG;AAAG;AAAI;AAAI;AAAI;AAAG;AAAI;AAAI;AAAI;AAAI;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAC;AACnK;AACA;AACA;AACA;AACA;AACA;AAGF;AACA;AACF;AACA;AACA;AAEA;AACA;AACA;AACE;AAGA;AAKA;AACF;AACE;AAGA;AACA;AACF;AAEA;AACA;AAEA;AACE;AAGA;AACA;AACF;AAEA;AAEA;AAEF;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AAGA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACA;AAII;AAGF;AAEF;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AAGA;AACE;AACA;AACA;AAA0H;AAAmD;AAAiD;AAChO;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AAAwD;AACzD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AAGA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AAAuI;AAAK;AAAK;AAAK;AAAG;AACzJ;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AAAG;AAAsC;AACvC;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAA4C;AAA2D;AACxG;AACA;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACA;AACF;AACA;AAGF;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGE;AAEF;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACF;AAAG;AAAgB;AACjB;AACE;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AAGA;AACF;AACA;AACF;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AAGA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AAGA;AACF;AACA;AACF;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AAAyB;AAC1B;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAC;AACD;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACA;AAGE;AAEF;AACF;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACF;AACF;AACA;AAEO;AACL;AACA;AACA;AAKA;AACA;AACA;AACE;AACA;AACF;AACF;AACF;AACA;AACE;AACA;AACE;AACF;AACA;AACE;AACA;AACE;AACA;AAGA;AACF;AACF;AAEA;AACA;AACA;AACF;AACA;AAEE;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AAA0C;AAAoB;AAAqC;AACnG;AAEI;AACE;AACE;AACF;AACF;AACE;AACF;AACF;AAEF;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AACA;AACF;AACA;AACuF;AAAiB;AACpG;AACF;AAAC;AAKC;AACF;AACF;AAGA;AACE;AAGA;AACF;;AC/0FA;AAWA;AACE;AACE;AACA;AACF;AACF;AAEA;AACE;AACF;AAEA;AACE;AAEI;AACA;AACA;AACF;AAGJ;AAEA;AACE;AACE;AACA;AACF;AACF;AAEA;AACE;AACE;AACA;AACF;AACF;AAEA;AACE;AACA;AACF;AAEA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AAGA;AACA;AAEY;AAAqB;AAAW;AAG5C;AACA;AACA;AACA;AACF;AASA;AAGE;AAGA;AAGA;AAGA;AACF;AAEA;AAKE;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACF;AAQA;AAGE;AAGA;AACF;AAEA;AAIE;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACA;AAEA;AACA;AACF;AACE;AACF;AACF;AAYA;AACE;AAGA;AACF;AAEA;AAME;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAEA;AACE;AACA;AAGA;AAMA;AAEA;AACA;AACE;AACA;AAGA;AACA;AACF;AACF;AACE;AACF;AACF;AAEA;AACE;AACA;AACA;AACA;AACA;AAEO;AAEA;AAGL;AAEJ","file":"traceconv_bundle.js"};
+;(self.__SOURCEMAPS=self.__SOURCEMAPS||{})['traceconv_bundle.js']={"version":3,"sources":["../../src/base/utils.ts","../../src/base/logging.ts","ui/tsc/gen/traceconv.js","../../src/traceconv/index.ts"],"mappings":";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;AAkBA;AACE;AACF;;;ACSA;AAEA;AACE;AAGF;AAEA;AACE;AACA;AACA;AACA;AACA;AAEA;AACE;AAMA;AAEE;AACA;AACA;AACF;AAEE;AACA;AACF;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACF;AAIA;AACA;AACA;AAEA;AACE;AACA;AACA;AACA;AACE;AAeA;AACA;AAKA;AACA;AACA;AACA;AACE;AACA;AACF;AAMA;AACE;AACA;AACF;AACA;AAAY;AAAiB;AAAuB;AACtD;AAMA;AACA;AAGF;AAIA;AAEI;AACA;AACA;AACF;AAEJ;;;;ACvIA;AAIE;AACA;AACE;AAEJ;AACE;AACE;AACA;AAGA;AACA;AACF;AACA;AACA;AAGA;AAC6F;AAAiE;AAAuE;AAA0D;AAE/R;AACE;AACA;AAGA;AACA;AAGA;AACA;AAGF;AACF;AACA;AACA;AACA;AACA;AACE;AACE;AACE;AACF;AAEA;AAGA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACF;AACF;AAGF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACA;AACA;AACE;AAAoH;AAAiB;AACnI;AACF;AAAC;AACH;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AAAkH;AAAiB;AACjI;AACA;AACA;AACF;AAAC;AACH;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AAEI;AACA;AACF;AAGF;AAGE;AAGE;AAGJ;AACF;AACA;AACE;AACE;AACA;AACF;AACE;AACF;AACF;AACA;AACE;AACA;AAEI;AACA;AACF;AACE;AACF;AAEF;AACF;AACA;AACE;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AAGF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACE;AACA;AACF;AACA;AAKA;AACF;AACE;AACA;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AAGA;AACA;AACF;AACE;AACF;AACE;AACE;AACA;AAGA;AAGA;AACA;AACF;AACA;AACA;AACF;AACE;AACE;AAEA;AAEA;AACF;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AAGA;AACA;AACF;AACE;AACA;AACA;AAGA;AAGA;AACE;AACA;AACE;AACA;AAEO;AACL;AACA;AACA;AACF;AACF;AAGF;AACA;AACF;AACE;AACE;AACA;AACF;AACA;AACF;AACE;AACA;AACA;AAGA;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACE;AAGA;AACA;AACF;AACE;AAGA;AACA;AACA;AACF;AACE;AAGA;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AACA;AACE;AAAuB;AAAU;AAAW;AAAY;AACxD;AACF;AACA;AAAyB;AACvB;AACA;AAGA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AAGA;AACE;AACE;AACF;AACE;AACF;AACA;AAGA;AAGA;AACA;AACF;AACA;AACA;AACF;AAAG;AACD;AAGA;AACE;AAGF;AACE;AACF;AACA;AACA;AACF;AAAC;AAA6B;AAC5B;AACE;AACE;AACA;AACA;AACE;AACA;AACF;AACA;AACF;AACA;AACF;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AAAQ;AAAiB;AAAa;AAAe;AAAiB;AAAQ;AAAG;AAAI;AAAK;AAAI;AAAG;AAAG;AAAG;AAAG;AAAI;AAAI;AAAI;AAAG;AAAI;AAAI;AAAI;AAAI;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAC;AAAC;AAC1L;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAC;AAA8B;AAC7B;AACF;AAAG;AACD;AACF;AAAC;AACC;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAAe;AAAkB;AAC/B;AACF;AAAG;AACD;AACA;AACA;AAGA;AAAiD;AAAK;AAAM;AAAyC;AAAyC;AAAuC;AAAqC;AAAuC;AAAuC;AAAqC;AAAyC;AAAuC;AAAG;AAAgD;AAAG;AAAM;AAAM;AAC/d;AAAuC;AAAG;AAAQ;AAAyC;AAAiC;AAAmC;AAAqC;AAAqC;AAAC;AAAG;AAAM;AAAM;AAAyC;AAAyC;AAAyC;AAAG;AAAS;AAAG;AAAU;AAAM;AAAyC;AAAuC;AAAG;AAAgC;AAAC;AACvgB;AACA;AAGA;AACA;AACA;AACF;AAAG;AAAY;AACb;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AAA2D;AAAQ;AAAS;AAAS;AAAO;AAG5F;AAEF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACE;AACF;AAEA;AACE;AAKA;AACF;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACF;AAAG;AACD;AAAQ;AAAK;AAAM;AAA4C;AACjE;AAAG;AACD;AACA;AACA;AACF;AAAG;AACD;AAGA;AACF;AAAC;AAAG;AAAc;AAChB;AACA;AAGA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGA;AACA;AACA;AAEO;AAEA;AACL;AACA;AACA;AAEA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AAGA;AACF;AAAG;AACD;AAGA;AACA;AACE;AACA;AACA;AAGA;AACE;AAGA;AACF;AACF;AAGA;AAAQ;AAAsC;AAA6B;AAC7E;AAAG;AACD;AACA;AACF;AAAC;AAAC;AACA;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAAkB;AAAkB;AAAmB;AAAe;AACpE;AACE;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AAGA;AAGA;AAKA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AAAY;AACb;AAAQ;AAAS;AAA4B;AAA6B;AAAW;AAAO;AAAS;AAAU;AAA6B;AAA6C;AAA6C;AAA6C;AAAgB;AAAiD;AACtV;AAAG;AACD;AAAgC;AAAQ;AAAS;AAAS;AAAO;AAGnE;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAGA;AACF;AAAG;AACD;AACF;AAAC;AAAG;AAAc;AAChB;AAGA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAGA;AACF;AAAC;AAAC;AACA;AACA;AACF;AAAqB;AAAU;AAAW;AAAU;AAAU;AAAQ;AAAU;AAAS;AAAY;AAAS;AAAW;AAAU;AAAe;AAAW;AAAU;AAAW;AAAa;AAAU;AAAW;AAAU;AAAW;AAAY;AAAW;AAAW;AAAW;AAAW;AAAW;AAAY;AAAU;AAAW;AAAW;AAAU;AAAW;AAAU;AAAS;AAAW;AAAW;AAAU;AAAY;AAAc;AAAY;AAAY;AAAY;AAAa;AAC3e;AAAY;AAAY;AAAW;AAAW;AAAW;AAAY;AAAY;AAAa;AAAa;AAAc;AAAY;AAAY;AAAa;AAAW;AAAW;AAAY;AAAY;AAAa;AAAY;AAAU;AAAY;AAAW;AAAW;AAAc;AAAa;AAAW;AAAc;AAAY;AAAa;AAAa;AAAa;AAAa;AAAa;AAAc;AAAW;AAAc;AAAiB;AAAU;AAAgB;AACpe;AAAe;AAAY;AAAgB;AAAe;AAAa;AAAgB;AAAe;AAAiB;AAAc;AAAiB;AAAgB;AAAa;AAAc;AAAe;AAAiB;AAAgB;AAAY;AAAiB;AAAa;AAAoB;AAAqB;AAAiB;AAAc;AAAY;AAAa;AAAkB;AAAY;AAAW;AAAW;AAAa;AAAe;AAAW;AAAc;AAAc;AACnf;AAAe;AAAY;AACzB;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACA;AACA;AACE;AAEO;AACL;AACA;AAGA;AACF;AACF;AACF;AACE;AACA;AAKA;AACF;AACE;AACA;AAEI;AAGA;AACF;AAEF;AACA;AACE;AACE;AACA;AACA;AAEA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACF;AACE;AAEF;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACA;AAGA;AACE;AACA;AAGF;AACA;AACF;AACA;AACE;AACA;AAGE;AACE;AACE;AACA;AACF;AACA;AACF;AAEJ;AACA;AACE;AAGA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AAGA;AACE;AACE;AACE;AACA;AACA;AACF;AAGF;AACE;AACA;AACE;AACF;AACE;AAGA;AACF;AACA;AACA;AACE;AAGA;AACA;AACA;AACA;AACF;AACF;AACF;AACF;AACA;AAAQ;AAAsB;AAAoB;AACpD;AACA;AACF;AACA;AACE;AACE;AAGA;AACA;AACF;AACF;AACA;AACE;AAGA;AACF;AACA;AACE;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AAGA;AACE;AACF;AAEA;AACF;AACA;AACE;AACE;AACF;AACE;AACF;AACA;AAGA;AACE;AAGA;AAGF;AAGA;AACF;AACA;AACE;AAGA;AACF;AACA;AACE;AACA;AAGA;AACF;AACA;AACE;AACA;AACA;AAEI;AAKA;AACF;AAEF;AACA;AACF;AACA;AACE;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACE;AACA;AACA;AACF;AACA;AACF;AACA;AACE;AAAc;AAAc;AAAe;AAAc;AAAa;AAAc;AAAyB;AAA+B;AAAW;AAAS;AAAa;AAC7K;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACA;AACF;AACA;AACE;AAA+E;AAAgE;AAAoB;AAAmC;AACxM;AACA;AACE;AACA;AACF;AACA;AACE;AAGA;AAGA;AACA;AAGA;AAA+E;AAAsB;AAAoB;AAC3H;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACF;AAEA;AAAuB;AAAa;AAAa;AAAS;AAAW;AAAW;AAAa;AAAmB;AAAmB;AAAmB;AACtJ;AACE;AAEF;AACE;AACF;AACA;AACF;AACA;AACE;AACA;AACA;AACF;AACA;AACE;AACE;AAGE;AACE;AACF;AACE;AACF;AAEJ;AACF;AACA;AAAa;AAAW;AAAa;AAAc;AAAY;AAAe;AAAkB;AAAmB;AAAkB;AAAwB;AAAoB;AAAoB;AACnM;AACA;AACE;AACA;AACA;AAEI;AACA;AACF;AAEJ;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAAqB;AAA6D;AAAqB;AACxG;AACA;AACF;AAAG;AACD;AACF;AAAC;AAAG;AAAiD;AAAkD;AAAgD;AAAiE;AACtN;AACE;AACA;AACA;AACF;AACA;AACE;AACM;AAC8D;AAKtE;AACA;AACA;AACA;AACA;AACA;AAGF;AAAG;AACD;AAGA;AACA;AAGA;AACE;AACA;AACA;AACA;AAGA;AAGF;AACA;AAAmC;AAAmC;AAAwC;AAA4B;AAAW;AACrJ;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACA;AAEI;AACA;AACA;AACF;AAEF;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AACA;AAGA;AAGA;AACA;AAGA;AAGA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAEI;AAGA;AACA;AACE;AACF;AACE;AAGF;AACF;AAEJ;AAAG;AACD;AAGA;AACA;AAGA;AACA;AACA;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AAGA;AACA;AACA;AAGA;AACA;AAGA;AACE;AACF;AAEA;AACE;AACA;AAGA;AAGA;AAGA;AAGA;AAGA;AACA;AACE;AACF;AACE;AACF;AACE;AACF;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AAGA;AAGA;AAGA;AACA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACA;AAGA;AAGA;AAGA;AACA;AACF;AAAG;AACD;AACA;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AAAsF;AAAsB;AAAe;AAC7H;AAAG;AACD;AAGA;AACA;AACF;AAAG;AACD;AAGA;AACE;AAAgD;AAAK;AAAQ;AAAO;AAAU;AAAQ;AAAS;AAC/F;AAGA;AACF;AACA;AACA;AAEO;AACL;AACA;AAA6F;AAAyD;AAAe;AACrK;AACA;AACF;AACA;AACA;AACE;AACM;AAC6B;AAGjC;AAGA;AACA;AACF;AACF;AACA;AAGA;AACA;AAGA;AAA2T;AAAK;AAAK;AAAI;AAKzU;AACA;AACA;AAA+E;AAA+C;AAAoF;AAA0C;AAAa;AAAY;AAAoE;AAAe;AAAQ;AAChX;AACA;AACA;AACF;AAAG;AACD;AAGA;AACA;AACE;AACF;AACE;AACF;AACE;AACF;AACA;AACF;AAAG;AACD;AAGA;AAGA;AAGA;AACA;AACA;AACF;AAAG;AACD;AACA;AAGA;AAGA;AAGA;AAGA;AAGA;AACA;AAEO;AAGP;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGA;AAGA;AAGA;AAGA;AAGA;AACA;AACA;AAEO;AAGP;AACA;AACA;AACF;AAAG;AACD;AAGA;AAGA;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AAAiC;AAClC;AACA;AAGA;AAGA;AACA;AAGA;AACF;AAAG;AACD;AACA;AACA;AAGF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AACE;AACA;AACE;AACA;AACE;AACF;AACE;AAGF;AACA;AACF;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAAsG;AACpG;AACF;AAAG;AACD;AACF;AAAG;AACD;AACE;AACE;AACF;AACE;AACF;AACA;AAGA;AAGA;AACA;AACF;AACA;AACA;AACF;AAAG;AACD;AAEI;AACF;AACE;AACF;AAEF;AACA;AACF;AAAC;AACD;AACF;AAAG;AACD;AACE;AACA;AAGA;AACA;AACA;AAKE;AAIF;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACE;AACE;AACA;AACF;AACF;AACA;AACE;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AAGA;AACA;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AACA;AACA;AACF;AAGA;AACA;AACA;AACE;AACF;AACA;AACA;AAEI;AACA;AACF;AAEF;AACE;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACA;AAAQ;AAAuB;AAAc;AAC/C;AACA;AACA;AACF;AAAC;AACD;AACE;AAGA;AACA;AACE;AAGA;AACF;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACA;AACF;AAAoC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AAAuC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AACnL;AACA;AAGA;AAEO;AAGP;AACF;AACE;AAGF;AACA;AACE;AACA;AAGA;AACA;AAEO;AAEA;AAGL;AAEF;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AAAc;AAAiB;AAAoB;AAAU;AAAS;AAAuB;AAA2E;AAAoC;AAC5M;AAGA;AACA;AAGA;AACF;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AAAc;AACZ;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAC;AACD;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACE;AACA;AACF;AACF;AACE;AACA;AACA;AAAQ;AAA2B;AAAoB;AAAkB;AAC3E;AAAuB;AAAO;AAAO;AAAO;AAAO;AAAO;AAAK;AAC7D;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AAAmE;AAAc;AAAmH;AAAgB;AACpN;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AAAgC;AAC9B;AACA;AACA;AAAwC;AAAa;AAA+B;AAAwD;AAA2C;AACvL;AACF;AAAG;AACD;AACF;AAAC;AACD;AACF;AACF;AACA;AAAuB;AAAgB;AAAoB;AAC3D;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAKA;AACA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACA;AAEI;AACA;AACA;AACA;AACA;AACF;AAEJ;AACA;AAGA;AAGS;AACL;AACE;AACA;AACF;AACE;AAGA;AACF;AACA;AACF;AAEF;AACE;AACF;AACE;AAGA;AACA;AAAqJ;AAAG;AAAI;AAA2G;AAA8L;AAErc;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACkI;AAChI;AACF;AAAG;AACD;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACA;AACA;AAGA;AACA;AAGA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AAAsG;AAAsB;AAAe;AAC3I;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACE;AACE;AACA;AAGA;AAGA;AACF;AACA;AAEA;AAEA;AAEA;AAEA;AACA;AAEF;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AAGA;AACA;AAGA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AAGA;AACA;AAGA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACF;AAEO;AACL;AACE;AACF;AACE;AAGA;AACF;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACE;AAEA;AACE;AAGA;AACE;AAA0D;AAAG;AAAI;AAAK;AAAI;AAAG;AAAG;AAAG;AAAG;AAAI;AAAI;AAAI;AAAG;AAAI;AAAI;AAAI;AAAI;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAG;AAAC;AACnK;AACA;AACA;AACA;AACA;AACA;AAGF;AACA;AACF;AACA;AACA;AAEA;AACA;AACA;AACE;AAGA;AAKA;AACF;AACE;AAGA;AACA;AACF;AAEA;AACA;AAEA;AACE;AAGA;AACA;AACF;AAEA;AAEA;AAEF;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AAGA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACA;AACE;AAGE;AAEJ;AAGA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AAGA;AACE;AACA;AACA;AAA0H;AAAmD;AAAiD;AAChO;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AAAwD;AACzD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AAGA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AAAuI;AAAK;AAAK;AAAK;AAAG;AACzJ;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AAAG;AAAsC;AACvC;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAA4C;AAA2D;AACxG;AACA;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACA;AACF;AACA;AAGF;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGE;AAEF;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACF;AAAG;AAAgB;AACjB;AACE;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AAGA;AACF;AACA;AACF;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACE;AAGA;AACA;AACA;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACE;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AAGA;AACF;AACA;AACF;AACA;AACA;AACF;AACE;AAGA;AACF;AACF;AAAG;AAAyB;AAC1B;AACA;AACE;AACF;AACE;AAGA;AACF;AACF;AAAC;AACD;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACA;AAGE;AAEF;AACF;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACF;AACF;AACA;AAEO;AACL;AACA;AACA;AAKA;AACA;AACA;AACE;AACA;AACF;AACF;AACF;AACA;AACE;AACA;AACE;AACF;AACA;AACE;AACA;AACE;AACA;AAGA;AACF;AACF;AAEA;AACA;AACA;AACF;AACA;AAEE;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AAA0C;AAAoB;AAAqC;AACnG;AAEI;AACE;AACE;AACF;AACF;AACE;AACF;AACF;AAEF;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AACA;AACF;AACA;AACuF;AAAiB;AACpG;AACF;AAAC;AAKC;AACF;AACF;AAGA;AACE;AAGA;AACF;;ACl2FA;AAWA;AACE;AACE;AACA;AACF;AACF;AAEA;AACE;AACF;AAEA;AACE;AAEI;AACA;AACA;AACF;AAGJ;AAEA;AACE;AACE;AACA;AACF;AACF;AAEA;AACE;AACE;AACA;AACF;AACF;AAEA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AAIA;AACA;AAEY;AAAqB;AAAW;AAG5C;AAKA;AACA;AACA;AACA;AACF;AASA;AAGE;AAGA;AAGA;AAGA;AACF;AAEA;AAKE;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACF;AACF;AAQA;AAGE;AAGA;AACF;AAEA;AAIE;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACF;AACF;AAYA;AACE;AAGA;AACF;AAEA;AAQE;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAEA;AACE;AACA;AAGA;AAMA;AAIF;AACE;AACF;AACF;AAEA;AACE;AACA;AACA;AACA;AACA;AAEO;AAEA;AAGL;AAEJ","file":"traceconv_bundle.js"};

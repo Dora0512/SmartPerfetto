@@ -140,11 +140,13 @@ steps:
           b.*
         FROM heap_graph_bitmaps b
         LEFT JOIN process p ON p.upid = b.upid
-        WHERE (
-          ('${process_name}' = '' AND '${package}' = '')
-          OR p.name GLOB '${process_name}*'
-          OR ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*')
-        )
+        -- self_size = -1 marks a placeholder of an incomplete dump, not a Bitmap.
+        WHERE COALESCE(b.self_size, 0) >= 0
+          AND (
+            ('${process_name}' = '' AND '${package}' = '')
+            OR p.name GLOB '${process_name}*'
+            OR ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*')
+          )
       )
       SELECT
         process_name,
@@ -201,6 +203,7 @@ steps:
         FROM heap_graph_bitmaps b
         LEFT JOIN process receiver ON receiver.upid = b.upid
         WHERE b.source_id IS NOT NULL
+          AND COALESCE(b.self_size, 0) >= 0
           AND (
             ('${process_name}' = '' AND '${package}' = '')
             OR receiver.name GLOB '${process_name}*'

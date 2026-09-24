@@ -47,10 +47,12 @@
       },
       "required_steps": [
         "data_check",
+        "dominator_tree_pass",
         "dominator_paths"
       ],
       "required_sql_steps": [
         "data_check",
+        "dominator_tree_pass",
         "dominator_paths"
       ],
       "forced_sql_steps": [],
@@ -67,7 +69,8 @@
         "self_count",
         "retained_count",
         "self_size_bytes",
-        "retained_size_bytes"
+        "retained_size_bytes",
+        "process_identity"
       ],
       "min_rows": 1,
       "assertions": [
@@ -117,6 +120,8 @@
         "self_size_mb",
         "native_size_mb",
         "lifecycle_phase_at_sample",
+        "process_identity",
+        "dump_completeness",
         "leak_state",
         "confidence"
       ],
@@ -132,16 +137,22 @@
         "max_rows": 30
       },
       "required_steps": [
+        "heap_graph_dump_sizes",
         "heap_graph_availability",
         "heap_graph_samples",
+        "heap_graph_truncation",
         "top_retained_classes"
       ],
       "required_sql_steps": [
+        "heap_graph_dump_sizes",
         "heap_graph_availability",
         "heap_graph_samples",
+        "heap_graph_truncation",
         "top_retained_classes"
       ],
-      "forced_sql_steps": [],
+      "forced_sql_steps": [
+        "heap_graph_truncation"
+      ],
       "isolated_sql_probes": [],
       "expected_condition_skips": [],
       "semantic_step": "heap_graph_availability",
@@ -150,6 +161,9 @@
         "process_count",
         "reachable_heap_mb",
         "total_heap_mb",
+        "incomplete_dump_count",
+        "process_identity",
+        "has_truncated_column",
         "status"
       ],
       "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
@@ -175,13 +189,11 @@
         "data_check",
         "heap_graph_repeated_objects",
         "heap_graph_size_frequencies",
-        "heap_profile_hotspots",
         "no_data_contract"
       ],
       "forced_sql_steps": [
         "heap_graph_repeated_objects",
         "heap_graph_size_frequencies",
-        "heap_profile_hotspots",
         "no_data_contract"
       ],
       "isolated_sql_probes": [],
@@ -683,9 +695,11 @@
       "source_file": "backend/skills/atomic/native_heap_breakdown.skill.yaml",
       "parameters": {},
       "required_steps": [
+        "heap_profile_inventory",
         "native_heap_hotspots"
       ],
       "required_sql_steps": [
+        "heap_profile_inventory",
         "native_heap_hotspots"
       ],
       "forced_sql_steps": [],

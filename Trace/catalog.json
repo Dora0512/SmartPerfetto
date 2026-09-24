@@ -568,7 +568,7 @@
         "generator_version": 1,
         "seed": "binder-io-blocking-v1",
         "output": "Trace/.generated/constructed/binder-io-blocking/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -1727,7 +1727,7 @@
         "generator_version": 1,
         "seed": "framework-pipelines-v1",
         "output": "Trace/.generated/constructed/framework-pipelines/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -2347,7 +2347,7 @@
         "generator_version": 1,
         "seed": "general-runtime-contracts-v1",
         "output": "Trace/.generated/constructed/general-runtime-contracts/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -2462,6 +2462,7 @@
             "required_steps": [
               "trace_window",
               "trace_diagnostics",
+              "data_loss_stats",
               "top_long_slices",
               "top_d_state_threads",
               "top_runnable_waits",
@@ -2471,6 +2472,7 @@
             "required_sql_steps": [
               "trace_window",
               "trace_diagnostics",
+              "data_loss_stats",
               "top_d_state_threads",
               "top_runnable_waits",
               "runqueue_pressure",
@@ -2901,7 +2903,7 @@
         "generator_version": 1,
         "seed": "gpu-workload-v1",
         "output": "Trace/.generated/constructed/gpu-workload/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -3327,7 +3329,7 @@
         "generator_version": 1,
         "seed": "input-interaction-latency-v1",
         "output": "Trace/.generated/constructed/input-interaction-latency/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -3986,7 +3988,7 @@
         "generator_version": 1,
         "seed": "linux-system-state-v1",
         "output": "Trace/.generated/constructed/linux-system-state/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -4179,7 +4181,7 @@
         "generator_version": 1,
         "seed": "main-thread-frame-work-v1",
         "output": "Trace/.generated/constructed/main-thread-frame-work/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -4719,7 +4721,7 @@
         "generator_version": 1,
         "seed": "media-network-camera-v1",
         "output": "Trace/.generated/constructed/media-network-camera/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -5027,7 +5029,7 @@
         "generator_version": 1,
         "seed": "memory-gc-pressure-v1",
         "output": "Trace/.generated/constructed/memory-gc-pressure/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -5099,10 +5101,12 @@
             },
             "required_steps": [
               "data_check",
+              "dominator_tree_pass",
               "dominator_paths"
             ],
             "required_sql_steps": [
               "data_check",
+              "dominator_tree_pass",
               "dominator_paths"
             ],
             "forced_sql_steps": [],
@@ -5119,7 +5123,8 @@
               "self_count",
               "retained_count",
               "self_size_bytes",
-              "retained_size_bytes"
+              "retained_size_bytes",
+              "process_identity"
             ],
             "min_rows": 1,
             "assertions": [
@@ -5169,6 +5174,8 @@
               "self_size_mb",
               "native_size_mb",
               "lifecycle_phase_at_sample",
+              "process_identity",
+              "dump_completeness",
               "leak_state",
               "confidence"
             ],
@@ -5184,16 +5191,22 @@
               "max_rows": 30
             },
             "required_steps": [
+              "heap_graph_dump_sizes",
               "heap_graph_availability",
               "heap_graph_samples",
+              "heap_graph_truncation",
               "top_retained_classes"
             ],
             "required_sql_steps": [
+              "heap_graph_dump_sizes",
               "heap_graph_availability",
               "heap_graph_samples",
+              "heap_graph_truncation",
               "top_retained_classes"
             ],
-            "forced_sql_steps": [],
+            "forced_sql_steps": [
+              "heap_graph_truncation"
+            ],
             "isolated_sql_probes": [],
             "expected_condition_skips": [],
             "semantic_step": "heap_graph_availability",
@@ -5202,6 +5215,9 @@
               "process_count",
               "reachable_heap_mb",
               "total_heap_mb",
+              "incomplete_dump_count",
+              "process_identity",
+              "has_truncated_column",
               "status"
             ],
             "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
@@ -5227,13 +5243,11 @@
               "data_check",
               "heap_graph_repeated_objects",
               "heap_graph_size_frequencies",
-              "heap_profile_hotspots",
               "no_data_contract"
             ],
             "forced_sql_steps": [
               "heap_graph_repeated_objects",
               "heap_graph_size_frequencies",
-              "heap_profile_hotspots",
               "no_data_contract"
             ],
             "isolated_sql_probes": [],
@@ -5735,9 +5749,11 @@
             "source_file": "backend/skills/atomic/native_heap_breakdown.skill.yaml",
             "parameters": {},
             "required_steps": [
+              "heap_profile_inventory",
               "native_heap_hotspots"
             ],
             "required_sql_steps": [
+              "heap_profile_inventory",
               "native_heap_hotspots"
             ],
             "forced_sql_steps": [],
@@ -5839,7 +5855,7 @@
         "generator_version": 1,
         "seed": "power-thermal-v1",
         "output": "Trace/.generated/constructed/power-thermal/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -6540,7 +6556,7 @@
         "generator_version": 1,
         "seed": "rendering-jank-v1",
         "output": "Trace/.generated/constructed/rendering-jank/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -8209,7 +8225,7 @@
         "generator_version": 1,
         "seed": "scene-observation-contracts-v1",
         "output": "Trace/.generated/constructed/scene-observation-contracts/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -9650,7 +9666,7 @@
         "generator_version": 1,
         "seed": "scheduler-cpu-contention-v1",
         "output": "Trace/.generated/constructed/scheduler-cpu-contention/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -9839,6 +9855,8 @@
             "required_columns": [
               "cluster",
               "core_count",
+              "active_core_count",
+              "awake_ms",
               "running_ms",
               "total_capacity_ms",
               "load_pct",
@@ -11080,7 +11098,7 @@
         "generator_version": 1,
         "seed": "source-analysis-semantic-v1",
         "output": "Trace/.generated/constructed/source-analysis-semantic/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [],
@@ -11142,7 +11160,7 @@
         "generator_version": 1,
         "seed": "startup-lifecycle-v1",
         "output": "Trace/.generated/constructed/startup-lifecycle/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -11568,6 +11586,8 @@
               "start_ts",
               "end_ts",
               "dur_ns",
+              "dur_without_trampoline_ms",
+              "trampoline_ms",
               "ttid_ms",
               "ttfd_ms",
               "rating",
@@ -12016,7 +12036,7 @@
         "generator_version": 1,
         "seed": "system-scheduling-evidence-v1",
         "output": "Trace/.generated/constructed/system-scheduling-evidence/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [
@@ -13152,7 +13172,7 @@
         "generator_version": 1,
         "seed": "thermal-frequency-limit-v1",
         "output": "Trace/.generated/constructed/thermal-frequency-limit/trace.pftrace",
-        "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+        "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
       },
       "coverage": {
         "skills": [

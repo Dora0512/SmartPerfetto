@@ -9,6 +9,15 @@ import {
   moduleCoveredByPerfettoSqlLineage,
   searchPerfettoSqlDocs,
 } from '../perfettoSqlDocs';
+import * as fs from 'fs';
+import * as path from 'path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const {parseRuntimeRevision} = require('../../../scripts/perfetto-runtime-source.cjs');
+
+// The asset must be generated from the exact runtime revision in the pin.
+const pinnedRevision: string = parseRuntimeRevision(
+  fs.readFileSync(path.resolve(__dirname, '../../../../scripts/trace-processor-pin.env'), 'utf8'),
+);
 
 describe('perfettoSqlDocs', () => {
   beforeEach(() => {
@@ -21,12 +30,9 @@ describe('perfettoSqlDocs', () => {
     expect(asset?.version).toBe(1);
     expect(asset?.stats?.moduleCount).toBeGreaterThan(200);
     expect(asset?.stats?.entryCount).toBeGreaterThan(350);
-    expect(asset?.generatedFrom).toBe(
-      'add693d8b338ba9599dbcbc3e300b1ab8c000897',
-    );
+    expect(asset?.generatedFrom).toBe(pinnedRevision);
     expect(asset?.sourceDocs).toBe(
-      'git:add693d8b338ba9599dbcbc3e300b1ab8c000897:' +
-        'src/trace_processor/perfetto_sql/stdlib',
+      `git:${pinnedRevision}:src/trace_processor/perfetto_sql/stdlib`,
     );
     expect(asset?.sourceDocsMode).toBe('runtime-revision-source-generator');
   });

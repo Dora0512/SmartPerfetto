@@ -124,11 +124,12 @@ steps:
         - name: status
           label: "状态"
           type: string
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         COUNT(*) as event_count,
         CASE WHEN COUNT(*) > 0 THEN 'available' ELSE 'unavailable' END as status
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE (('${package}' = '' OR process_name = '${package}' OR process_name GLOB '${package}:*') OR '${package}' = '')
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
         AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -155,12 +156,13 @@ steps:
           type: duration
           format: duration_ms
           unit: ms
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         process_name,
         COUNT(*) as event_count,
         ROUND(MAX(total_latency_dur) / 1e6, 2) as max_total_ms
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE (('${package}' = '' OR process_name = '${package}' OR process_name GLOB '${package}:*') OR '${package}' = '')
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
         AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -249,6 +251,7 @@ steps:
         - name: rating
           label: "评级"
           type: string
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         COUNT(*) as total_events,
@@ -273,7 +276,7 @@ steps:
           WHEN AVG(total_latency_dur) / 1e6 < ${critical_event_threshold_ms|200} THEN '可接受 (100-200ms)'
           ELSE '较差 (>200ms)'
         END as rating
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE process_name = '${target_process.data[0].process_name}'
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
         AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -330,6 +333,7 @@ steps:
         - name: slow_events
           label: "慢事件数"
           type: number
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         event_type,
@@ -340,7 +344,7 @@ steps:
         ROUND(AVG(handling_latency_dur) / 1e6, 2) as avg_handling_ms,
         -- 慢事件数
         SUM(CASE WHEN total_latency_dur / 1e6 > ${slow_event_threshold_ms|100} THEN 1 ELSE 0 END) as slow_events
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE process_name = '${target_process.data[0].process_name}'
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
         AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -395,6 +399,7 @@ steps:
         - name: slow_events
           label: "慢事件数"
           type: number
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         normalized_event_channel as window,
@@ -403,7 +408,7 @@ steps:
         ROUND(MAX(total_latency_dur) / 1e6, 2) as max_latency_ms,
         ROUND(AVG(handling_latency_dur) / 1e6, 2) as avg_handling_ms,
         SUM(CASE WHEN total_latency_dur / 1e6 > ${slow_event_threshold_ms|100} THEN 1 ELSE 0 END) as slow_events
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE process_name = '${target_process.data[0].process_name}'
         AND normalized_event_channel IS NOT NULL
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
@@ -510,6 +515,7 @@ steps:
         - name: main_bottleneck
           label: "主要瓶颈"
           type: string
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         event_type,
@@ -541,7 +547,7 @@ steps:
           WHEN handling_latency_dur > ack_latency_dur THEN '应用处理'
           ELSE 'ACK'
         END as main_bottleneck
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE process_name = '${target_process.data[0].process_name}'
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
         AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -558,6 +564,7 @@ steps:
       role: target
       binding: effective_target_processes
     sql_fragments:
+      - fragments/android_input_events_normalized.sql
       - fragments/effective_target_processes.sql
       - fragments/system_thread_state_spans.sql
     name: "输入期间主线程状态"
@@ -606,7 +613,7 @@ steps:
           receive_ts + receive_dur as input_end_ts,
           total_latency_dur,
           event_type
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE process_name = '${target_process.data[0].process_name}'
           AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
           AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -665,13 +672,14 @@ steps:
         - name: main_thread_calls
           label: "主线程调用"
           type: number
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH slow_inputs AS (
         SELECT
           dispatch_ts as input_ts,
           receive_ts + receive_dur as input_end_ts,
           total_latency_dur
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE process_name = '${target_process.data[0].process_name}'
           AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
           AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
@@ -736,6 +744,7 @@ steps:
         - name: rating
           label: "评级"
           type: enum
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         ie.event_type,
@@ -752,7 +761,7 @@ steps:
           WHEN ie.end_to_end_latency_dur / 1e6 > ${thread_state_min_dur_ms|50} THEN 'notice'
           ELSE 'good'
         END as rating
-      FROM android_input_events ie
+      FROM android_input_events_normalized ie
       LEFT JOIN android_frames af ON ie.frame_id = af.frame_id
       WHERE ie.process_name = '${target_process.data[0].process_name}'
         AND (${start_ts} IS NULL OR ie.receive_ts + ie.receive_dur > ${start_ts})
@@ -794,6 +803,7 @@ steps:
           label: "占比"
           type: percentage
           format: percentage
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       SELECT
         CASE
@@ -805,12 +815,12 @@ steps:
         END as latency_bucket,
         COUNT(*) as count,
         ROUND(100.0 * COUNT(*) / (
-          SELECT COUNT(*) FROM android_input_events
+          SELECT COUNT(*) FROM android_input_events_normalized
           WHERE process_name = '${target_process.data[0].process_name}'
             AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
             AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})
         ), 1) as percent
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE process_name = '${target_process.data[0].process_name}'
         AND (${start_ts} IS NULL OR receive_ts + receive_dur > ${start_ts})
         AND (${end_ts} IS NULL OR dispatch_ts < ${end_ts})

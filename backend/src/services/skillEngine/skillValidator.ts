@@ -327,6 +327,54 @@ export function validateFragmentReferences(
   return warnings;
 }
 
+/**
+ * Stdlib relations whose raw values differ across trace-processor runtimes and
+ * must be read through one normalizing fragment. Key: the stdlib relation;
+ * value: the fragment that owns the only raw read.
+ */
+const NORMALIZED_STDLIB_READS: ReadonlyMap<string, string> = new Map([
+  ['android_input_events', 'fragments/android_input_events_normalized.sql'],
+]);
+
+/** SQL with comments and string literals blanked, so only executable text is matched. */
+function executableSqlText(sql: string): string {
+  return sql.replace(/--[^\n\r]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'/g, ' ');
+}
+
+/**
+ * Reject a raw FROM/JOIN of a normalized stdlib relation in Skill SQL or in a
+ * referenced fragment other than the relation's own normalizing fragment.
+ */
+export function validateNormalizedStdlibReads(
+  skill: SkillDefinition,
+  fragments: ReadonlyMap<string, string> = new Map(),
+): SkillValidationWarning[] {
+  const warnings: SkillValidationWarning[] = [];
+  const check = (sql: string, path: string, where: string, exemptFragment?: string): void => {
+    const executable = executableSqlText(sql);
+    for (const [relation, owner] of NORMALIZED_STDLIB_READS) {
+      if (owner === exemptFragment) continue;
+      if (new RegExp(`\\b(?:FROM|JOIN)\\s+${relation}(?![\\w.])`, 'i').test(executable)) {
+        warnings.push({ stepId: path, message: `${where} reads ${relation} directly; read ${relation}_normalized via sql_fragments: [${owner}]` });
+      }
+    }
+  };
+  const visit = (node: any, path: string): void => {
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.sql === 'string') check(node.sql, path, 'SQL');
+    for (const fragPath of node.sql_fragments || []) {
+      const body = fragments.get(fragPath);
+      if (body !== undefined) check(body, path, `Fragment '${fragPath}'`, fragPath);
+    }
+    if (node.exact_sql !== undefined) visit(node.exact_sql, `${path}.exact_sql`);
+    for (const child of node.steps || []) visit(child, child.id || path);
+    for (const branch of node.conditions || []) visit(branch.then, path);
+    visit(node.else, path);
+  };
+  visit(skill, 'root');
+  return warnings;
+}
+
 /** Validate declarations without requiring unmigrated named Skills to opt in. */
 export function validateProcessScopeDeclarations(
   skill: SkillDefinition,

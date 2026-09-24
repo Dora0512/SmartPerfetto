@@ -9,6 +9,7 @@ import {
 import {validateSkillBatchAnalysis} from '../skillEngine/skillBatchAnalysis';
 import {
   validateFragmentReferences,
+  validateNormalizedStdlibReads,
   validateSkillConditions,
 } from '../skillEngine/skillValidator';
 import type {SkillDefinition, SkillStep} from '../skillEngine/types';
@@ -250,6 +251,15 @@ export function validateSkillDefinitionInProcess(
       skill.name,
       displayIssue.path,
       formatDisplayContractIssue(displayIssue),
+    ));
+  }
+  for (const readIssue of validateNormalizedStdlibReads(skill, options.fragmentCache)) {
+    issues.push(issue(
+      'error',
+      'normalized_stdlib_read',
+      skill.name,
+      readIssue.stepId,
+      readIssue.message,
     ));
   }
   if (options.fragmentCache) {

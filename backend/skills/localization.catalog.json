@@ -10,8 +10,8 @@
     "skillCount": 249,
     "pipelineDefinitionCount": 31,
     "moduleExpertCount": 18,
-    "stepCount": 1334,
-    "explicitColumnCount": 4772
+    "stepCount": 1339,
+    "explicitColumnCount": 4814
   },
   "skills": {
     "ams_module": {
@@ -427,6 +427,24 @@
                 "en": "Heap Objects"
               }
             },
+            "placeholder_object_count": {
+              "label": {
+                "zh-CN": "PlaceholderObjectCount",
+                "en": "Placeholder Objects (self_size=-1)"
+              }
+            },
+            "incomplete_dump_count": {
+              "label": {
+                "zh-CN": "IncompleteDumpCount",
+                "en": "Incomplete Dumps"
+              }
+            },
+            "process_identity": {
+              "label": {
+                "zh-CN": "进程Identity",
+                "en": "Process Identity"
+              }
+            },
             "status": {
               "label": {
                 "zh-CN": "Status",
@@ -501,8 +519,22 @@
                 "zh-CN": "RetainedSizebytes",
                 "en": "Retained Size"
               }
+            },
+            "process_identity": {
+              "label": {
+                "zh-CN": "进程Identity",
+                "en": "Process Identity"
+              }
             }
           },
+          "synthesizeLabels": {}
+        },
+        "dominator_tree_pass": {
+          "title": {
+            "zh-CN": "DominatorTreePass",
+            "en": "Dominator tree pass"
+          },
+          "columns": {},
           "synthesizeLabels": {}
         },
         "root": {
@@ -605,6 +637,18 @@
               "label": {
                 "zh-CN": "Sample 前生命周期",
                 "en": "Lifecycle Phase At Sample"
+              }
+            },
+            "process_identity": {
+              "label": {
+                "zh-CN": "进程身份",
+                "en": "Process Identity"
+              }
+            },
+            "dump_completeness": {
+              "label": {
+                "zh-CN": "Dump 完整性",
+                "en": "Dump Completeness"
               }
             },
             "leak_state": {
@@ -751,6 +795,24 @@
                 "en": "Total Heap(MB)"
               }
             },
+            "incomplete_dump_count": {
+              "label": {
+                "zh-CN": "不完整 dump 数",
+                "en": "Incomplete Dump Count"
+              }
+            },
+            "process_identity": {
+              "label": {
+                "zh-CN": "进程身份",
+                "en": "Process Identity"
+              }
+            },
+            "has_truncated_column": {
+              "label": {
+                "zh-CN": "Runtime 有截断标记",
+                "en": "Has Truncated Column"
+              }
+            },
             "status": {
               "label": {
                 "zh-CN": "状态",
@@ -758,6 +820,14 @@
               }
             }
           },
+          "synthesizeLabels": {}
+        },
+        "heap_graph_dump_sizes": {
+          "title": {
+            "zh-CN": "Heap Graph dump 大小",
+            "en": "Heap Graph Dump Sizes"
+          },
+          "columns": {},
           "synthesizeLabels": {}
         },
         "heap_graph_samples": {
@@ -770,6 +840,12 @@
               "label": {
                 "zh-CN": "进程",
                 "en": "Process Name"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
               }
             },
             "graph_sample_ts": {
@@ -819,6 +895,75 @@
                 "zh-CN": "UnreachableHeapMB",
                 "en": "Unreachable Heap(MB)"
               }
+            },
+            "placeholder_object_count": {
+              "label": {
+                "zh-CN": "占位对象(self_size=-1)",
+                "en": "Placeholder Object Count"
+              }
+            },
+            "dump_completeness": {
+              "label": {
+                "zh-CN": "Dump 完整性",
+                "en": "Dump Completeness"
+              }
+            },
+            "dump_issues": {
+              "label": {
+                "zh-CN": "Dump 错误/丢包统计",
+                "en": "Dump Issues"
+              }
+            },
+            "process_identity": {
+              "label": {
+                "zh-CN": "进程身份",
+                "en": "Process Identity"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
+        "heap_graph_truncation": {
+          "title": {
+            "zh-CN": "Heap Dump 截断标记（trace processor 导入时记录）",
+            "en": "Heap Graph Truncation"
+          },
+          "columns": {
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
+              }
+            },
+            "graph_sample_ts": {
+              "label": {
+                "zh-CN": "Sample 时间",
+                "en": "Graph Sample Ts"
+              }
+            },
+            "dump_reason": {
+              "label": {
+                "zh-CN": "Dump 原因",
+                "en": "Dump Reason"
+              }
+            },
+            "truncated": {
+              "label": {
+                "zh-CN": "截断",
+                "en": "Truncated"
+              }
+            },
+            "dump_completeness": {
+              "label": {
+                "zh-CN": "Dump 完整性",
+                "en": "Dump Completeness"
+              }
             }
           },
           "synthesizeLabels": {}
@@ -839,6 +984,12 @@
               "label": {
                 "zh-CN": "HeapGraphSamples",
                 "en": "Heap Graph Samples"
+              }
+            },
+            "heap_graph_truncation": {
+              "label": {
+                "zh-CN": "HeapGraphTruncation",
+                "en": "Heap Graph Truncation"
               }
             },
             "top_retained_classes": {
@@ -1213,64 +1364,9 @@
         "heap_profile_hotspots": {
           "title": {
             "zh-CN": "HeapProfileHotspots",
-            "en": "Heap Profile Allocation Hotspots"
+            "en": "Heap Profile Allocation Hotspots (per process × heap)"
           },
-          "columns": {
-            "scope": {
-              "label": {
-                "zh-CN": "Scope",
-                "en": "Scope"
-              }
-            },
-            "name": {
-              "label": {
-                "zh-CN": "Name",
-                "en": "Frame"
-              }
-            },
-            "mapping_name": {
-              "label": {
-                "zh-CN": "MappingName",
-                "en": "Mapping"
-              }
-            },
-            "self_size_mb": {
-              "label": {
-                "zh-CN": "SelfSizeMB",
-                "en": "Self Retained(MB)"
-              }
-            },
-            "cumulative_size_mb": {
-              "label": {
-                "zh-CN": "CumulativeSizeMB",
-                "en": "Cumulative Retained(MB)"
-              }
-            },
-            "self_alloc_mb": {
-              "label": {
-                "zh-CN": "SelfAllocMB",
-                "en": "Self Alloc(MB)"
-              }
-            },
-            "cumulative_alloc_mb": {
-              "label": {
-                "zh-CN": "CumulativeAllocMB",
-                "en": "Cumulative Alloc(MB)"
-              }
-            },
-            "allocation_signal": {
-              "label": {
-                "zh-CN": "AllocationSignal",
-                "en": "Signal"
-              }
-            },
-            "source_file": {
-              "label": {
-                "zh-CN": "SourceFile",
-                "en": "Source"
-              }
-            }
-          },
+          "columns": {},
           "synthesizeLabels": {}
         },
         "no_data_contract": {
@@ -10439,6 +10535,18 @@
                 "en": "Core Count"
               }
             },
+            "active_core_count": {
+              "label": {
+                "zh-CN": "活跃核心数",
+                "en": "Active Core Count"
+              }
+            },
+            "awake_ms": {
+              "label": {
+                "zh-CN": "非挂起时长",
+                "en": "Awake ms"
+              }
+            },
             "running_ms": {
               "label": {
                 "zh-CN": "Running 时间",
@@ -16924,6 +17032,45 @@
             "en": "Insight Summary"
           },
           "columns": {},
+          "synthesizeLabels": {}
+        },
+        "data_loss_stats": {
+          "title": {
+            "zh-CN": "数据丢失统计",
+            "en": "Data Loss Stats"
+          },
+          "columns": {
+            "name": {
+              "label": {
+                "zh-CN": "统计项",
+                "en": "Name"
+              }
+            },
+            "idx": {
+              "label": {
+                "zh-CN": "索引",
+                "en": "Idx"
+              }
+            },
+            "value": {
+              "label": {
+                "zh-CN": "丢失计数",
+                "en": "Value"
+              }
+            },
+            "source": {
+              "label": {
+                "zh-CN": "来源",
+                "en": "Source"
+              }
+            },
+            "description": {
+              "label": {
+                "zh-CN": "说明",
+                "en": "Description"
+              }
+            }
+          },
           "synthesizeLabels": {}
         },
         "root": {
@@ -25866,11 +26013,11 @@
     },
     "native_heap_breakdown": {
       "displayName": {
-        "zh-CN": "Native Heap 分解",
+        "zh-CN": "Heap Profile 分解（Native / Java 分配）",
         "en": "Native Heap Breakdown"
       },
       "description": {
-        "zh-CN": "基于 heapprofd summary tree 输出 native heap 未释放和累计分配热点",
+        "zh-CN": "按进程 × heap 拆分 heapprofd 分配：native 区分未释放保留与分配 churn，Java(com.android.art) 只报分配 churn；热点归因到分配器之上的第一个应用/库帧",
         "en": "Analyzes Native Heap Breakdown using trace metrics and supporting evidence."
       },
       "type": "atomic",
@@ -25883,15 +26030,114 @@
           "columns": {},
           "synthesizeLabels": {}
         },
+        "heap_profile_inventory": {
+          "title": {
+            "zh-CN": "HeapProfileInventory",
+            "en": "heapprofd Profiles (per process × heap)"
+          },
+          "columns": {
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "heap_name": {
+              "label": {
+                "zh-CN": "HeapName",
+                "en": "Heap"
+              }
+            },
+            "heap_semantics": {
+              "label": {
+                "zh-CN": "Heap 语义",
+                "en": "Heap Semantics"
+              }
+            },
+            "alloc_mb": {
+              "label": {
+                "zh-CN": "累计分配(MB)",
+                "en": "Alloc MB"
+              }
+            },
+            "unreleased_mb": {
+              "label": {
+                "zh-CN": "未释放(MB)",
+                "en": "Unreleased MB"
+              }
+            },
+            "alloc_count": {
+              "label": {
+                "zh-CN": "分配次数(采样)",
+                "en": "Alloc Count"
+              }
+            },
+            "unreleased_count": {
+              "label": {
+                "zh-CN": "未释放次数(采样)",
+                "en": "Unreleased Count"
+              }
+            },
+            "retention_claim": {
+              "label": {
+                "zh-CN": "能否判断保留",
+                "en": "Retention Claim"
+              }
+            },
+            "heapprofd_issues": {
+              "label": {
+                "zh-CN": "heapprofd 截断/错误",
+                "en": "Heapprofd Issues"
+              }
+            },
+            "process_identity": {
+              "label": {
+                "zh-CN": "进程身份",
+                "en": "Process Identity"
+              }
+            },
+            "status": {
+              "label": {
+                "zh-CN": "状态",
+                "en": "Status"
+              }
+            }
+          },
+          "synthesizeLabels": {}
+        },
         "native_heap_hotspots": {
           "title": {
             "zh-CN": "NativeHeapHotspots",
-            "en": "Native Heap Allocation Hotspots"
+            "en": "Heap Profile Allocation Hotspots (per process × heap)"
           },
           "columns": {
+            "upid": {
+              "label": {
+                "zh-CN": "UPID",
+                "en": "UPID"
+              }
+            },
+            "process_name": {
+              "label": {
+                "zh-CN": "进程",
+                "en": "Process Name"
+              }
+            },
+            "heap_name": {
+              "label": {
+                "zh-CN": "HeapName",
+                "en": "Heap"
+              }
+            },
             "name": {
               "label": {
-                "zh-CN": "函数/符号",
+                "zh-CN": "归因帧(分配器之上首个应用/库帧)",
                 "en": "Name"
               }
             },
@@ -25909,7 +26155,7 @@
             },
             "self_size_mb": {
               "label": {
-                "zh-CN": "自身未释放(MB)",
+                "zh-CN": "归因未释放(MB)",
                 "en": "Self Size MB"
               }
             },
@@ -25917,6 +26163,18 @@
               "label": {
                 "zh-CN": "累计分配(MB)",
                 "en": "Cumulative Alloc MB"
+              }
+            },
+            "self_alloc_mb": {
+              "label": {
+                "zh-CN": "归因分配(MB)",
+                "en": "Self Alloc MB"
+              }
+            },
+            "self_alloc_count": {
+              "label": {
+                "zh-CN": "归因分配次数(采样)",
+                "en": "Self Alloc Count"
               }
             },
             "unreleased_to_alloc_pct": {
@@ -25933,7 +26191,7 @@
             },
             "native_signal": {
               "label": {
-                "zh-CN": "Native 信号",
+                "zh-CN": "信号",
                 "en": "Native Signal"
               }
             },
@@ -25948,14 +26206,26 @@
         },
         "root": {
           "title": {
-            "zh-CN": "Native Heap 分解",
+            "zh-CN": "Heap Profile 分解（Native / Java 分配）",
             "en": "Native Heap Breakdown"
           },
           "columns": {
+            "heap_profile_inventory": {
+              "label": {
+                "zh-CN": "HeapProfileInventory",
+                "en": "Heap Profile Inventory"
+              }
+            },
             "cumulative_size_mb": {
               "label": {
                 "zh-CN": "CumulativeSizeMB",
                 "en": "Cumulative Size MB"
+              }
+            },
+            "self_size_mb": {
+              "label": {
+                "zh-CN": "SelfSizeMB",
+                "en": "Self Size MB"
               }
             },
             "cumulative_alloc_mb": {
@@ -34868,6 +35138,18 @@
                 "en": "Dur ns"
               }
             },
+            "dur_without_trampoline_ms": {
+              "label": {
+                "zh-CN": "去 Trampoline 耗时",
+                "en": "Dur Without Trampoline ms"
+              }
+            },
+            "trampoline_ms": {
+              "label": {
+                "zh-CN": "Trampoline 耗时",
+                "en": "Trampoline ms"
+              }
+            },
             "ttid_ms": {
               "label": {
                 "zh-CN": "TTIDms",
@@ -38083,6 +38365,18 @@
               "label": {
                 "zh-CN": "耗时(ns)",
                 "en": "Dur ns"
+              }
+            },
+            "dur_without_trampoline_ms": {
+              "label": {
+                "zh-CN": "去 Trampoline 耗时",
+                "en": "Dur Without Trampoline ms"
+              }
+            },
+            "trampoline_ms": {
+              "label": {
+                "zh-CN": "Trampoline 耗时",
+                "en": "Trampoline ms"
               }
             },
             "ttid_ms": {

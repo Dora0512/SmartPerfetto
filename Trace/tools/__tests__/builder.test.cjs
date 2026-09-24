@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const {materializeCatalogCases, updateCaseExpectations} = require('../lib/builder.cjs');
+const {materializeCatalogCases, updateBuildManifest, updateCaseExpectations} = require('../lib/builder.cjs');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -63,6 +63,27 @@ test('rejects manifest hash drift before materialization', () => {
     manifest.trace.sha256 = '0'.repeat(64);
     fs.writeFileSync(baseManifestPath, `${JSON.stringify(manifest)}\n`);
     assert.throws(() => materializeCatalogCases(repoRoot), /base trace hash mismatch/);
+  } finally {
+    fs.rmSync(repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('a rebuild stamps the overlay hash and the runtime that reparsed it', () => {
+  const {repoRoot} = fixture();
+  try {
+    const manifestPath = path.join(repoRoot, 'Trace/constructed/derived/case.json');
+    const entry = {manifest_path: manifestPath};
+    const before = fs.readFileSync(manifestPath, 'utf8');
+    const {trace: {sha256: overlaySha}} = JSON.parse(before);
+    updateBuildManifest(entry, {sha256: overlaySha, runtimeRevision: 'a'.repeat(40)});
+    const stamped = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.equal(stamped.trace.sha256, overlaySha);
+    assert.equal(stamped.construction.runtime_revision, 'a'.repeat(40));
+    assert.equal(stamped.construction.base_case_id, 'base');
+
+    const written = fs.readFileSync(manifestPath, 'utf8');
+    updateBuildManifest(entry, {sha256: overlaySha, runtimeRevision: 'a'.repeat(40)});
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), written);
   } finally {
     fs.rmSync(repoRoot, {recursive: true, force: true});
   }

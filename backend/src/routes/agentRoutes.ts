@@ -172,6 +172,7 @@ import type { ClaimSupportV1 } from '../types/evidenceContract';
 import type { ClaimVerificationResult } from '../types/claimVerification';
 import type { IdentityResolutionV1 } from '../types/identityContract';
 import { SkillExecutor } from '../services/skillEngine/skillExecutor';
+import { composeFragmentSql } from '../services/skillEngine/skillFragments';
 import { skillRegistry, ensureSkillRegistryInitialized } from '../services/skillEngine/skillLoader';
 import type { ConversationTurn, Finding, Intent } from '../agent/types';
 import {
@@ -4428,6 +4429,12 @@ async function detectStartups(
   return scenes;
 }
 
+/**
+ * The Skill fragment both legacy input detectors read android_input_events
+ * through, so they see the same prefix-free actions (DOWN/MOVE/UP) as Skills.
+ */
+const INPUT_EVENTS_FRAGMENTS = ['android_input_events_normalized.sql'];
+
 /** Detect scroll sessions from input events + frame timeline */
 async function detectScrollSessions(
   tps: ReturnType<typeof getTraceProcessorService>,
@@ -4435,7 +4442,7 @@ async function detectScrollSessions(
 ): Promise<DetectedScene[]> {
   const scrollResult = await tps.query(
     traceId,
-    `
+    composeFragmentSql({leadingCtes: [], fragments: INPUT_EVENTS_FRAGMENTS, select: `
     WITH
     input_exists AS (
       SELECT 1 AS ok WHERE EXISTS (
@@ -4446,7 +4453,7 @@ async function detectScrollSessions(
       SELECT
         read_time AS ts,
         event_action
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE event_type = 'MOTION'
         AND EXISTS (SELECT ok FROM input_exists)
     ),
@@ -4499,7 +4506,7 @@ async function detectScrollSessions(
     FROM scroll_sessions s
     WHERE s.end_ts > s.start_ts + 100000000
     ORDER BY s.start_ts
-  `,
+  `}),
   );
 
   const scenes: DetectedScene[] = [];
@@ -4532,7 +4539,7 @@ async function detectTapEvents(
 ): Promise<DetectedScene[]> {
   const tapResult = await tps.query(
     traceId,
-    `
+    composeFragmentSql({leadingCtes: [], fragments: INPUT_EVENTS_FRAGMENTS, select: `
     WITH
     input_exists AS (
       SELECT 1 AS ok WHERE EXISTS (
@@ -4543,7 +4550,7 @@ async function detectTapEvents(
       SELECT
         read_time AS ts,
         event_action
-      FROM android_input_events
+      FROM android_input_events_normalized
       WHERE event_type = 'MOTION'
         AND EXISTS (SELECT ok FROM input_exists)
     ),
@@ -4565,7 +4572,7 @@ async function detectTapEvents(
       AND (up_ts - down_ts) < 300000000
     ORDER BY down_ts
     LIMIT 50
-  `,
+  `}),
   );
 
   const scenes: DetectedScene[] = [];

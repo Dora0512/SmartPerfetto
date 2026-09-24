@@ -28,6 +28,7 @@ import {
   extractReferencedSkillIdsFromStrategyText,
   validateSkillDefinitionInProcess,
 } from '../../services/selfEvolution/inProcessValidator';
+import {readSkillFragmentFile, skillFragmentKey} from '../../services/skillEngine/skillFragments';
 import {
   analyzeSqlGuardrails,
   DEFAULT_VALIDATE_SQL_GUARDRAIL_RULES,
@@ -78,6 +79,21 @@ interface VendorOverrideDefinition {
 }
 
 const SKILLS_DIR = path.join(__dirname, '../../../skills');
+
+let skillFragmentCache: ReadonlyMap<string, string> | undefined;
+
+/** Fragment bodies keyed as Skills reference them, so SQL checks see injected text. */
+function loadSkillFragmentCache(): ReadonlyMap<string, string> {
+  if (!skillFragmentCache) {
+    const fragmentsDir = path.join(SKILLS_DIR, 'fragments');
+    skillFragmentCache = new Map(fs.existsSync(fragmentsDir)
+      ? fs.readdirSync(fragmentsDir).filter(file => file.endsWith('.sql')).map(file => [
+        skillFragmentKey(file), readSkillFragmentFile(fragmentsDir, file),
+      ])
+      : []);
+  }
+  return skillFragmentCache;
+}
 const CASES_DIR = path.join(__dirname, '../../../knowledge/cases');
 const STRATEGIES_DIR = path.join(__dirname, '../../../strategies');
 const STRATEGY_FRONTMATTER_RE = /^(?:\s*<!--[\s\S]*?-->\s*)*---\n([\s\S]*?)\n---\n?/;
@@ -744,6 +760,7 @@ export function validateContracts(skill: SkillDefinition, filePath?: string): { 
   // 2. Shared in-process checks. Runtime reconciliation and the source CLI
   // intentionally use the same pure validator; no npm/child-process boundary.
   for (const validationIssue of validateSkillDefinitionInProcess(skill, {
+    fragmentCache: loadSkillFragmentCache(),
     includeStructuralChecks: false,
   })) {
     const formatted = `${validationIssue.path}: ${validationIssue.message}`;

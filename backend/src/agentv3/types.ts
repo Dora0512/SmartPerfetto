@@ -241,6 +241,30 @@ export interface CapabilityProbeResult {
   reason?: string;
 }
 
+/** One positive `stats` row whose trace_processor severity is `data_loss`. */
+export interface TraceDataLossStat {
+  name: string;
+  /** Index for indexed stats (CPU, buffer, ...); null for single stats. */
+  idx: number | null;
+  value: number;
+}
+
+/**
+ * Capture-loss evidence read from trace_processor's own `stats` table and
+ * recovery metadata. `data_loss_detected` sets `absenceEvidence` to
+ * `not_proof`: a missing event may have been dropped rather than never emitted.
+ * `unknown` means the probe could not read the stats, not that the trace is clean.
+ */
+export interface TraceDataLossDiagnosis {
+  status: 'none_detected' | 'data_loss_detected' | 'unknown';
+  absenceEvidence?: 'not_proof';
+  /** Largest positive data-loss stats, bounded; see `lossStatRowCount` for the total. */
+  lossStats?: TraceDataLossStat[];
+  lossStatRowCount?: number;
+  /** `trace_recovery_reason` metadata: the trace was recovered, not cleanly finalized. */
+  recoveryReason?: string;
+}
+
 /** Complete trace data availability diagnosis. */
 export interface TraceCompleteness {
   /** Capabilities with data ready for analysis */
@@ -253,6 +277,12 @@ export interface TraceCompleteness {
   insufficient: CapabilityProbeResult[];
   /** Timestamp of diagnosis */
   diagnosedAt: number;
+  /**
+   * Trace-wide capture loss. Kept outside the capability buckets: those say
+   * whether an analysis has data at all, this says whether the data that is
+   * present can prove an event did *not* happen.
+   */
+  dataLoss?: TraceDataLossDiagnosis;
   /** Probe-time shadow snapshot; current prompt/chat consumers intentionally ignore it. */
   capabilityManifestResolution?: CapabilityManifestResolutionV1;
 }

@@ -3,6 +3,8 @@
 -- acknowledged deliveries: absence never proves that a user/device was idle.
 -- Do not infer scrolling, long-click recognition or fling from MOVE counts,
 -- contact duration or subsequent frames. Preserve native device/display IDs.
+-- Requires fragments/android_input_events_normalized.sql listed before this
+-- fragment: the legacy branch reads its prefix-free actions (MOVE, DOWN, UP).
 scene_raw_input AS (
   SELECT 'android_motion_events' AS source_table, CAST(id AS TEXT) AS source_id,
     ts, 'MOTION' AS event_type,
@@ -37,7 +39,7 @@ scene_raw_input AS (
       COALESCE(event_channel, 'unknown:' || COALESCE(input_event_id, event_seq, CAST(dispatch_ts AS TEXT))),
     COALESCE(input_event_id, event_seq, '') || ':' || COALESCE(event_channel, '') || ':' || dispatch_ts,
     input_event_id, dispatch_ts
-  FROM android_input_events AS legacy
+  FROM android_input_events_normalized AS legacy
   WHERE NOT EXISTS (
     SELECT 1 FROM android_motion_events AS m
     WHERE legacy.input_event_id IN (CAST(m.event_id AS TEXT), printf('0x%x', m.event_id))

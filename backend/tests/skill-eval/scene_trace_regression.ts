@@ -155,9 +155,13 @@ async function runCase(testCase: TraceCase): Promise<void> {
       }
     }
     if (testCase.file === 'Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace') {
+      // Since the 99234d73fe runtime the app's 18 physical events carry their
+      // action, so the contact resolves to one movement gesture; the 37
+      // system_server/systemui deliveries still lack one and must stay counted.
       if (coverage.observed_event_count !== 55 || coverage.physical_event_count !== 18 ||
-          !gestures.some((row: any) => row.gesture_type === 'input_unknown')) {
-        throw new Error('SurfaceView missing-action observations must survive with partial semantics');
+          coverage.missing_action_count !== 37 ||
+          !gestures.some((row: any) => row.gesture_type === 'touch_move')) {
+        throw new Error('SurfaceView contact must resolve to movement while missing-action deliveries stay counted');
       }
     }
 

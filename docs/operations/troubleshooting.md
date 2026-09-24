@@ -78,7 +78,7 @@ TRACE_PROCESSOR_DOWNLOAD_BASE=https://your-mirror/perfetto-luci-artifacts ./star
 TRACE_PROCESSOR_DOWNLOAD_URL=https://your-mirror/trace_processor_shell ./start.sh
 ```
 
-镜像或 URL 下载的内容仍会按 `scripts/trace-processor-pin.env` 中的固定 SHA256 校验。不要随意使用来源不明且校验不匹配的 binary。
+镜像需保持 `<PERFETTO_ARTIFACT_VERSION>/<platform>/trace_processor_shell` 的目录结构，其中 `PERFETTO_ARTIFACT_VERSION` 是 release tag 或上游 main 提交的完整 SHA。镜像或 URL 下载的内容仍会按 `scripts/trace-processor-pin.env` 中的固定 SHA256 校验。不要随意使用来源不明且校验不匹配的 binary。
 
 ## macOS 拦截 trace_processor_shell
 

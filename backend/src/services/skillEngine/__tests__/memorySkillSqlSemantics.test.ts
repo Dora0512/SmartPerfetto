@@ -6,7 +6,11 @@ import fs from 'fs';
 import path from 'path';
 import {spawnSync} from 'child_process';
 import yaml from 'js-yaml';
+import Database from 'better-sqlite3';
 import {describe, expect, it} from '@jest/globals';
+import {SkillExecutor} from '../skillExecutor';
+import {normalizeSkillDefinition} from '../skillLoader';
+import {injectFragmentCtes, readSkillFragmentFile} from '../skillFragments';
 
 const sqlite3Available = spawnSync('sqlite3', ['-version'], {encoding: 'utf-8'}).status === 0;
 const describeWithSqlite = sqlite3Available ? describe : describe.skip;
@@ -14,11 +18,24 @@ const describeWithSqlite = sqlite3Available ? describe : describe.skip;
 const loadYaml = (relativePath: string): any =>
   yaml.load(fs.readFileSync(path.join(process.cwd(), relativePath), 'utf-8')) as any;
 
+const fragmentsDir = path.join(process.cwd(), 'skills/fragments');
+
+// Step SQL with its sql_fragments injected by the production composer.
 const loadStepSql = (skillPath: string, stepId: string): string => {
   const skill = loadYaml(skillPath);
   const step = skill.steps?.find((candidate: any) => candidate.id === stepId);
   expect(step?.sql).toBeTruthy();
-  return step.sql;
+  const fragments = (step.sql_fragments ?? []).map((fragment: string) =>
+    readSkillFragmentFile(fragmentsDir, path.basename(fragment)));
+  return injectFragmentCtes(step.sql, fragments);
+};
+
+// Fragment inputs shared by the heap Skills (fragments/heap_target_process.sql).
+const heapScopeParams = {
+  '${upid}': 'NULL',
+  '${process_name|}': '',
+  '${package|}': '',
+  '${graph_sample_ts}': 'NULL',
 };
 
 const replaceParams = (sql: string, params: Record<string, string>): string =>
@@ -66,6 +83,9 @@ const heapGraphSchema = `
     field_type_name TEXT
   );
   CREATE TABLE _excluded_refs(id INTEGER);
+  CREATE TABLE stats(name TEXT, idx INTEGER, severity TEXT, value INTEGER);
+  CREATE TABLE heap_graph(upid INTEGER, ts INTEGER);
+  CREATE TABLE heap_profile_allocation(upid INTEGER, heap_name TEXT, callsite_id INTEGER, size INTEGER, count INTEGER);
 `;
 
 const heapGraphFixture = `
@@ -96,21 +116,28 @@ const heapGraphFixture = `
   INSERT INTO heap_graph_reference VALUES (101, 50, 1, 'owner.leaky', NULL, 'com.example.LeakyActivity');
   INSERT INTO heap_graph_reference VALUES (102, 51, 1, 'java.lang.ref.Reference.referent', NULL, 'java.lang.Object');
   INSERT INTO _excluded_refs VALUES (102);
+  INSERT INTO heap_graph VALUES (1, 1000);
 `;
 
 const heapParams = {
-  '${process_name|}': '',
-  '${package|}': '',
+  ...heapScopeParams,
   '${class_name_glob|}': '*ViewModel',
   '${lifecycle_slice_prefix|SI$}': 'SI$',
   '${max_candidates|50}': '50',
   '${max_reference_edges|100}': '100',
-  '${graph_sample_ts}': 'NULL',
 };
+
+// An incomplete dump keeps forward references as self_size = -1 placeholders
+// typed with class id 0; they are not instances of that class.
+const placeholderFixture = `
+  INSERT INTO heap_graph_object VALUES (90, 1, 1000, 1, -1, 0, 1);
+  INSERT INTO heap_graph_object VALUES (91, 1, 1000, 1, -1, 0, 1);
+`;
 
 describe('memory skill SQL semantic guards', () => {
   it('defines a bounded dominator path extraction contract with retained-size propagation', () => {
     const skill = loadYaml('skills/composite/android_heap_dominator_path_extract.skill.yaml');
+    const passSql = loadStepSql('skills/composite/android_heap_dominator_path_extract.skill.yaml', 'dominator_tree_pass');
     const sql = loadStepSql('skills/composite/android_heap_dominator_path_extract.skill.yaml', 'dominator_paths');
 
     expect(skill.batch_analysis).toEqual({
@@ -125,9 +152,10 @@ describe('memory skill SQL semantic guards', () => {
         'retained_size_bytes',
       ],
     });
-    expect(sql).toContain('_graph_aggregating_scan!');
-    expect(sql).toContain('WITH RECURSIVE paths');
-    expect(sql).toContain('PARTITION BY tree.upid, tree.graph_sample_ts');
+    expect(passSql).toContain('_graph_aggregating_scan!');
+    expect(passSql).toContain('WITH RECURSIVE paths');
+    expect(passSql).toContain('PARTITION BY tree.upid, tree.graph_sample_ts');
+    expect(sql).toContain('JOIN heap_graph_dump_scope AS scope');
     expect(sql).toContain('c.cumulative_size AS retained_size_bytes');
     expect(sql).toContain('p.root_type');
     expect(sql).toContain('MIN(MAX(COALESCE(${max_rows|500}, 500), 1), 500)');
@@ -243,6 +271,54 @@ describeWithSqlite('android_heap_graph_leak_candidates SQL semantics', () => {
       field_display: 'owner.leaky',
     }));
   });
+
+  it('excludes self_size = -1 placeholders and flags the dump incomplete', () => {
+    const sql = replaceParams(
+      loadStepSql('skills/atomic/android_heap_graph_leak_candidates.skill.yaml', 'leak_candidates'),
+      heapParams
+    );
+    const rows = runSqliteJson(`${heapGraphSchema}\n${heapGraphFixture}\n${placeholderFixture}\n${sql};`);
+
+    const leaky = rows.find(row => row.class_name === 'com.example.LeakyActivity');
+    expect(leaky).toEqual(expect.objectContaining({
+      reachable_obj_count: 1,
+      self_size_mb: 1,
+      dump_completeness: 'incomplete_dump',
+    }));
+  });
+
+  it('falls back to the unnamed .hprof process instead of returning nothing for a package filter', () => {
+    const sql = replaceParams(
+      loadStepSql('skills/atomic/android_heap_graph_leak_candidates.skill.yaml', 'leak_candidates'),
+      {...heapParams, '${package|}': 'com.example.app'}
+    );
+    const unnamedFixture = heapGraphFixture.replace(
+      "INSERT INTO process VALUES (1, 'com.example.app');",
+      'INSERT INTO process VALUES (1, NULL);'
+    );
+    const rows = runSqliteJson(`${heapGraphSchema}\n${unnamedFixture}\n${sql};`);
+
+    const leaky = rows.find(row => row.class_name === 'com.example.LeakyActivity');
+    expect(leaky).toEqual(expect.objectContaining({
+      process_name: 'upid:1',
+      process_identity: 'process_name_unavailable_upid_fallback',
+      dump_completeness: 'no_incompleteness_signal',
+      leak_state: 'destroyed_reachable',
+    }));
+
+    // Exact or `name:*` matching only: a prefix of the package is not a match.
+    const prefix = runSqliteJson(`${heapGraphSchema}\n${heapGraphFixture}\n${replaceParams(
+      loadStepSql('skills/atomic/android_heap_graph_leak_candidates.skill.yaml', 'leak_candidates'),
+      {...heapParams, '${package|}': 'com.example'}
+    )};`);
+    expect(prefix).toEqual([]);
+
+    const named = runSqliteJson(`${heapGraphSchema}\n${heapGraphFixture}\n${replaceParams(
+      loadStepSql('skills/atomic/android_heap_graph_leak_candidates.skill.yaml', 'leak_candidates'),
+      {...heapParams, '${package|}': 'com.other.app'}
+    )};`);
+    expect(named).toEqual([]);
+  });
 });
 
 describeWithSqlite('RSS memory skill SQL semantics', () => {
@@ -315,63 +391,190 @@ describeWithSqlite('RSS memory skill SQL semantics', () => {
   });
 });
 
-describeWithSqlite('native heap skill SQL semantics', () => {
-  const nativeHeapSchema = `
-    CREATE TABLE android_heap_profile_summary_tree(
+describeWithSqlite('heap profile skill SQL semantics', () => {
+  // Minimal stand-ins for heap_profile_allocation and the stdlib callstack
+  // forest: upid 1 has a libc.malloc profile (allocations and frees) and a
+  // com.android.art Java allocation profile (allocations only).
+  const heapProfileSchema = `
+    CREATE TABLE process(upid INTEGER, name TEXT, pid INTEGER);
+    CREATE TABLE heap_graph(upid INTEGER, ts INTEGER);
+    CREATE TABLE stats(name TEXT, idx INTEGER, severity TEXT, value INTEGER);
+    CREATE TABLE stack_profile_mapping(id INTEGER, name TEXT);
+    CREATE TABLE _callstack_spc_forest(
+      id INTEGER,
+      parent_id INTEGER,
       name TEXT,
-      mapping_name TEXT,
-      cumulative_size INTEGER,
-      self_size INTEGER,
-      cumulative_alloc_size INTEGER,
-      source_file TEXT
+      mapping_id INTEGER,
+      source_file TEXT,
+      callsite_id INTEGER,
+      is_leaf_function_in_callsite_frame INTEGER
+    );
+    CREATE TABLE heap_profile_allocation(
+      upid INTEGER,
+      heap_name TEXT,
+      callsite_id INTEGER,
+      size INTEGER,
+      count INTEGER
     );
   `;
-  const nativeHeapFixture = `
-    INSERT INTO android_heap_profile_summary_tree VALUES (
-      'LeakyNativeCache',
-      '/data/app/libexample.so',
-      20971520,
-      10485760,
-      26214400,
-      'cache.cc'
-    );
-    INSERT INTO android_heap_profile_summary_tree VALUES (
-      'TransientBufferBuilder',
-      '/data/app/libexample.so',
-      1048576,
-      524288,
-      104857600,
-      'buffer.cc'
-    );
+  const heapProfileFixture = `
+    INSERT INTO process VALUES (1, 'com.example.app', 100);
+    INSERT INTO process VALUES (2, 'com.other.app', 200);
+    INSERT INTO stats VALUES ('heapprofd_buffer_overran', 100, 'data_loss', 3);
+    INSERT INTO stats VALUES ('heapprofd_unwind_samples', 100, 'info', 50);
+
+    INSERT INTO stack_profile_mapping VALUES (1, '/apex/com.android.runtime/lib64/bionic/libc.so');
+    INSERT INTO stack_profile_mapping VALUES (2, '/data/app/libexample.so');
+    INSERT INTO stack_profile_mapping VALUES (3, '/apex/com.android.art/lib64/libart.so');
+    INSERT INTO stack_profile_mapping VALUES (4, '/data/app/base.apk');
+    INSERT INTO stack_profile_mapping VALUES (5, '/system/bin/app_process64');
+
+    INSERT INTO _callstack_spc_forest VALUES (1, NULL, 'main', 5, NULL, 1, 1);
+    INSERT INTO _callstack_spc_forest VALUES (2, 1, 'LeakyNativeCache', 2, 'cache.cc', 2, 1);
+    INSERT INTO _callstack_spc_forest VALUES (3, 2, 'malloc', 1, NULL, 10, 1);
+    INSERT INTO _callstack_spc_forest VALUES (4, 1, 'TransientBufferBuilder', 2, 'buffer.cc', 4, 1);
+    INSERT INTO _callstack_spc_forest VALUES (5, 4, 'malloc', 1, NULL, 11, 1);
+    INSERT INTO _callstack_spc_forest VALUES (6, 1, 'com.example.IconBuffer.<init>', 4, NULL, 6, 1);
+    INSERT INTO _callstack_spc_forest VALUES (7, 6, 'art::gc::Heap::AllocWithNewTLAB', 3, NULL, 12, 1);
+
+    INSERT INTO heap_profile_allocation VALUES (1, 'libc.malloc', 10, 26214400, 10);
+    INSERT INTO heap_profile_allocation VALUES (1, 'libc.malloc', 10, -5242880, -2);
+    INSERT INTO heap_profile_allocation VALUES (1, 'libc.malloc', 11, 104857600, 1000);
+    INSERT INTO heap_profile_allocation VALUES (1, 'libc.malloc', 11, -103809024, -990);
+    INSERT INTO heap_profile_allocation VALUES (1, 'com.android.art', 12, 62914560, 500);
+    INSERT INTO heap_profile_allocation VALUES (2, 'libc.malloc', 10, 52428800, 7);
   `;
+  const hotspotSql = () => replaceParams(
+    loadStepSql('skills/atomic/native_heap_breakdown.skill.yaml', 'native_heap_hotspots'),
+    {
+      ...heapScopeParams,
+      '${process_name|}': 'com.example.app',
+      '${min_size_mb|1}': '10',
+      '${min_alloc_mb|0}': '50',
+      '${max_rows|100}': '100',
+    }
+  );
+  const inventorySql = (processName = 'com.example.app') => replaceParams(
+    loadStepSql('skills/atomic/native_heap_breakdown.skill.yaml', 'heap_profile_inventory'),
+    {...heapScopeParams, '${process_name|}': processName}
+  );
 
-  it('separates unreleased native retention from allocation churn', () => {
-    const sql = replaceParams(
-      loadStepSql('skills/atomic/native_heap_breakdown.skill.yaml', 'native_heap_hotspots'),
-      {
-        '${min_size_mb|1}': '10',
-        '${min_alloc_mb|0}': '50',
-        '${max_rows|100}': '100',
-      }
-    );
-    const rows = runSqliteJson(`${nativeHeapSchema}\n${nativeHeapFixture}\n${sql};`);
+  it('inventories each (process, heap) and never measures retention without recorded frees', () => {
+    const rows = runSqliteJson(`${heapProfileSchema}\n${heapProfileFixture}\n${inventorySql()};`);
 
-    const retention = rows.find(row => row.name === 'LeakyNativeCache');
-    expect(retention).toEqual(expect.objectContaining({
+    expect(rows.every(row => row.upid === 1)).toBe(true);
+
+    expect(rows.find(row => row.heap_name === 'libc.malloc')).toEqual(expect.objectContaining({
+      process_name: 'com.example.app',
+      heap_semantics: 'allocations_and_frees',
+      alloc_mb: 125,
+      unreleased_mb: 21,
+      retention_claim: 'retention_measurable',
+      heapprofd_issues: 'heapprofd_buffer_overran=3',
+    }));
+    expect(rows.find(row => row.heap_name === 'com.android.art')).toEqual(expect.objectContaining({
+      heap_semantics: 'java_allocations_only',
+      alloc_mb: 60,
+      unreleased_mb: null,
+      retention_claim: 'churn_only_frees_not_recorded',
+    }));
+  });
+
+  it('reports an explicit no-data row when heapprofd recorded nothing', () => {
+    const rows = runSqliteJson(`${heapProfileSchema}\n${inventorySql('')};`);
+
+    expect(rows).toEqual([expect.objectContaining({status: 'no_heap_profile_data', heapprofd_issues: 'none'})]);
+  });
+
+  it('attributes native allocations to the first frame above the allocator and separates retention from churn', () => {
+    const rows = runSqliteJson(`${heapProfileSchema}\n${heapProfileFixture}\n${hotspotSql()};`);
+    const nativeRows = rows.filter(row => row.heap_name === 'libc.malloc');
+
+    expect(nativeRows.find(row => row.name === 'malloc')).toBeUndefined();
+    expect(nativeRows.find(row => row.name === 'LeakyNativeCache')).toEqual(expect.objectContaining({
       cumulative_size_mb: 20,
+      self_size_mb: 20,
       cumulative_alloc_mb: 25,
       unreleased_to_alloc_pct: 80,
       churn_ratio: 1.25,
       native_signal: 'unreleased_native_retention',
+      source_file: 'cache.cc',
     }));
-
-    const churn = rows.find(row => row.name === 'TransientBufferBuilder');
-    expect(churn).toEqual(expect.objectContaining({
+    expect(nativeRows.find(row => row.name === 'TransientBufferBuilder')).toEqual(expect.objectContaining({
       cumulative_size_mb: 1,
       cumulative_alloc_mb: 100,
       unreleased_to_alloc_pct: 1,
       churn_ratio: 100,
       native_signal: 'allocation_churn',
     }));
+    expect(nativeRows.find(row => row.name === 'main')).toEqual(expect.objectContaining({
+      self_alloc_mb: 0,
+      native_signal: 'call_path_ancestor',
+    }));
+  });
+
+  it('classifies a com.android.art allocation profile as churn only, never retention', () => {
+    const rows = runSqliteJson(`${heapProfileSchema}\n${heapProfileFixture}\n${hotspotSql()};`);
+    const javaRows = rows.filter(row => row.heap_name === 'com.android.art');
+
+    expect(javaRows).toEqual([
+      expect.objectContaining({
+        name: 'com.example.IconBuffer.<init>',
+        cumulative_size_mb: null,
+        self_size_mb: null,
+        self_alloc_mb: 60,
+        unreleased_to_alloc_pct: null,
+        native_signal: 'allocation_churn',
+      }),
+    ]);
+  });
+});
+
+describe('android_memory_v57_ai_diagnostics heap profile scope', () => {
+  it('passes its process scope through to the shared heap profile Skill', async () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE process(upid INTEGER, name TEXT, pid INTEGER);
+      CREATE TABLE stats(name TEXT, idx INTEGER, severity TEXT, value INTEGER);
+      CREATE TABLE heap_graph(upid INTEGER, ts INTEGER);
+      CREATE TABLE heap_graph_object(id INTEGER, upid INTEGER, graph_sample_ts INTEGER, self_size INTEGER);
+      CREATE TABLE android_heap_graph_stats(upid INTEGER);
+      CREATE TABLE android_heap_graph_class_summary_tree(upid INTEGER);
+      CREATE TABLE stack_profile_mapping(id INTEGER, name TEXT);
+      CREATE TABLE _callstack_spc_forest(id INTEGER, parent_id INTEGER, name TEXT, mapping_id INTEGER,
+        source_file TEXT, callsite_id INTEGER, is_leaf_function_in_callsite_frame INTEGER);
+      CREATE TABLE heap_profile_allocation(upid INTEGER, heap_name TEXT, callsite_id INTEGER, size INTEGER, count INTEGER);
+      INSERT INTO process VALUES (1, 'com.example.app', 100), (2, 'com.other.app', 200);
+      INSERT INTO stack_profile_mapping VALUES (1, '/apex/com.android.runtime/lib64/bionic/libc.so'), (2, '/data/app/libexample.so');
+      INSERT INTO _callstack_spc_forest VALUES (1, NULL, 'LeakyNativeCache', 2, NULL, 1, 1), (2, 1, 'malloc', 1, NULL, 10, 1);
+      INSERT INTO heap_profile_allocation VALUES (1, 'libc.malloc', 10, 20971520, 4), (2, 'libc.malloc', 10, 20971520, 4);
+    `);
+    const executor = new SkillExecutor({query: async (_traceId: string, sql: string) => {
+      const sqliteSql = sql.replace(/INCLUDE PERFETTO MODULE [^;]+;/g, '').trim();
+      if (!sqliteSql) return {columns: [], rows: []};
+      const statement = db.prepare(sqliteSql);
+      return {columns: statement.columns().map(column => column.name), rows: statement.raw().all()};
+    }} as any);
+    const load = (relativePath: string) =>
+      normalizeSkillDefinition(loadYaml(relativePath), path.join(process.cwd(), relativePath))!;
+    executor.registerSkills([
+      load('skills/composite/android_memory_v57_ai_diagnostics.skill.yaml'),
+      load('skills/atomic/native_heap_breakdown.skill.yaml'),
+    ]);
+    executor.setFragmentRegistry(new Map(['heap_target_process.sql', 'heap_profile_scope.sql', 'heap_graph_dump_scope.sql']
+      .map(file => [`fragments/${file}`, readSkillFragmentFile(fragmentsDir, file)])));
+
+    const result = await executor.execute('android_memory_v57_ai_diagnostics', 'trace', {process_name: 'com.example.app'});
+    const hotspots = result.rawResults?.heap_profile_hotspots?.data as any;
+    const inventory = hotspots?.rawResults?.heap_profile_inventory?.data ?? [];
+
+    expect(hotspots?.success).toBe(true);
+    expect(inventory).toEqual([expect.objectContaining({upid: 1, process_name: 'com.example.app'})]);
+
+    const unscoped = await executor.execute('android_memory_v57_ai_diagnostics', 'trace', {});
+    const unscopedInventory = (unscoped.rawResults?.heap_profile_hotspots?.data as any)
+      ?.rawResults?.heap_profile_inventory?.data ?? [];
+    expect(unscopedInventory.map((row: any) => row.upid).sort()).toEqual([1, 2]);
+    db.close();
   });
 });

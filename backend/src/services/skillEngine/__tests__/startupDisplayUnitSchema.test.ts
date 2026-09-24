@@ -90,7 +90,8 @@ describe('startup display unit contracts', () => {
     const db = new Database(':memory:');
     try {
       db.exec(`
-        CREATE TABLE android_startups(startup_id INTEGER, package TEXT, startup_type TEXT, ts INTEGER, dur INTEGER);
+        CREATE TABLE android_startups(startup_id INTEGER, package TEXT, startup_type TEXT, ts INTEGER, ts_end INTEGER, dur INTEGER);
+        CREATE TABLE _startup_events(ts INTEGER, dur INTEGER, ts_end INTEGER, package_name TEXT);
         CREATE TABLE android_startup_time_to_display(startup_id INTEGER, time_to_initial_display INTEGER, time_to_full_display INTEGER);
         CREATE TABLE android_startup_threads(startup_id INTEGER, utid INTEGER, is_main_thread INTEGER, ts INTEGER, dur INTEGER);
         CREATE TABLE thread_track(id INTEGER, utid INTEGER);
@@ -98,14 +99,26 @@ describe('startup display unit contracts', () => {
         CREATE TABLE android_startup_processes(startup_id INTEGER, upid INTEGER);
         CREATE TABLE process(upid INTEGER, start_ts INTEGER);
         INSERT INTO android_startups VALUES
-          (1, 'com.example', 'cold', 100, 1000),
-          (2, 'com.example', 'warm', 200, 2000),
-          (3, 'com.example', 'hot', 300, 3000);
+          (1, 'com.example', 'cold', 100, 1100, 1000),
+          (2, 'com.example', 'warm', 200, 2200, 2000),
+          (3, 'com.example', 'hot', 300, 3300, 3000);
+        -- Startup 1 opens on another package's trampoline launch; 2 has only its own.
+        INSERT INTO _startup_events VALUES
+          (100, 50, 150, 'com.trampoline'),
+          (160, 900, 1060, 'com.example'),
+          (1200, 1000, 2200, 'com.example');
         INSERT INTO android_startup_processes VALUES (1, 42), (1, 42), (2, 43), (2, 44), (3, NULL);
         INSERT INTO process VALUES (42, 100), (43, 200), (44, 200);
       `);
-      const rows = db.prepare(sql).all() as Array<{startup_id: number; upid: number | null}>;
+      const rows = db.prepare(sql).all() as Array<{
+        startup_id: number; upid: number | null; dur_without_trampoline_ms: number; trampoline_ms: number;
+      }>;
       expect(Object.fromEntries(rows.map(row => [row.startup_id, row.upid]))).toEqual({1: 42, 2: null, 3: null});
+      // Mirrors android_startups.dur_without_trampoline: only the launch that
+      // follows an earlier one inside the span is split off; otherwise dur.
+      expect(Object.fromEntries(rows.map(row =>
+        [row.startup_id, [row.dur_without_trampoline_ms * 1e6, row.trampoline_ms * 1e6].map(Math.round)])))
+        .toEqual({1: [900, 100], 2: [2000, 0], 3: [3000, 0]});
     } finally {
       db.close();
     }

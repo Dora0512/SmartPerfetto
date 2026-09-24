@@ -52,6 +52,7 @@ prerequisites:
   modules:
     - android.startup.startups
     - android.startup.time_to_display
+    - android.startup.startup_events
     - android.startup.startup_breakdowns
     - android.binder
 
@@ -117,6 +118,8 @@ steps:
           template: "冷启动耗时 {{dur_ms}}ms，超过 1s 建议优化"
         - condition: "dur_ms > 1000 && startup_type === 'warm'"
           template: "温启动耗时 {{dur_ms}}ms，超过 1s 建议优化"
+        - condition: "trampoline_ms > 0"
+          template: "启动区间含 {{trampoline_ms}}ms trampoline 跳转，目标包自身启动 {{dur_without_trampoline_ms}}ms"
     display:
       level: key
       layer: overview
@@ -173,6 +176,16 @@ steps:
           type: duration
           format: duration_ms
           unit: ns
+        - name: dur_without_trampoline_ms
+          label: "去 Trampoline 耗时"
+          type: duration
+          format: duration_ms
+          unit: ms
+        - name: trampoline_ms
+          label: "Trampoline 耗时"
+          type: duration
+          format: duration_ms
+          unit: ms
         - name: ttid_ms
           label: "TTID"
           type: duration

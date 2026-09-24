@@ -18,10 +18,10 @@ official_perfetto:
   official_skill_role: gap_check_only
 runtime_perfetto:
   repository: https://github.com/google/perfetto
-  reported_version: v58.2
-  revision: add693d8b338ba9599dbcbc3e300b1ab8c000897
+  reported_version: v58.3
+  revision: 99234d73fe356bf7edf6b2cb7afcf2a9eefc5368
   rpc_api_version: 14
-  stdlib_tree: 54fc9f0b5c8dedb8772283b6786753fbb918da0d
+  stdlib_tree: c4ed7bdb0dfc5c21fb00e3982220d39abe2911bf
 sql_fragments:
   backend/skills/fragments/scene_response_marker_facts.sql:
     disposition: exported
@@ -32,6 +32,9 @@ sql_fragments:
   backend/skills/fragments/scene_device_state_facts.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/scene_device_state_facts.sql
+  backend/skills/fragments/android_input_events_normalized.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/android_input_events_normalized.sql
   backend/skills/fragments/scene_input_facts.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/scene_input_facts.sql
@@ -134,6 +137,15 @@ sql_fragments:
   backend/skills/fragments/thermal_sample_quality.sql:
     disposition: exported
     destination: references/generated/runtime/fragments/thermal_sample_quality.sql
+  backend/skills/fragments/heap_target_process.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/heap_target_process.sql
+  backend/skills/fragments/heap_graph_dump_scope.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/heap_graph_dump_scope.sql
+  backend/skills/fragments/heap_profile_scope.sql:
+    disposition: exported
+    destination: references/generated/runtime/fragments/heap_profile_scope.sql
 vendor_overrides:
   backend/skills/vendors/honor/startup.override.yaml:
     disposition: exported

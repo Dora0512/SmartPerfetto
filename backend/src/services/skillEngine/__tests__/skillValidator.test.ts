@@ -2,7 +2,7 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { validateSkillInputs, validateSkillConditions, validateFragmentReferences, validateProcessScopeDeclarations } from '../skillValidator';
+import { validateSkillInputs, validateSkillConditions, validateFragmentReferences, validateNormalizedStdlibReads, validateProcessScopeDeclarations } from '../skillValidator';
 import { extractRootVariables, JS_BUILTINS } from '../expressionUtils';
 import type { SkillDefinition, SkillInput } from '../types';
 
@@ -280,6 +280,50 @@ describe('validateSkillConditions', () => {
   it('returns empty for skill with no steps', () => {
     const skill = makeSkill({ steps: [] });
     expect(validateSkillConditions(skill)).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// validateNormalizedStdlibReads
+// =============================================================================
+
+describe('validateNormalizedStdlibReads', () => {
+  const owner = 'fragments/android_input_events_normalized.sql';
+  const fragments = new Map([
+    [owner, 'android_input_events_normalized AS NOT MATERIALIZED (SELECT * FROM android_input_events)'],
+    ['fragments/raw_reader.sql', 'raw_reader AS (SELECT event_action FROM android_input_events)'],
+    ['fragments/good_reader.sql', 'good_reader AS (SELECT event_action FROM android_input_events_normalized)'],
+  ]);
+
+  it('rejects raw FROM/JOIN reads in root, step, branch and exact SQL', () => {
+    const warnings = validateNormalizedStdlibReads({
+      name: 'raw', sql: 'SELECT * FROM android_input_events',
+      steps: [
+        { id: 'joined', type: 'atomic', sql: 'SELECT 1 FROM frames f JOIN Android_Input_Events ie ON ie.upid = f.upid' },
+        { id: 'branch', type: 'conditional', conditions: [{ when: 'true', then: {
+          id: 'nested', type: 'atomic', sql: 'SELECT 1', exact_sql: { sql: 'SELECT 1 FROM android_input_events', process_scope: { role: 'target' } },
+        } }] },
+      ],
+    } as unknown as SkillDefinition, fragments);
+    expect(warnings.map(warning => warning.stepId)).toEqual(['root', 'joined', 'branch.exact_sql']);
+    expect(warnings[0].message).toContain(owner);
+  });
+
+  it('accepts the normalized relation, the owner fragment, comments, strings and existence probes', () => {
+    expect(validateNormalizedStdlibReads({
+      name: 'ok', sql: `-- FROM android_input_events
+        SELECT 'FROM android_input_events', (SELECT 1 FROM sqlite_master WHERE name = 'android_input_events')
+        FROM android_input_events_normalized`,
+      sql_fragments: [owner, 'fragments/good_reader.sql'],
+      steps: [{ id: 'fallback', type: 'atomic', sql: 'CREATE VIEW IF NOT EXISTS android_input_events AS SELECT NULL AS event_action WHERE 0' }],
+    } as unknown as SkillDefinition, fragments)).toEqual([]);
+  });
+
+  it('rejects a referenced fragment that bypasses the owner fragment', () => {
+    const warnings = validateNormalizedStdlibReads({
+      name: 'frag', sql: 'SELECT * FROM raw_reader', sql_fragments: ['fragments/raw_reader.sql'],
+    } as SkillDefinition, fragments);
+    expect(warnings).toEqual([expect.objectContaining({ stepId: 'root', message: expect.stringContaining("Fragment 'fragments/raw_reader.sql'") })]);
   });
 });
 

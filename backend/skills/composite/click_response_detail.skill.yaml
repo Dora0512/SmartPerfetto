@@ -359,12 +359,13 @@ steps:
         - name: is_speculative_frame
           label: "推测帧"
           type: boolean
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       -- 父 Skill 直接传入 android_input_events 的精确事件边界；不猜测相邻事件。
       -- Frame 阶段自 Perfetto 7b573c1 起由 _android_input_frames 扩展提供。
       WITH target_event AS (
         SELECT *
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE process_name = '${process_name}'
           AND dispatch_ts = ${event_ts}
           AND receive_ts + receive_dur = ${event_end_ts}

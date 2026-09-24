@@ -99,6 +99,7 @@ display:
       label: "评级"
       type: string
 
+sql_fragments: [fragments/android_input_events_normalized.sql]
 sql: |
   SELECT
     printf('%d', dispatch_ts) as input_ts,
@@ -119,7 +120,7 @@ sql: |
       WHEN total_latency_dur / 1e6 < 150 THEN '需优化'
       ELSE '严重'
     END as rating
-  FROM android_input_events
+  FROM android_input_events_normalized
   WHERE (('${package}' = '' OR process_name = '${package}' OR process_name GLOB '${package}:*') OR '${package}' = '')
     AND (${start_ts} IS NULL OR dispatch_ts >= ${start_ts})
     AND (${end_ts} IS NULL OR dispatch_ts <= ${end_ts})

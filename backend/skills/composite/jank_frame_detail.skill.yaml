@@ -2196,6 +2196,14 @@ steps:
           - "检查是否有后台密集计算任务"
           - "考虑优化或推迟非关键任务"
 
+      - condition: "cluster_load_data?.data?.find(c => c.cluster === '超大核簇')?.load_pct > 90"
+        severity: critical
+        diagnosis: "超大核簇负载 ${cluster_load_data.data.find(c => c.cluster === '超大核簇')?.load_pct}%，接近跑满"
+        confidence: high
+        suggestions:
+          - "超大核资源严重不足，关键线程可能被迫落到大核或更小的核"
+          - "检查是否有后台密集计算任务占用超大核"
+
       - condition: "cluster_load_data?.data?.find(c => c.cluster === '小核簇')?.load_pct > 95"
         severity: warning
         diagnosis: "小核簇负载 ${cluster_load_data.data.find(c => c.cluster === '小核簇')?.load_pct}%，几乎跑满"

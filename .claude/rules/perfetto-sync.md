@@ -49,7 +49,20 @@ Use this order unless the task has a narrower explicit scope:
    when the plugin UI, Perfetto UI bundle, or generated UI assets changed.
 8. Update trace processor prebuilts and pin files only when that runtime is part
    of the sync. Keep independent recording-tool pins separate unless the task
-   explicitly updates them too.
+   explicitly updates them too. The UI talks to the backend processor over RPC
+   and runs stdlib SQL of its own revision, so a UI synced to upstream main
+   needs a processor from the same revision (a v58.2 processor lacks the
+   flamegraph intrinsics and `machine_id` columns the v59-era UI queries).
+   Google's LUCI post-submit CI publishes `trace_processor_shell` under
+   `<commit>/<platform>/` for some main commits: merge the submodule at exactly
+   a commit whose five platform artifacts all exist and pin
+   `PERFETTO_VERSION` and `PERFETTO_ARTIFACT_VERSION` to it. That binary is not
+   release-qualified; the SQL and scene regressions below are its acceptance
+   gate. `public-export.yaml` keeps `official_perfetto` on a release tag (the
+   Skill gap-check reference) and `runtime_perfetto.reported_version` on the
+   newest release in the runtime revision's CHANGELOG. After a pin change,
+   run `node Trace/tools/trace-corpus.cjs build` so constructed cases record
+   the runtime that reparsed them, then `trace-corpus index`.
 9. Regenerate Perfetto SQL docs, SQL indexes, stdlib symbols, and light indexes
    from the exact trace-processor runtime revision with
    `cd backend && npm run stdlib:generate-runtime-assets`; this creates one

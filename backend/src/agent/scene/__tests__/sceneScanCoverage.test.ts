@@ -23,6 +23,7 @@ import {buildSceneCoveragePlan, initializeSceneCoveragePlan, sceneCoveragePolicy
 import {sceneRunState} from '../sceneRunContext';
 import type {SkillDefinition} from '../../../services/skillEngine/types';
 import {fingerprintSkillDefinition} from '../../../services/selfEvolution/skillFingerprint';
+import {androidInputEventsTableDdl} from '../../../../tests/helpers/androidInputEventsFixture';
 
 const scope = {ownerKey: 'owner', runId: 'run', sessionId: 'session', traceId: 'trace'};
 const readOptions = {ownerKey: scope.ownerKey, currentRunId: scope.runId, allowedTraces: [{traceId: 'trace', traceSide: 'current' as const}]};
@@ -171,7 +172,7 @@ describe('scene scan producer coverage', () => {
       db.exec(`CREATE TABLE trace_bounds(start_ts INTEGER,end_ts INTEGER); INSERT INTO trace_bounds VALUES(0,100);
         CREATE TABLE android_motion_events(id INTEGER,event_id INTEGER,ts INTEGER,action INTEGER,device_id INTEGER,display_id INTEGER,source INTEGER);
         CREATE TABLE android_key_events(id INTEGER,event_id INTEGER,ts INTEGER,action INTEGER,device_id INTEGER,display_id INTEGER,source INTEGER);
-        CREATE TABLE android_input_events(input_event_id TEXT,event_seq TEXT,event_channel TEXT,dispatch_ts INTEGER,receive_ts INTEGER,read_time INTEGER,event_type TEXT,event_action TEXT,upid INTEGER,process_name TEXT);
+        ${androidInputEventsTableDdl()}
         CREATE TABLE android_screen_state(id INTEGER,ts INTEGER,dur INTEGER,simple_screen_state TEXT,short_screen_state TEXT);
         CREATE TABLE android_charging_states(id INTEGER,ts INTEGER,dur INTEGER,short_charging_state TEXT,charging_state TEXT);
         CREATE TABLE track(id INTEGER,name TEXT); CREATE TABLE slice(id INTEGER,track_id INTEGER,ts INTEGER,dur INTEGER,name TEXT);

@@ -173,12 +173,13 @@ steps:
         - name: total_events
           label: "事件总数"
           type: number
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH move_events AS (
         SELECT
           dispatch_ts as ts,
           dispatch_ts - LAG(dispatch_ts) OVER (ORDER BY dispatch_ts) as interval_ns
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE (('${package}' = '' OR process_name = '${package}' OR process_name GLOB '${package}:*') OR '${package}' = '')
           AND event_action = 'MOVE'
           AND (${start_ts} IS NULL OR dispatch_ts >= ${start_ts})
@@ -245,6 +246,7 @@ steps:
         - name: rating
           label: "评级"
           type: string
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH vsync_intervals AS (
         SELECT c.ts - LAG(c.ts) OVER (ORDER BY c.ts) AS interval_ns
@@ -274,13 +276,13 @@ steps:
           f.ts as frame_ts,
           f.dur as frame_dur,
           f.ts + f.dur as frame_present_ts
-        FROM android_input_events ie
+        FROM android_input_events_normalized ie
         LEFT JOIN actual_frame_timeline_slice f
           ON ie.frame_id = f.surface_frame_token
           AND ie.upid = f.upid
         WHERE (('${package}' = '' OR ie.process_name = '${package}' OR ie.process_name GLOB '${package}:*') OR '${package}' = '')
           AND (ie.event_action = 'MOVE'
-               OR ('${event_action_filter}' != '' AND ie.event_action = '${event_action_filter}'))
+               OR ('${event_action_filter}' != '' AND '${event_action_filter}' IN (ie.event_action, 'ACTION_' || ie.event_action)))
           AND (${start_ts} IS NULL OR ie.dispatch_ts >= ${start_ts})
           AND (${end_ts} IS NULL OR ie.dispatch_ts <= ${end_ts})
       ),
@@ -328,6 +330,7 @@ steps:
         - name: value_ms
           label: "值(ms)"
           type: number
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH vsync_intervals AS (
         SELECT c.ts - LAG(c.ts) OVER (ORDER BY c.ts) AS interval_ns
@@ -345,7 +348,7 @@ steps:
       ),
       valid AS (
         SELECT end_to_end_latency_dur as latency_ns
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE (('${package}' = '' OR process_name = '${package}' OR process_name GLOB '${package}:*') OR '${package}' = '')
           AND event_action = 'MOVE'
           AND (${start_ts} IS NULL OR dispatch_ts >= ${start_ts})
@@ -396,13 +399,14 @@ steps:
         - name: is_speculative
           label: "推测帧"
           type: boolean
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH latencies AS (
         SELECT
           dispatch_ts as input_ts,
           end_to_end_latency_dur as latency_ns,
           is_speculative_frame
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE (('${package}' = '' OR process_name = '${package}' OR process_name GLOB '${package}:*') OR '${package}' = '')
           AND event_action = 'MOVE'
           AND (${start_ts} IS NULL OR dispatch_ts >= ${start_ts})

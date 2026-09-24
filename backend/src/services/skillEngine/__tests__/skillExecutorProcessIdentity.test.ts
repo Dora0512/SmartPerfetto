@@ -780,6 +780,9 @@ describe('ANR and frame-detail real YAML scope closure', () => {
     const db = new Database(':memory:');
     db.function('trace_start', () => 0);
     db.function('trace_end', () => 1_000_000_000);
+    // trace_processor intrinsic; NULL like a trace without clock snapshots, so
+    // cpu_cluster_load_in_range takes its wall-clock fallback.
+    db.function('to_monotonic', (_ts: unknown) => null);
     db.exec(`
       CREATE TABLE process(upid INTEGER PRIMARY KEY, pid INTEGER, name TEXT, cmdline TEXT,
         uid INTEGER, android_appid INTEGER, start_ts INTEGER, end_ts INTEGER);

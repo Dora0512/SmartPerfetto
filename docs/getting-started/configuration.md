@@ -669,7 +669,7 @@ TRACE_PROCESSOR_DOWNLOAD_BASE=https://your-mirror/perfetto-luci-artifacts ./star
 TRACE_PROCESSOR_DOWNLOAD_URL=https://your-mirror/trace_processor_shell ./start.sh
 ```
 
-镜像下载仍会按 `scripts/trace-processor-pin.env` 中固定的 SHA256 校验；如果只是想快速使用，优先选择 Docker Hub 镜像，因为镜像内已经包含固定版本的 `trace_processor_shell`。
+镜像需保持 `<PERFETTO_ARTIFACT_VERSION>/<platform>/trace_processor_shell` 的目录结构；`PERFETTO_ARTIFACT_VERSION` 可能是 release tag（如 `v58.2`），也可能是 Google CI 为 main 提交发布的完整 commit SHA，以 `scripts/trace-processor-pin.env` 为准。仓库只内置 Linux x64、macOS arm64、Windows x64 三个平台的 binary，其余平台（如 linux-arm64、mac-amd64）以及 npm CLI、Docker 构建会从该目录下载；Google 对 commit 目录不承诺保留期，长期离线部署建议自建镜像。镜像下载仍会按该文件中固定的 SHA256 校验；如果只是想快速使用，优先选择 Docker Hub 镜像，因为镜像内已经包含固定版本的 `trace_processor_shell`。
 
 macOS 如果拦截 `trace_processor_shell`，可能会看到 `cannot be opened because the developer cannot be verified`、终端输出 `killed`，或脚本提示 `--version smoke test failed`。打开 **系统设置 → 隐私与安全性 → 安全性**，对 `trace_processor_shell` 点 **仍要打开 / Allow Anyway**，重新运行脚本并在弹窗里选择 **打开**。如果你确认 binary 来源可信，也可以：
 

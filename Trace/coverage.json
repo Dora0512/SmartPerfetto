@@ -807,7 +807,7 @@
     ]
   },
   "sql_sources": {
-    "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897",
+    "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368",
     "skills": [
       {
         "target": "android_bitmap_memory_per_process",
@@ -841,7 +841,7 @@
           },
           {
             "id": "heap_bitmap_metadata",
-            "sha256": "1615f99570a007da93c8b9901d743b0a295b6dc42ab7fa6de647c64a64468cf7",
+            "sha256": "7d275c59a44afd54bcc29cf022e8fdcc322721adf92dcf585fe7caf68140d38c",
             "required_columns": [
               "process_name",
               "bitmap_object_count",
@@ -857,7 +857,7 @@
           },
           {
             "id": "heap_bitmap_sender_attribution",
-            "sha256": "7e38019382f524b4762ef03d56dcde9a83012a0d41483378b8d4a6707107c4bd",
+            "sha256": "5e7b9a5d6afde2c624f5f98f4e3093e7e19a7b1d25bb0e88ffd974d12d7dbbad",
             "required_columns": [
               "receiver_process",
               "source_process",
@@ -925,7 +925,7 @@
         "steps": [
           {
             "id": "leak_candidates",
-            "sha256": "e5169f268b89a81a6c60eb7c84167d54945217aa71c1705fff5d13eb63e0c288",
+            "sha256": "79e8ceea1252903a8eff746d83bbd6cc325152c4efa8fa5213bd27999f897e92",
             "required_columns": [
               "process_name",
               "upid",
@@ -936,13 +936,15 @@
               "self_size_mb",
               "native_size_mb",
               "lifecycle_phase_at_sample",
+              "process_identity",
+              "dump_completeness",
               "leak_state",
               "confidence"
             ]
           },
           {
             "id": "reference_holders",
-            "sha256": "272872514e595e4d40c3e35ba0347ab4982e1f786487c17ce93e72823a01c97b",
+            "sha256": "7d6ff2765fa5490d287881a398fc783d4b079803dfc00e369a423a651341f6e5",
             "required_columns": [
               "process_name",
               "graph_sample_ts",
@@ -971,21 +973,37 @@
         ],
         "steps": [
           {
+            "id": "heap_graph_dump_sizes",
+            "sha256": "3583516281bb5db3e1afb920eb033fdf88e5b7787c56d3353df3e5c4262b66ec",
+            "required_columns": [
+              "upid",
+              "graph_sample_ts",
+              "object_count",
+              "total_heap_size",
+              "reachable_heap_size",
+              "reachable_obj_count"
+            ]
+          },
+          {
             "id": "heap_graph_availability",
-            "sha256": "99527d938e824ca5e5c8ae35a9d1ed54f3c6c5301397b4b25051fc0496474c91",
+            "sha256": "f955bb165ec53339dd2e8d35adf4b2f12a4dd344786ef2dc7f9c3baa6c29accc",
             "required_columns": [
               "sample_count",
               "process_count",
               "reachable_heap_mb",
               "total_heap_mb",
+              "incomplete_dump_count",
+              "process_identity",
+              "has_truncated_column",
               "status"
             ]
           },
           {
             "id": "heap_graph_samples",
-            "sha256": "3b65fb9366adacc6a8e4fb9732e62e2913ab62f56a180a861bb86bee3646832e",
+            "sha256": "da6078768307767c830805295be4f63a718c340876b52040c51633ac118bc5d6",
             "required_columns": [
               "process_name",
+              "upid",
               "graph_sample_ts",
               "reachable_heap_mb",
               "total_heap_mb",
@@ -993,12 +1011,28 @@
               "total_obj_count",
               "anon_rss_and_swap_mb",
               "oom_score_adj",
-              "unreachable_heap_mb"
+              "unreachable_heap_mb",
+              "placeholder_object_count",
+              "dump_completeness",
+              "dump_issues",
+              "process_identity"
+            ]
+          },
+          {
+            "id": "heap_graph_truncation",
+            "sha256": "13902e3f16a413630045eae5e61ced6ef7e277d3c32006ec15b3fa5c8fa0717b",
+            "required_columns": [
+              "process_name",
+              "upid",
+              "graph_sample_ts",
+              "dump_reason",
+              "truncated",
+              "dump_completeness"
             ]
           },
           {
             "id": "top_retained_classes",
-            "sha256": "c091a4cc1614947442483dc70546f178afba7a55868306135ac101452596ec45",
+            "sha256": "da8315239fab29d0a16b19e64255e20d7cdfde9844831cc36a0ed39cbe74e081",
             "required_columns": [
               "process_name",
               "graph_sample_ts",
@@ -1900,10 +1934,12 @@
         "steps": [
           {
             "id": "cluster_load",
-            "sha256": "ee681b7d36923915139ca735904248aa3d819d33d32fb1433845cc4eeda1099f",
+            "sha256": "6948f6f24dd6c774eff8b6d2d068d7a6b4d790d5e4f0575e9104bfd8cac9dc49",
             "required_columns": [
               "cluster",
               "core_count",
+              "active_core_count",
+              "awake_ms",
               "running_ms",
               "total_capacity_ms",
               "load_pct",
@@ -3159,7 +3195,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "9e845f3a3f677f6144a2756d4da6daee9d08f7f7bdf1f4095b1f873ec61168cc",
+            "sha256": "572e2a08bc687271e3101212d4472aaf81929c4a874461e424001e24be99f801",
             "required_columns": [
               "event_ts",
               "event_type",
@@ -3196,7 +3232,7 @@
           },
           {
             "id": "input_sampling_rate",
-            "sha256": "4f8fc28b040f4a412895273d339804cb8e2ba3352249195d03643c67db089ba2",
+            "sha256": "c02f2f1a688a59a2599804760e1bde58d0f318592d1eb07726ad33182ea9efba",
             "required_columns": [
               "median_interval_ms",
               "sampling_rate_hz",
@@ -3205,7 +3241,7 @@
           },
           {
             "id": "per_frame_latency",
-            "sha256": "74fa0076d96195fbf8c5917a1918889733e281495da3aeffd54cb58632c05403",
+            "sha256": "c60d927e6b10c271ad4afb3f21b0ad427f0b1d76fcbbf1d8cb25518bcff62c3f",
             "required_columns": [
               "input_ts",
               "process_name",
@@ -3222,7 +3258,7 @@
           },
           {
             "id": "latency_statistics",
-            "sha256": "67041248eba8dab6393e41a23147f5fbd4dcccc2b25469a4cc7a6095fcf7add1",
+            "sha256": "3a6ad79a7abffaec51aff7dfba33f3a1d01568fd386e3c88b076fb50e837151f",
             "required_columns": [
               "metric",
               "value_ms"
@@ -3230,7 +3266,7 @@
           },
           {
             "id": "latency_spikes",
-            "sha256": "60cba3975e5380ef281461d556d0f40faa3c61d22b7ad49485ab91b5ccad01ea",
+            "sha256": "b83ffe87d283169286955fdcb6d64d2fed699d41731fffea8c799839d32b2970",
             "required_columns": [
               "input_ts",
               "latency_ms",
@@ -3830,20 +3866,43 @@
         "source_file": "backend/skills/atomic/native_heap_breakdown.skill.yaml",
         "modules": [
           {
-            "name": "android.memory.heap_profile.summary_tree",
-            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/memory/heap_profile/summary_tree.sql"
+            "name": "callstacks.stack_profile",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/callstacks/stack_profile.sql"
           }
         ],
         "steps": [
           {
-            "id": "native_heap_hotspots",
-            "sha256": "00bc2af29679ab07debdb955d6f75ed4cc506614bdc69fa15fd357732b2db8bf",
+            "id": "heap_profile_inventory",
+            "sha256": "77ccb333ea8d6788d1bb55dbcbb235468eb4d95737f889ad55fc88cca73c8808",
             "required_columns": [
+              "upid",
+              "process_name",
+              "heap_name",
+              "heap_semantics",
+              "alloc_mb",
+              "unreleased_mb",
+              "alloc_count",
+              "unreleased_count",
+              "retention_claim",
+              "heapprofd_issues",
+              "process_identity",
+              "status"
+            ]
+          },
+          {
+            "id": "native_heap_hotspots",
+            "sha256": "4ce76c2a4eaae14fec74a96ec41632812f55a3e54ca60f9b43e0c61662cdd298",
+            "required_columns": [
+              "upid",
+              "process_name",
+              "heap_name",
               "name",
               "mapping_name",
               "cumulative_size_mb",
               "self_size_mb",
               "cumulative_alloc_mb",
+              "self_alloc_mb",
+              "self_alloc_count",
               "unreleased_to_alloc_pct",
               "churn_ratio",
               "native_signal",
@@ -4593,7 +4652,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "1a78cef9af5f21cf9f72c998c5d881cec833d8dfbb64d2ad36f8759938d6dbb1",
+            "sha256": "e99618b8c1981c0fdcdd14bde953756360cbe200d104221572d1dff742bca374",
             "required_columns": [
               "gesture_ts",
               "process_name",
@@ -4865,6 +4924,10 @@
         "source_file": "backend/skills/atomic/startup_events_in_range.skill.yaml",
         "modules": [
           {
+            "name": "android.startup.startup_events",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/startup/startup_events.sql"
+          },
+          {
             "name": "android.startup.startups",
             "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/startup/startups.sql"
           },
@@ -4876,7 +4939,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "a66c8eb3e0823e438c6ffc7179cf4e8f53b42ed506528d97e84c7826d6e907c7",
+            "sha256": "f7cfe06fd429333f498d6f9538127394939c805a29802db0c82778526559ed81",
             "required_columns": [
               "startup_id",
               "upid",
@@ -4886,6 +4949,8 @@
               "start_ts",
               "end_ts",
               "dur_ns",
+              "dur_without_trampoline_ms",
+              "trampoline_ms",
               "ttid_ms",
               "ttfd_ms",
               "rating",
@@ -5655,7 +5720,7 @@
         "steps": [
           {
             "id": "root",
-            "sha256": "fd16c523ac76be7f0ca13dc71cf91c502f1f8712bc7dbe88e831d287fdbd072c",
+            "sha256": "8a6423c236a00ef3569cac555786ede7aa7485ac0d627b7b9d2ca44be12d7c78",
             "required_columns": [
               "input_ts",
               "process_name",
@@ -5844,7 +5909,7 @@
           },
           {
             "id": "phase_analysis",
-            "sha256": "9453a4a6e73e5a84db25bd8300a5060f0f543507514149a738587cd23cde91a5",
+            "sha256": "752cd282c9ef09ef9d4f67dc94d310704be11c7abdc6ac0b6ee373e31e3e656e",
             "required_columns": [
               "input_ts",
               "nearest_vsync_ts",
@@ -5855,7 +5920,7 @@
           },
           {
             "id": "phase_distribution",
-            "sha256": "fc6bb2285b69791dc7bdb13b8b9934df8c0bd32f9d64f8b117145c990a938ab6",
+            "sha256": "b1797459200ece1178223532dd4565acc16f87757c462515837b42268ecfc240",
             "required_columns": [
               "metric",
               "value"
@@ -6113,16 +6178,24 @@
         "steps": [
           {
             "id": "data_check",
-            "sha256": "a3fd7aec251a856fc3e533c3f1898b6fc60b085c4df8e1cace8d47bc72a2e7a4",
+            "sha256": "056d01c0732633f64f42756bf7473237ea8bb82b16d688b2efd3316136b0544b",
             "required_columns": [
               "sample_count",
               "object_count",
+              "placeholder_object_count",
+              "incomplete_dump_count",
+              "process_identity",
               "status"
             ]
           },
           {
+            "id": "dominator_tree_pass",
+            "sha256": "6d20630250df5c3074350bed920812ca6aab12c703f1bfa429fc526d7afc672d",
+            "required_columns": []
+          },
+          {
             "id": "dominator_paths",
-            "sha256": "0149c5f4dc1c0b84f527904698a2662a615933053c1fa5bdffeb2965fc2ec76e",
+            "sha256": "2ae26bdc29fa288da23646004be02ce98d7b55d5aec6e85db16acb58429eb7c7",
             "required_columns": [
               "upid",
               "process_name",
@@ -6133,7 +6206,8 @@
               "self_count",
               "retained_count",
               "self_size_bytes",
-              "retained_size_bytes"
+              "retained_size_bytes",
+              "process_identity"
             ]
           }
         ]
@@ -6151,10 +6225,6 @@
             "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/memory/heap_graph/heap_graph_stats.sql"
           },
           {
-            "name": "android.memory.heap_profile.summary_tree",
-            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/memory/heap_profile/summary_tree.sql"
-          },
-          {
             "name": "prelude.after_eof.memory",
             "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/prelude/after_eof/memory.sql"
           },
@@ -6166,18 +6236,18 @@
         "steps": [
           {
             "id": "data_check",
-            "sha256": "215e0de3e6aaec13ffe7b8049b0d47f464451ceee4a67dbffb753d54ccee51d7",
+            "sha256": "af4a2ff1075fe82e245e46338d3294281b44260aef44879c125e115cde3eed87",
             "required_columns": [
               "heap_graph_samples",
               "heap_graph_class_rows",
               "heap_graph_objects",
-              "heap_profile_allocations",
-              "heap_profile_summary_rows"
+              "heap_graph_placeholder_objects",
+              "heap_profile_allocations"
             ]
           },
           {
             "id": "heap_graph_repeated_objects",
-            "sha256": "6b8ab821514ebad840106d9e8c784a91409cd749dc9e5fa92102c808d8eac2cc",
+            "sha256": "b2372fce9d0c9dac7549f8190d8f93cc12d880ce73e21bff833e93011cf44c90",
             "required_columns": [
               "process_name",
               "graph_sample_ts",
@@ -6192,7 +6262,7 @@
           },
           {
             "id": "heap_graph_size_frequencies",
-            "sha256": "51c6b17258cb4329aba863a026a2e198a59323c5adb53d4762f02deefbac5c4c",
+            "sha256": "dc5e5f1cb24f4a74e79e88fe6add23ce3be752c0f4c5eaf1b7f36f89f75c7e99",
             "required_columns": [
               "process_name",
               "graph_sample_ts",
@@ -6201,21 +6271,6 @@
               "occurrence_count",
               "total_self_mb",
               "reachable_count"
-            ]
-          },
-          {
-            "id": "heap_profile_hotspots",
-            "sha256": "cb268febf099b041303be6d0b3d8a137ec1a1eed0c33042def6a3a52de27c421",
-            "required_columns": [
-              "scope",
-              "name",
-              "mapping_name",
-              "self_size_mb",
-              "cumulative_size_mb",
-              "self_alloc_mb",
-              "cumulative_alloc_mb",
-              "allocation_signal",
-              "source_file"
             ]
           },
           {
@@ -7035,7 +7090,7 @@
         "steps": [
           {
             "id": "check_input_data",
-            "sha256": "4c4f07549a4ebd6c4fc4da189c9da5a2fe7cb757064db303c7b357ad4dd0414f",
+            "sha256": "a2bcfec23425415a2f9cd2cb61a0bad8c40bccb6de8250cc0c8ebb5193f79d16",
             "required_columns": [
               "event_count",
               "status"
@@ -7043,7 +7098,7 @@
           },
           {
             "id": "get_process",
-            "sha256": "175d66c25c5d03953548d9c32fb9c1a7809ccafdb403690575786c1b517e2d70",
+            "sha256": "0bf97a026dddc952e4d37287b0a284b37e6fc35b742053e6e2fb4c893fc32e97",
             "required_columns": [
               "process_name",
               "event_count",
@@ -7052,7 +7107,7 @@
           },
           {
             "id": "input_latency_overview",
-            "sha256": "556a3a6e45622f0ef84ceeffefb4bbb62f87377c002749d8c76e1cf49cb19b01",
+            "sha256": "3bc71f3c1aa21a0516811d8d21905baeaf47d44f4b0591f86bdbaaf683448f72",
             "required_columns": [
               "total_events",
               "avg_dispatch_ms",
@@ -7069,7 +7124,7 @@
           },
           {
             "id": "latency_by_event_type",
-            "sha256": "efd02f303b38f7e8a8193cda76a543083531e076138dec7afc08149c298bf582",
+            "sha256": "950b23ad46cf26bf53d528292d97207e837ffc8f192bf0be0a961ece0192692e",
             "required_columns": [
               "event_type",
               "event_action",
@@ -7082,7 +7137,7 @@
           },
           {
             "id": "latency_by_window",
-            "sha256": "333d520376656f6ea2806620eb61492b826c741f91f41ff435e0c72d2ebb6d02",
+            "sha256": "62e4bcf972e906f8881cd8f13a8ede45f90209498f66474a53a32f0f19175b73",
             "required_columns": [
               "window",
               "count",
@@ -7094,7 +7149,7 @@
           },
           {
             "id": "slow_input_events",
-            "sha256": "636deba4c79d9f287bf26be1d117f8a2cdf0a54858007effc937df65256a618b",
+            "sha256": "74c86615fee3f69b9a47a7ccca4d9bb57c9d3d08143c489238e2bf8d94141261",
             "required_columns": [
               "event_type",
               "event_action",
@@ -7118,7 +7173,7 @@
           },
           {
             "id": "input_thread_state",
-            "sha256": "8301d9709f746b19becb56ee92f562a4523b401566754c994962cd7822487c5c",
+            "sha256": "b9df8eafaea3b4fb04eaa7d4427d2dfc1e2d94be16bdd4ea23083aa2d19d9b1d",
             "required_columns": [
               "window_id",
               "upid",
@@ -7134,7 +7189,7 @@
           },
           {
             "id": "input_binder_calls",
-            "sha256": "3a89d9eeee94b58de30fbe61f5b99b0545edf6ba92dad7d6e1f334bc699e16d6",
+            "sha256": "6960b35a6b56982ee97eb647d17d3edab07696ef793906d320e8a2351be25c5b",
             "required_columns": [
               "server_process",
               "aidl_name",
@@ -7146,7 +7201,7 @@
           },
           {
             "id": "input_to_frame",
-            "sha256": "59deac5f84737bbbacf626d236837d7c073f02a1a53b4a1b2b1279da42797f7b",
+            "sha256": "be8a54cb6434257c4e787703eef1d05aba98857733996411292fc7275397488a",
             "required_columns": [
               "event_type",
               "event_action",
@@ -7159,7 +7214,7 @@
           },
           {
             "id": "latency_distribution",
-            "sha256": "8083c0ed9706be46a20ccccb684d64166c44d40db4d05fa1d4fe892a090603f6",
+            "sha256": "9c76c790881d0e301fc8ba5c45f97f6fcf56c5964eb54358e223fe22ee5d9768",
             "required_columns": [
               "latency_bucket",
               "count",
@@ -7225,7 +7280,7 @@
           },
           {
             "id": "input_pipeline_lifecycle",
-            "sha256": "86cc28befa094a0d2ddc3d32f3c339c4cbc9dd9b860c3b7b6309969ae25f65d2",
+            "sha256": "acae41815f1abec8c4e659e8b893242f179d2628ffd9f7830f3b48a5bbc69dce",
             "required_columns": [
               "input_id",
               "channel",
@@ -8102,6 +8157,17 @@
               "remediation",
               "confidence",
               "trace_id"
+            ]
+          },
+          {
+            "id": "data_loss_stats",
+            "sha256": "e87949c432e1383555f890628089ae393bbca30082880e79afc97c1f3d764cc8",
+            "required_columns": [
+              "name",
+              "idx",
+              "value",
+              "source",
+              "description"
             ]
           },
           {
@@ -10431,7 +10497,7 @@
           },
           {
             "id": "input_data_check",
-            "sha256": "86d62b8232c46cc48bffe94096e8641e0d5f45111b8523fb715e0eb8cac30096",
+            "sha256": "fba47eecd4a1274ad86c4e4850af5032e38748420e43cf32318ad32f4d142c55",
             "required_columns": [
               "input_data_status",
               "total_input_events",
@@ -10442,7 +10508,7 @@
           },
           {
             "id": "input_latency_summary",
-            "sha256": "1c43ee7fff9f66f90efa5e00357c2a0c282735a508ed6d6283a61a163a039be9",
+            "sha256": "5960cfc2f0b32ada4aba48a130ed02b18ebac190d0c08a6455ca99ba17fc0687",
             "required_columns": [
               "target_process",
               "total_input_events",
@@ -10564,7 +10630,7 @@
           },
           {
             "id": "batch_frame_root_cause",
-            "sha256": "4d711bd65c5014191d4c51525b4d8ebb1a839bfff7baa870729a5628bdb45842",
+            "sha256": "daf5e0f4372f2c9c2530d13b8ad3aa1cd3880da7ab3d1c9aecb1bad28279a1f3",
             "required_columns": [
               "system_evidence_json",
               "frame_id",
@@ -10830,6 +10896,10 @@
           {
             "name": "android.startup.startup_breakdowns",
             "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/startup/startup_breakdowns.sql"
+          },
+          {
+            "name": "android.startup.startup_events",
+            "source_path": "perfetto/src/trace_processor/perfetto_sql/stdlib/android/startup/startup_events.sql"
           },
           {
             "name": "android.startup.startups",

@@ -10,7 +10,7 @@ This directory is the source-controlled trace test and reference corpus.
 
 Evidence tiers: R1=6, R2=0, R3=17.
 
-Pinned Perfetto SQL source: `add693d8b338ba9599dbcbc3e300b1ab8c000897`. The generated coverage ledger contains 249 Skill SQL source contracts and 2 canonical portable SQL source checks with exact source hashes and upstream module paths.
+Pinned Perfetto SQL source: `99234d73fe356bf7edf6b2cb7afcf2a9eefc5368`. The generated coverage ledger contains 249 Skill SQL source contracts and 2 canonical portable SQL source checks with exact source hashes and upstream module paths.
 
 Skill execution quality: 229 source-column-backed semantic, 4 execution-only composition, 1 expected-empty negative, 11 explicit deferred prerequisite, 32 definition-only.
 

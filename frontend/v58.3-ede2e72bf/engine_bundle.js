@@ -19,7 +19,7 @@
 		}
 		return to;
 	};
-	var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", {
+	var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
 		value: mod,
 		enumerable: true
 	}) : target, mod));
@@ -64,25 +64,27 @@
 			var $Module$$ = moduleArg, $ENVIRONMENT_IS_WEB$$ = !!globalThis.window, $ENVIRONMENT_IS_WORKER$$ = !!globalThis.WorkerGlobalScope, $ENVIRONMENT_IS_NODE$$ = globalThis.$g$?.$versions$?.node && "renderer" != globalThis.$g$?.type, $ENVIRONMENT_IS_SHELL$$ = !$ENVIRONMENT_IS_WEB$$ && !$ENVIRONMENT_IS_NODE$$ && !$ENVIRONMENT_IS_WORKER$$, $arguments_$$ = [], $thisProgram$$ = "./this.program", $_scriptName$$;
 			$ENVIRONMENT_IS_WORKER$$ && ($_scriptName$$ = self.location.href);
 			var $scriptDirectory$$ = "", $readAsync$$, $readBinary$$;
-			if (!$ENVIRONMENT_IS_SHELL$$) if ($ENVIRONMENT_IS_WEB$$ || $ENVIRONMENT_IS_WORKER$$) {
-				try {
-					$scriptDirectory$$ = new URL(".", $_scriptName$$).href;
-				} catch {}
-				if (!globalThis.window && !globalThis.WorkerGlobalScope) throw Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
-				$ENVIRONMENT_IS_WORKER$$ && ($readBinary$$ = ($url$jscomp$24$$) => {
-					var $xhr$$ = new XMLHttpRequest();
-					$xhr$$.open("GET", $url$jscomp$24$$, !1);
-					$xhr$$.responseType = "arraybuffer";
-					$xhr$$.send(null);
-					return new Uint8Array($xhr$$.response);
-				});
-				$readAsync$$ = async ($response$jscomp$2_url$jscomp$25$$) => {
-					$assert$$(!$isFileURI$$($response$jscomp$2_url$jscomp$25$$), "readAsync does not work with file:// URLs");
-					$response$jscomp$2_url$jscomp$25$$ = await fetch($response$jscomp$2_url$jscomp$25$$, { credentials: "same-origin" });
-					if ($response$jscomp$2_url$jscomp$25$$.ok) return $response$jscomp$2_url$jscomp$25$$.arrayBuffer();
-					throw Error($response$jscomp$2_url$jscomp$25$$.status + " : " + $response$jscomp$2_url$jscomp$25$$.url);
-				};
-			} else throw Error("environment detection error");
+			if (!$ENVIRONMENT_IS_SHELL$$) {
+				if ($ENVIRONMENT_IS_WEB$$ || $ENVIRONMENT_IS_WORKER$$) {
+					try {
+						$scriptDirectory$$ = new URL(".", $_scriptName$$).href;
+					} catch {}
+					if (!globalThis.window && !globalThis.WorkerGlobalScope) throw Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
+					$ENVIRONMENT_IS_WORKER$$ && ($readBinary$$ = ($url$jscomp$24$$) => {
+						var $xhr$$ = new XMLHttpRequest();
+						$xhr$$.open("GET", $url$jscomp$24$$, !1);
+						$xhr$$.responseType = "arraybuffer";
+						$xhr$$.send(null);
+						return new Uint8Array($xhr$$.response);
+					});
+					$readAsync$$ = async ($response$jscomp$2_url$jscomp$25$$) => {
+						$assert$$(!$isFileURI$$($response$jscomp$2_url$jscomp$25$$), "readAsync does not work with file:// URLs");
+						$response$jscomp$2_url$jscomp$25$$ = await fetch($response$jscomp$2_url$jscomp$25$$, { credentials: "same-origin" });
+						if ($response$jscomp$2_url$jscomp$25$$.ok) return $response$jscomp$2_url$jscomp$25$$.arrayBuffer();
+						throw Error($response$jscomp$2_url$jscomp$25$$.status + " : " + $response$jscomp$2_url$jscomp$25$$.url);
+					};
+				} else throw Error("environment detection error");
+			}
 			var $out$$ = console.log.bind(console), $err$$ = console.error.bind(console);
 			$assert$$(!$ENVIRONMENT_IS_WEB$$, "web environment detected but not enabled at build time.  Add `web` to `-sENVIRONMENT` to enable.");
 			$assert$$(!$ENVIRONMENT_IS_NODE$$, "node environment detected but not enabled at build time.  Add `node` to `-sENVIRONMENT` to enable.");
@@ -379,6 +381,33 @@
 				var $func$jscomp$7$$ = $Module$$["_" + $ident$jscomp$1$$];
 				$assert$$($func$jscomp$7$$, "Cannot call unknown function " + $ident$jscomp$1$$ + ", make sure it is exported");
 				return $func$jscomp$7$$;
+			}, $ccall$$ = ($func$jscomp$8_ident$jscomp$2$$, $returnType$$, $argTypes_ret$jscomp$6$$, $args$jscomp$5$$) => {
+				var $toC$$ = {
+					pointer: ($p$$) => BigInt($p$$),
+					string: ($str$jscomp$15$$) => {
+						var $ret$jscomp$7$$ = 0;
+						null !== $str$jscomp$15$$ && void 0 !== $str$jscomp$15$$ && 0 !== $str$jscomp$15$$ && ($ret$jscomp$7$$ = $stringToUTF8OnStack$$($str$jscomp$15$$));
+						return BigInt($ret$jscomp$7$$);
+					},
+					array: ($arr$jscomp$2$$) => {
+						var $ret$jscomp$8$$ = $__emscripten_stack_alloc$$($arr$jscomp$2$$.length);
+						$assert$$(0 <= $arr$jscomp$2$$.length, "writeArrayToMemory array must have a length (should be an array or typed array)");
+						$HEAP8$$.set($arr$jscomp$2$$, $ret$jscomp$8$$);
+						return BigInt($ret$jscomp$8$$);
+					}
+				};
+				$func$jscomp$8_ident$jscomp$2$$ = $getCFunc$$($func$jscomp$8_ident$jscomp$2$$);
+				var $cArgs$$ = [], $stack$jscomp$1$$ = 0;
+				$assert$$("array" !== $returnType$$, "Return type should not be \"array\".");
+				if ($args$jscomp$5$$) for (var $i$jscomp$8$$ = 0; $i$jscomp$8$$ < $args$jscomp$5$$.length; $i$jscomp$8$$++) {
+					var $converter$$ = $toC$$[$argTypes_ret$jscomp$6$$[$i$jscomp$8$$]];
+					$converter$$ ? (0 === $stack$jscomp$1$$ && ($stack$jscomp$1$$ = $_emscripten_stack_get_current$$()), $cArgs$$[$i$jscomp$8$$] = $converter$$($args$jscomp$5$$[$i$jscomp$8$$])) : $cArgs$$[$i$jscomp$8$$] = $args$jscomp$5$$[$i$jscomp$8$$];
+				}
+				$argTypes_ret$jscomp$6$$ = $func$jscomp$8_ident$jscomp$2$$(...$cArgs$$);
+				return $argTypes_ret$jscomp$6$$ = function($ret$jscomp$10$$) {
+					0 !== $stack$jscomp$1$$ && $__emscripten_stack_restore$$($stack$jscomp$1$$);
+					return "string" === $returnType$$ ? $UTF8ToString$$(Number($ret$jscomp$10$$)) : "pointer" === $returnType$$ ? Number($ret$jscomp$10$$) : "boolean" === $returnType$$ ? !!$ret$jscomp$10$$ : $ret$jscomp$10$$;
+				}($argTypes_ret$jscomp$6$$);
 			}, $wasmTableMirror$$ = [], $functionsInTableMap$$, $freeTableIndexes$$ = [], $uleb128EncodeWithLen$$ = ($arr$jscomp$3$$) => {
 				const $n$jscomp$4$$ = $arr$jscomp$3$$.length;
 				$assert$$(16384 > $n$jscomp$4$$);
@@ -434,34 +463,8 @@
 			if ($Module$$.preInit) for ("function" == typeof $Module$$.preInit && ($Module$$.preInit = [$Module$$.preInit]); 0 < $Module$$.preInit.length;) $Module$$.preInit.shift()();
 			$consumedModuleProp$$("preInit");
 			$Module$$.callMain = $callMain$$;
-			$Module$$.ccall = ($func$jscomp$8_ident$jscomp$2$$, $returnType$$, $argTypes_ret$jscomp$6$$, $args$jscomp$5$$) => {
-				var $toC$$ = {
-					pointer: ($p$$) => BigInt($p$$),
-					string: ($str$jscomp$15$$) => {
-						var $ret$jscomp$7$$ = 0;
-						null !== $str$jscomp$15$$ && void 0 !== $str$jscomp$15$$ && 0 !== $str$jscomp$15$$ && ($ret$jscomp$7$$ = $stringToUTF8OnStack$$($str$jscomp$15$$));
-						return BigInt($ret$jscomp$7$$);
-					},
-					array: ($arr$jscomp$2$$) => {
-						var $ret$jscomp$8$$ = $__emscripten_stack_alloc$$($arr$jscomp$2$$.length);
-						$assert$$(0 <= $arr$jscomp$2$$.length, "writeArrayToMemory array must have a length (should be an array or typed array)");
-						$HEAP8$$.set($arr$jscomp$2$$, $ret$jscomp$8$$);
-						return BigInt($ret$jscomp$8$$);
-					}
-				};
-				$func$jscomp$8_ident$jscomp$2$$ = $getCFunc$$($func$jscomp$8_ident$jscomp$2$$);
-				var $cArgs$$ = [], $stack$jscomp$1$$ = 0;
-				$assert$$("array" !== $returnType$$, "Return type should not be \"array\".");
-				if ($args$jscomp$5$$) for (var $i$jscomp$8$$ = 0; $i$jscomp$8$$ < $args$jscomp$5$$.length; $i$jscomp$8$$++) {
-					var $converter$$ = $toC$$[$argTypes_ret$jscomp$6$$[$i$jscomp$8$$]];
-					$converter$$ ? (0 === $stack$jscomp$1$$ && ($stack$jscomp$1$$ = $_emscripten_stack_get_current$$()), $cArgs$$[$i$jscomp$8$$] = $converter$$($args$jscomp$5$$[$i$jscomp$8$$])) : $cArgs$$[$i$jscomp$8$$] = $args$jscomp$5$$[$i$jscomp$8$$];
-				}
-				$argTypes_ret$jscomp$6$$ = $func$jscomp$8_ident$jscomp$2$$(...$cArgs$$);
-				return $argTypes_ret$jscomp$6$$ = function($ret$jscomp$10$$) {
-					0 !== $stack$jscomp$1$$ && $__emscripten_stack_restore$$($stack$jscomp$1$$);
-					return "string" === $returnType$$ ? $UTF8ToString$$(Number($ret$jscomp$10$$)) : "pointer" === $returnType$$ ? Number($ret$jscomp$10$$) : "boolean" === $returnType$$ ? !!$ret$jscomp$10$$ : $ret$jscomp$10$$;
-				}($argTypes_ret$jscomp$6$$);
-			};
+			$Module$$.ccall = $ccall$$;
+			$Module$$.cwrap = ($ident$jscomp$3$$, $returnType$jscomp$1$$, $argTypes$jscomp$1$$, $opts$jscomp$1$$) => (...$args$jscomp$6$$) => $ccall$$($ident$jscomp$3$$, $returnType$jscomp$1$$, $argTypes$jscomp$1$$, $args$jscomp$6$$, $opts$jscomp$1$$);
 			$Module$$.addFunction = ($func$jscomp$13$$, $bytes$jscomp$inline_57_module$jscomp$inline_58_sig$jscomp$1_wrapped$$) => {
 				$assert$$("undefined" != typeof $func$jscomp$13$$);
 				if (!$functionsInTableMap$$) {
@@ -508,18 +511,19 @@
 				$functionsInTableMap$$.set($func$jscomp$13$$, $ret$jscomp$11$$);
 				return $ret$jscomp$11$$;
 			};
-			"writeI53ToI64 writeI53ToI64Clamped writeI53ToI64Signaling writeI53ToU64Clamped writeI53ToU64Signaling readI53FromI64 readI53FromU64 convertI32PairToI53 convertI32PairToI53Checked convertU32PairToI53 getTempRet0 setTempRet0 createNamedFunction zeroMemory withStackSave strError inetPton4 inetNtop4 inetPton6 inetNtop6 readSockaddr writeSockaddr runMainThreadEmAsm jstoi_q autoResumeAudioContext getDynCaller dynCall runtimeKeepalivePush runtimeKeepalivePop callUserCallback maybeExit asyncLoad asmjsMangle mmapAlloc HandleAllocator getUniqueRunDependency addRunDependency removeRunDependency addOnInit addOnPostCtor addOnPreMain addOnExit STACK_SIZE STACK_ALIGN POINTER_SIZE ASSERTIONS cwrap removeFunction intArrayFromString intArrayToString AsciiToString stringToAscii UTF16ToString stringToUTF16 lengthBytesUTF16 UTF32ToString stringToUTF32 lengthBytesUTF32 registerKeyEventCallback maybeCStringToJsString findEventTarget getBoundingClientRect fillMouseEventData registerMouseEventCallback registerWheelEventCallback registerUiEventCallback registerFocusEventCallback fillDeviceOrientationEventData registerDeviceOrientationEventCallback fillDeviceMotionEventData registerDeviceMotionEventCallback screenOrientation fillOrientationChangeEventData registerOrientationChangeEventCallback fillFullscreenChangeEventData registerFullscreenChangeEventCallback JSEvents_requestFullscreen JSEvents_resizeCanvasForFullscreen registerRestoreOldStyle hideEverythingExceptGivenElement restoreHiddenElements setLetterbox softFullscreenResizeWebGLRenderTarget doRequestFullscreen fillPointerlockChangeEventData registerPointerlockChangeEventCallback registerPointerlockErrorEventCallback requestPointerLock fillVisibilityChangeEventData registerVisibilityChangeEventCallback registerTouchEventCallback fillGamepadEventData registerGamepadEventCallback registerBeforeUnloadEventCallback fillBatteryEventData registerBatteryEventCallback setCanvasElementSize getCanvasElementSize getCallstack convertPCtoSourceLocation wasiRightsToMuslOFlags wasiOFlagsToMuslOFlags initRandomFill randomFill safeSetTimeout setImmediateWrapped safeRequestAnimationFrame clearImmediateWrapped registerPostMainLoop registerPreMainLoop getPromise makePromise idsToPromises makePromiseCallback ExceptionInfo findMatchingCatch Browser_asyncPrepareDataCounter arraySum addDays getSocketFromFD getSocketAddress heapObjectForWebGLType toTypedArrayIndex webgl_enable_ANGLE_instanced_arrays webgl_enable_OES_vertex_array_object webgl_enable_WEBGL_draw_buffers webgl_enable_WEBGL_multi_draw webgl_enable_EXT_polygon_offset_clamp webgl_enable_EXT_clip_control webgl_enable_WEBGL_polygon_mode emscriptenWebGLGet computeUnpackAlignedImageSize colorChannelsInGlTextureFormat emscriptenWebGLGetTexPixelData emscriptenWebGLGetUniform webglGetUniformLocation webglPrepareUniformLocationsBeforeFirstUse webglGetLeftBracePos emscriptenWebGLGetVertexAttrib __glGetActiveAttribOrUniform writeGLArray registerWebGlEventCallback runAndAbortIfError ALLOC_NORMAL ALLOC_STACK allocate writeStringToMemory writeAsciiToMemory allocateUTF8 allocateUTF8OnStack demangle stackTrace getNativeTypeSize".split(" ").forEach(function($sym$jscomp$2$$) {
+			"writeI53ToI64 writeI53ToI64Clamped writeI53ToI64Signaling writeI53ToU64Clamped writeI53ToU64Signaling readI53FromI64 readI53FromU64 convertI32PairToI53 convertI32PairToI53Checked convertU32PairToI53 getTempRet0 setTempRet0 createNamedFunction zeroMemory withStackSave strError inetPton4 inetNtop4 inetPton6 inetNtop6 readSockaddr writeSockaddr runMainThreadEmAsm jstoi_q autoResumeAudioContext getDynCaller dynCall runtimeKeepalivePush runtimeKeepalivePop callUserCallback maybeExit asyncLoad asmjsMangle mmapAlloc HandleAllocator getUniqueRunDependency addRunDependency removeRunDependency addOnInit addOnPostCtor addOnPreMain addOnExit STACK_SIZE STACK_ALIGN POINTER_SIZE ASSERTIONS removeFunction intArrayFromString intArrayToString AsciiToString stringToAscii UTF16ToString stringToUTF16 lengthBytesUTF16 UTF32ToString stringToUTF32 lengthBytesUTF32 registerKeyEventCallback maybeCStringToJsString findEventTarget getBoundingClientRect fillMouseEventData registerMouseEventCallback registerWheelEventCallback registerUiEventCallback registerFocusEventCallback fillDeviceOrientationEventData registerDeviceOrientationEventCallback fillDeviceMotionEventData registerDeviceMotionEventCallback screenOrientation fillOrientationChangeEventData registerOrientationChangeEventCallback fillFullscreenChangeEventData registerFullscreenChangeEventCallback JSEvents_requestFullscreen JSEvents_resizeCanvasForFullscreen registerRestoreOldStyle hideEverythingExceptGivenElement restoreHiddenElements setLetterbox softFullscreenResizeWebGLRenderTarget doRequestFullscreen fillPointerlockChangeEventData registerPointerlockChangeEventCallback registerPointerlockErrorEventCallback requestPointerLock fillVisibilityChangeEventData registerVisibilityChangeEventCallback registerTouchEventCallback fillGamepadEventData registerGamepadEventCallback registerBeforeUnloadEventCallback fillBatteryEventData registerBatteryEventCallback setCanvasElementSize getCanvasElementSize getCallstack convertPCtoSourceLocation wasiRightsToMuslOFlags wasiOFlagsToMuslOFlags initRandomFill randomFill safeSetTimeout setImmediateWrapped safeRequestAnimationFrame clearImmediateWrapped registerPostMainLoop registerPreMainLoop getPromise makePromise idsToPromises makePromiseCallback ExceptionInfo findMatchingCatch Browser_asyncPrepareDataCounter arraySum addDays getSocketFromFD getSocketAddress heapObjectForWebGLType toTypedArrayIndex webgl_enable_ANGLE_instanced_arrays webgl_enable_OES_vertex_array_object webgl_enable_WEBGL_draw_buffers webgl_enable_WEBGL_multi_draw webgl_enable_EXT_polygon_offset_clamp webgl_enable_EXT_clip_control webgl_enable_WEBGL_polygon_mode emscriptenWebGLGet computeUnpackAlignedImageSize colorChannelsInGlTextureFormat emscriptenWebGLGetTexPixelData emscriptenWebGLGetUniform webglGetUniformLocation webglPrepareUniformLocationsBeforeFirstUse webglGetLeftBracePos emscriptenWebGLGetVertexAttrib __glGetActiveAttribOrUniform writeGLArray registerWebGlEventCallback runAndAbortIfError ALLOC_NORMAL ALLOC_STACK allocate writeStringToMemory writeAsciiToMemory allocateUTF8 allocateUTF8OnStack demangle stackTrace getNativeTypeSize".split(" ").forEach(function($sym$jscomp$2$$) {
 				$unexportedRuntimeSymbol$$($sym$jscomp$2$$);
 			});
 			"run out err abort wasmExports HEAPF32 HEAPF64 HEAP8 HEAP16 HEAPU16 HEAP32 HEAPU32 HEAP64 HEAPU64 writeStackCookie checkStackCookie INT53_MAX INT53_MIN bigintToI53Checked stackSave stackRestore stackAlloc ptrToString exitJS getHeapMax growMemory ENV ERRNO_CODES DNS Protocols Sockets timers warnOnce readEmAsmArgsArray readEmAsmArgs runEmAsmFunction getExecutableName handleException keepRuntimeAlive alignMemory wasmTable wasmMemory noExitRuntime addOnPreRun addOnPostRun convertJsFunctionToWasm freeTableIndexes functionsInTableMap getEmptyTableSlot updateTableMap getFunctionAddress setValue getValue PATH PATH_FS UTF8Decoder UTF8ArrayToString UTF8ToString stringToUTF8Array stringToUTF8 lengthBytesUTF8 UTF16Decoder stringToNewUTF8 stringToUTF8OnStack writeArrayToMemory JSEvents specialHTMLTargets findCanvasEventTarget currentFullscreenStrategy restoreOldWindowedStyle jsStackTrace UNWIND_CACHE ExitStatus getEnvStrings checkWasiClock flush_NO_FILESYSTEM emSetImmediate emClearImmediate_deps emClearImmediate promiseMap uncaughtExceptionCount exceptionLast exceptionCaught Browser requestFullscreen requestFullScreen setCanvasSize getUserMedia createContext getPreloadedImageData__data wget MONTH_DAYS_REGULAR MONTH_DAYS_LEAP MONTH_DAYS_REGULAR_CUMULATIVE MONTH_DAYS_LEAP_CUMULATIVE isLeapYear ydayFromDate SYSCALLS tempFixedLengthArray miniTempWebGLFloatBuffers miniTempWebGLIntBuffers GL AL GLUT EGL GLEW IDBStore SDL SDL_gfx print printErr jstoi_s".split(" ").forEach($unexportedRuntimeSymbol$$);
-			var $ASM_CONSTS$$ = { 5122416: () => "undefined" !== typeof wasmOffsetConverter }, $_free$$ = $makeInvalidEarlyAccess$$("_free");
+			var $ASM_CONSTS$$ = { 5227968: () => "undefined" !== typeof wasmOffsetConverter }, $_fflush$$ = $makeInvalidEarlyAccess$$("_fflush"), $_free$$ = $makeInvalidEarlyAccess$$("_free");
 			$Module$$._trace_processor_rpc_init = $makeInvalidEarlyAccess$$("_trace_processor_rpc_init");
 			$Module$$._trace_processor_on_rpc_request = $makeInvalidEarlyAccess$$("_trace_processor_on_rpc_request");
-			var $_main$$ = $Module$$._main = $makeInvalidEarlyAccess$$("_main"), $_malloc$$ = $makeInvalidEarlyAccess$$("_malloc"), $_fflush$$ = $makeInvalidEarlyAccess$$("_fflush");
+			var $_main$$ = $Module$$._main = $makeInvalidEarlyAccess$$("_main"), $_malloc$$ = $makeInvalidEarlyAccess$$("_malloc");
 			$Module$$._SynqPerfettoParseAlloc = $makeInvalidEarlyAccess$$("_SynqPerfettoParseAlloc");
 			$Module$$._SynqPerfettoParseFree = $makeInvalidEarlyAccess$$("_SynqPerfettoParseFree");
 			$Module$$._SynqPerfettoParse = $makeInvalidEarlyAccess$$("_SynqPerfettoParse");
 			$Module$$._SynqPerfettoGetToken = $makeInvalidEarlyAccess$$("_SynqPerfettoGetToken");
+			$Module$$._synq_extent_record_list_append = $makeInvalidEarlyAccess$$("_synq_extent_record_list_append");
 			$Module$$._synq_extent_on_shift = $makeInvalidEarlyAccess$$("_synq_extent_on_shift");
 			$Module$$._synq_extent_on_reduce = $makeInvalidEarlyAccess$$("_synq_extent_on_reduce");
 			$Module$$._synq_extent_fold_below_into_top = $makeInvalidEarlyAccess$$("_synq_extent_fold_below_into_top");
@@ -804,10 +808,10 @@
 				var $wasmExports$jscomp$2$$ = $wasmExports$$;
 				$wasmExports$jscomp$2$$ = Object.assign({}, $wasmExports$jscomp$2$$);
 				var $makeWrapper__p$$ = ($f$jscomp$2$$) => ($a0$$) => $f$jscomp$2$$(BigInt($a0$$)), $makeWrapper_pp$$ = ($f$jscomp$4$$) => ($a0$jscomp$2$$) => Number($f$jscomp$4$$(BigInt($a0$jscomp$2$$))), $makeWrapper_p$$ = ($f$jscomp$5$$) => () => Number($f$jscomp$5$$());
+				$wasmExports$jscomp$2$$.fflush = $makeWrapper__p$$($wasmExports$jscomp$2$$.fflush);
 				$wasmExports$jscomp$2$$.free = $makeWrapper__p$$($wasmExports$jscomp$2$$.free);
 				$wasmExports$jscomp$2$$.__main_argc_argv = (($f$jscomp$3$$) => ($a0$jscomp$1$$, $a1$$, $a2$$) => $f$jscomp$3$$($a0$jscomp$1$$, BigInt($a1$$ ? $a1$$ : 0), BigInt($a2$$ ? $a2$$ : 0)))($wasmExports$jscomp$2$$.__main_argc_argv);
 				$wasmExports$jscomp$2$$.malloc = $makeWrapper_pp$$($wasmExports$jscomp$2$$.malloc);
-				$wasmExports$jscomp$2$$.fflush = $makeWrapper__p$$($wasmExports$jscomp$2$$.fflush);
 				$wasmExports$jscomp$2$$.emscripten_stack_get_end = $makeWrapper_p$$($wasmExports$jscomp$2$$.emscripten_stack_get_end);
 				$wasmExports$jscomp$2$$.emscripten_stack_get_base = $makeWrapper_p$$($wasmExports$jscomp$2$$.emscripten_stack_get_base);
 				$wasmExports$jscomp$2$$._emscripten_stack_restore = $makeWrapper__p$$($wasmExports$jscomp$2$$._emscripten_stack_restore);
@@ -816,22 +820,22 @@
 				return $wasmExports$jscomp$2$$;
 			}
 			var $calledRun$$;
-			function $callMain$$($JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$ = []) {
+			function $callMain$$($JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$ = []) {
 				$assert$$("undefined" === typeof $onPreRuns$$ || 0 == $onPreRuns$$.length, "cannot call main when preRun functions remain to be called");
 				var $entryFunction$$ = $_main$$;
-				$JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$.unshift($thisProgram$$);
-				var $argc$$ = $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$.length, $argv$$ = $__emscripten_stack_alloc$$(8 * ($argc$$ + 1)), $argv_ptr$$ = $argv$$, $arg$jscomp$8$$;
-				for ($arg$jscomp$8$$ of $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$) $HEAPU64$$[$argv_ptr$$ / 8] = BigInt($stringToUTF8OnStack$$($arg$jscomp$8$$)), $argv_ptr$$ += 8;
+				$JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$.unshift($thisProgram$$);
+				var $argc$$ = $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$.length, $argv$$ = $__emscripten_stack_alloc$$(8 * ($argc$$ + 1)), $argv_ptr$$ = $argv$$, $arg$jscomp$8$$;
+				for ($arg$jscomp$8$$ of $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$) $HEAPU64$$[$argv_ptr$$ / 8] = BigInt($stringToUTF8OnStack$$($arg$jscomp$8$$)), $argv_ptr$$ += 8;
 				$HEAPU64$$[$argv_ptr$$ / 8] = 0n;
 				try {
 					var $ret$jscomp$12$$ = $entryFunction$$($argc$$, BigInt($argv$$));
 					$exitJS$$($ret$jscomp$12$$, !0);
 					return $ret$jscomp$12$$;
 				} catch ($e$jscomp$11$$) {
-					$JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$ = $e$jscomp$11$$;
-					if ($JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$ instanceof $ExitStatus$$ || "unwind" == $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$) $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$ = $EXITSTATUS$$;
-					else throw $checkStackCookie$$(), $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$ instanceof WebAssembly.RuntimeError && 0 >= $_emscripten_stack_get_current$$() && $err$$("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 2097152)"), $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$;
-					return $JSCompiler_inline_result$jscomp$10_args$jscomp$6_e$jscomp$inline_80$$;
+					$JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$ = $e$jscomp$11$$;
+					if ($JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$ instanceof $ExitStatus$$ || "unwind" == $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$) $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$ = $EXITSTATUS$$;
+					else throw $checkStackCookie$$(), $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$ instanceof WebAssembly.RuntimeError && 0 >= $_emscripten_stack_get_current$$() && $err$$("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 2097152)"), $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$;
+					return $JSCompiler_inline_result$jscomp$10_args$jscomp$7_e$jscomp$inline_80$$;
 				}
 			}
 			function $checkUnflushedContent$$() {
@@ -850,16 +854,17 @@
 				function $receiveInstance$$($instance$jscomp$1_wasmExports$jscomp$inline_83$$) {
 					$wasmExports$$ = $instance$jscomp$1_wasmExports$jscomp$inline_83$$.exports;
 					$instance$jscomp$1_wasmExports$jscomp$inline_83$$ = $wasmExports$$ = $applySignatureConversions$$();
+					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.fflush, "missing Wasm export: fflush");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.free, "missing Wasm export: free");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.trace_processor_rpc_init, "missing Wasm export: trace_processor_rpc_init");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.trace_processor_on_rpc_request, "missing Wasm export: trace_processor_on_rpc_request");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.__main_argc_argv, "missing Wasm export: __main_argc_argv");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.malloc, "missing Wasm export: malloc");
-					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.fflush, "missing Wasm export: fflush");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.SynqPerfettoParseAlloc, "missing Wasm export: SynqPerfettoParseAlloc");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.SynqPerfettoParseFree, "missing Wasm export: SynqPerfettoParseFree");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.SynqPerfettoParse, "missing Wasm export: SynqPerfettoParse");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.SynqPerfettoGetToken, "missing Wasm export: SynqPerfettoGetToken");
+					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.synq_extent_record_list_append, "missing Wasm export: synq_extent_record_list_append");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.synq_extent_on_shift, "missing Wasm export: synq_extent_on_shift");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.synq_extent_on_reduce, "missing Wasm export: synq_extent_on_reduce");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.synq_extent_fold_below_into_top, "missing Wasm export: synq_extent_fold_below_into_top");
@@ -877,16 +882,17 @@
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.emscripten_stack_get_current, "missing Wasm export: emscripten_stack_get_current");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.memory, "missing Wasm export: memory");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_83$$.__indirect_function_table, "missing Wasm export: __indirect_function_table");
+					$_fflush$$ = $createExportWrapper$$("fflush", 1);
 					$_free$$ = $createExportWrapper$$("free", 1);
 					$Module$$._trace_processor_rpc_init = $createExportWrapper$$("trace_processor_rpc_init", 2);
 					$Module$$._trace_processor_on_rpc_request = $createExportWrapper$$("trace_processor_on_rpc_request", 1);
 					$_main$$ = $Module$$._main = $createExportWrapper$$("__main_argc_argv", 2);
 					$_malloc$$ = $createExportWrapper$$("malloc", 1);
-					$_fflush$$ = $createExportWrapper$$("fflush", 1);
 					$Module$$._SynqPerfettoParseAlloc = $createExportWrapper$$("SynqPerfettoParseAlloc", 2);
 					$Module$$._SynqPerfettoParseFree = $createExportWrapper$$("SynqPerfettoParseFree", 2);
 					$Module$$._SynqPerfettoParse = $createExportWrapper$$("SynqPerfettoParse", 3);
 					$Module$$._SynqPerfettoGetToken = $createExportWrapper$$("SynqPerfettoGetToken", 3);
+					$Module$$._synq_extent_record_list_append = $createExportWrapper$$("synq_extent_record_list_append", 3);
 					$Module$$._synq_extent_on_shift = $createExportWrapper$$("synq_extent_on_shift", 3);
 					$Module$$._synq_extent_on_reduce = $createExportWrapper$$("synq_extent_on_reduce", 2);
 					$Module$$._synq_extent_fold_below_into_top = $createExportWrapper$$("synq_extent_fold_below_into_top", 1);
@@ -925,7 +931,7 @@
 					return $receiveInstance$$($result$jscomp$2$$.instance);
 				}(await $instantiateAsync$$($info$$));
 			}();
-			(function($args$jscomp$7$$ = $arguments_$$) {
+			(function($args$jscomp$8$$ = $arguments_$$) {
 				function $doRun$$() {
 					$assert$$(!$calledRun$$);
 					$calledRun$$ = !0;
@@ -939,7 +945,7 @@
 						$readyPromiseResolve$$?.($Module$$);
 						$Module$$.onRuntimeInitialized?.();
 						$consumedModuleProp$$("onRuntimeInitialized");
-						$Module$$.noInitialRun || $callMain$$($args$jscomp$7$$);
+						$Module$$.noInitialRun || $callMain$$($args$jscomp$8$$);
 						$checkStackCookie$$();
 						if ($Module$$.postRun) for ("function" == typeof $Module$$.postRun && ($Module$$.postRun = [$Module$$.postRun]); $Module$$.postRun.length;) {
 							var $cb$jscomp$inline_106$$ = $Module$$.postRun.shift();
@@ -1008,25 +1014,27 @@
 			var $Module$$ = moduleArg, $ENVIRONMENT_IS_WEB$$ = !!globalThis.window, $ENVIRONMENT_IS_WORKER$$ = !!globalThis.WorkerGlobalScope, $ENVIRONMENT_IS_NODE$$ = globalThis.$g$?.$versions$?.node && "renderer" != globalThis.$g$?.type, $ENVIRONMENT_IS_SHELL$$ = !$ENVIRONMENT_IS_WEB$$ && !$ENVIRONMENT_IS_NODE$$ && !$ENVIRONMENT_IS_WORKER$$, $arguments_$$ = [], $thisProgram$$ = "./this.program", $_scriptName$$;
 			$ENVIRONMENT_IS_WORKER$$ && ($_scriptName$$ = self.location.href);
 			var $scriptDirectory$$ = "", $readAsync$$, $readBinary$$;
-			if (!$ENVIRONMENT_IS_SHELL$$) if ($ENVIRONMENT_IS_WEB$$ || $ENVIRONMENT_IS_WORKER$$) {
-				try {
-					$scriptDirectory$$ = new URL(".", $_scriptName$$).href;
-				} catch {}
-				if (!globalThis.window && !globalThis.WorkerGlobalScope) throw Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
-				$ENVIRONMENT_IS_WORKER$$ && ($readBinary$$ = ($url$jscomp$24$$) => {
-					var $xhr$$ = new XMLHttpRequest();
-					$xhr$$.open("GET", $url$jscomp$24$$, !1);
-					$xhr$$.responseType = "arraybuffer";
-					$xhr$$.send(null);
-					return new Uint8Array($xhr$$.response);
-				});
-				$readAsync$$ = async ($response$jscomp$2_url$jscomp$25$$) => {
-					$assert$$(!$isFileURI$$($response$jscomp$2_url$jscomp$25$$), "readAsync does not work with file:// URLs");
-					$response$jscomp$2_url$jscomp$25$$ = await fetch($response$jscomp$2_url$jscomp$25$$, { credentials: "same-origin" });
-					if ($response$jscomp$2_url$jscomp$25$$.ok) return $response$jscomp$2_url$jscomp$25$$.arrayBuffer();
-					throw Error($response$jscomp$2_url$jscomp$25$$.status + " : " + $response$jscomp$2_url$jscomp$25$$.url);
-				};
-			} else throw Error("environment detection error");
+			if (!$ENVIRONMENT_IS_SHELL$$) {
+				if ($ENVIRONMENT_IS_WEB$$ || $ENVIRONMENT_IS_WORKER$$) {
+					try {
+						$scriptDirectory$$ = new URL(".", $_scriptName$$).href;
+					} catch {}
+					if (!globalThis.window && !globalThis.WorkerGlobalScope) throw Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
+					$ENVIRONMENT_IS_WORKER$$ && ($readBinary$$ = ($url$jscomp$24$$) => {
+						var $xhr$$ = new XMLHttpRequest();
+						$xhr$$.open("GET", $url$jscomp$24$$, !1);
+						$xhr$$.responseType = "arraybuffer";
+						$xhr$$.send(null);
+						return new Uint8Array($xhr$$.response);
+					});
+					$readAsync$$ = async ($response$jscomp$2_url$jscomp$25$$) => {
+						$assert$$(!$isFileURI$$($response$jscomp$2_url$jscomp$25$$), "readAsync does not work with file:// URLs");
+						$response$jscomp$2_url$jscomp$25$$ = await fetch($response$jscomp$2_url$jscomp$25$$, { credentials: "same-origin" });
+						if ($response$jscomp$2_url$jscomp$25$$.ok) return $response$jscomp$2_url$jscomp$25$$.arrayBuffer();
+						throw Error($response$jscomp$2_url$jscomp$25$$.status + " : " + $response$jscomp$2_url$jscomp$25$$.url);
+					};
+				} else throw Error("environment detection error");
+			}
 			var $out$$ = console.log.bind(console), $err$$ = console.error.bind(console);
 			$assert$$(!$ENVIRONMENT_IS_WEB$$, "web environment detected but not enabled at build time.  Add `web` to `-sENVIRONMENT` to enable.");
 			$assert$$(!$ENVIRONMENT_IS_NODE$$, "node environment detected but not enabled at build time.  Add `node` to `-sENVIRONMENT` to enable.");
@@ -1320,6 +1328,32 @@
 				var $func$jscomp$7$$ = $Module$$["_" + $ident$jscomp$1$$];
 				$assert$$($func$jscomp$7$$, "Cannot call unknown function " + $ident$jscomp$1$$ + ", make sure it is exported");
 				return $func$jscomp$7$$;
+			}, $ccall$$ = ($func$jscomp$8_ident$jscomp$2$$, $returnType$$, $argTypes_ret$jscomp$4$$, $args$jscomp$5$$) => {
+				var $toC$$ = {
+					string: ($str$jscomp$15$$) => {
+						var $ret$jscomp$5$$ = 0;
+						null !== $str$jscomp$15$$ && void 0 !== $str$jscomp$15$$ && 0 !== $str$jscomp$15$$ && ($ret$jscomp$5$$ = $stringToUTF8OnStack$$($str$jscomp$15$$));
+						return $ret$jscomp$5$$;
+					},
+					array: ($arr$jscomp$2$$) => {
+						var $ret$jscomp$6$$ = $__emscripten_stack_alloc$$($arr$jscomp$2$$.length);
+						$assert$$(0 <= $arr$jscomp$2$$.length, "writeArrayToMemory array must have a length (should be an array or typed array)");
+						$HEAP8$$.set($arr$jscomp$2$$, $ret$jscomp$6$$ >>> 0);
+						return $ret$jscomp$6$$;
+					}
+				};
+				$func$jscomp$8_ident$jscomp$2$$ = $getCFunc$$($func$jscomp$8_ident$jscomp$2$$);
+				var $cArgs$$ = [], $stack$jscomp$1$$ = 0;
+				$assert$$("array" !== $returnType$$, "Return type should not be \"array\".");
+				if ($args$jscomp$5$$) for (var $i$jscomp$8$$ = 0; $i$jscomp$8$$ < $args$jscomp$5$$.length; $i$jscomp$8$$++) {
+					var $converter$$ = $toC$$[$argTypes_ret$jscomp$4$$[$i$jscomp$8$$]];
+					$converter$$ ? (0 === $stack$jscomp$1$$ && ($stack$jscomp$1$$ = $_emscripten_stack_get_current$$()), $cArgs$$[$i$jscomp$8$$] = $converter$$($args$jscomp$5$$[$i$jscomp$8$$])) : $cArgs$$[$i$jscomp$8$$] = $args$jscomp$5$$[$i$jscomp$8$$];
+				}
+				$argTypes_ret$jscomp$4$$ = $func$jscomp$8_ident$jscomp$2$$(...$cArgs$$);
+				return $argTypes_ret$jscomp$4$$ = function($ret$jscomp$8$$) {
+					0 !== $stack$jscomp$1$$ && $__emscripten_stack_restore$$($stack$jscomp$1$$);
+					return "string" === $returnType$$ ? $UTF8ToString$$($ret$jscomp$8$$) : "pointer" === $returnType$$ ? $ret$jscomp$8$$ >>> 0 : "boolean" === $returnType$$ ? !!$ret$jscomp$8$$ : $ret$jscomp$8$$;
+				}($argTypes_ret$jscomp$4$$);
 			}, $wasmTableMirror$$ = [], $functionsInTableMap$$, $freeTableIndexes$$ = [], $uleb128EncodeWithLen$$ = ($arr$jscomp$3$$) => {
 				const $n$jscomp$4$$ = $arr$jscomp$3$$.length;
 				$assert$$(16384 > $n$jscomp$4$$);
@@ -1375,33 +1409,8 @@
 			if ($Module$$.preInit) for ("function" == typeof $Module$$.preInit && ($Module$$.preInit = [$Module$$.preInit]); 0 < $Module$$.preInit.length;) $Module$$.preInit.shift()();
 			$consumedModuleProp$$("preInit");
 			$Module$$.callMain = $callMain$$;
-			$Module$$.ccall = ($func$jscomp$8_ident$jscomp$2$$, $returnType$$, $argTypes_ret$jscomp$4$$, $args$jscomp$5$$) => {
-				var $toC$$ = {
-					string: ($str$jscomp$15$$) => {
-						var $ret$jscomp$5$$ = 0;
-						null !== $str$jscomp$15$$ && void 0 !== $str$jscomp$15$$ && 0 !== $str$jscomp$15$$ && ($ret$jscomp$5$$ = $stringToUTF8OnStack$$($str$jscomp$15$$));
-						return $ret$jscomp$5$$;
-					},
-					array: ($arr$jscomp$2$$) => {
-						var $ret$jscomp$6$$ = $__emscripten_stack_alloc$$($arr$jscomp$2$$.length);
-						$assert$$(0 <= $arr$jscomp$2$$.length, "writeArrayToMemory array must have a length (should be an array or typed array)");
-						$HEAP8$$.set($arr$jscomp$2$$, $ret$jscomp$6$$ >>> 0);
-						return $ret$jscomp$6$$;
-					}
-				};
-				$func$jscomp$8_ident$jscomp$2$$ = $getCFunc$$($func$jscomp$8_ident$jscomp$2$$);
-				var $cArgs$$ = [], $stack$jscomp$1$$ = 0;
-				$assert$$("array" !== $returnType$$, "Return type should not be \"array\".");
-				if ($args$jscomp$5$$) for (var $i$jscomp$8$$ = 0; $i$jscomp$8$$ < $args$jscomp$5$$.length; $i$jscomp$8$$++) {
-					var $converter$$ = $toC$$[$argTypes_ret$jscomp$4$$[$i$jscomp$8$$]];
-					$converter$$ ? (0 === $stack$jscomp$1$$ && ($stack$jscomp$1$$ = $_emscripten_stack_get_current$$()), $cArgs$$[$i$jscomp$8$$] = $converter$$($args$jscomp$5$$[$i$jscomp$8$$])) : $cArgs$$[$i$jscomp$8$$] = $args$jscomp$5$$[$i$jscomp$8$$];
-				}
-				$argTypes_ret$jscomp$4$$ = $func$jscomp$8_ident$jscomp$2$$(...$cArgs$$);
-				return $argTypes_ret$jscomp$4$$ = function($ret$jscomp$8$$) {
-					0 !== $stack$jscomp$1$$ && $__emscripten_stack_restore$$($stack$jscomp$1$$);
-					return "string" === $returnType$$ ? $UTF8ToString$$($ret$jscomp$8$$) : "pointer" === $returnType$$ ? $ret$jscomp$8$$ >>> 0 : "boolean" === $returnType$$ ? !!$ret$jscomp$8$$ : $ret$jscomp$8$$;
-				}($argTypes_ret$jscomp$4$$);
-			};
+			$Module$$.ccall = $ccall$$;
+			$Module$$.cwrap = ($ident$jscomp$3$$, $returnType$jscomp$1$$, $argTypes$jscomp$1$$, $opts$jscomp$1$$) => (...$args$jscomp$6$$) => $ccall$$($ident$jscomp$3$$, $returnType$jscomp$1$$, $argTypes$jscomp$1$$, $args$jscomp$6$$, $opts$jscomp$1$$);
 			$Module$$.addFunction = ($func$jscomp$13$$, $bytes$jscomp$inline_56_module$jscomp$inline_57_sig$jscomp$1_wrapped$$) => {
 				$assert$$("undefined" != typeof $func$jscomp$13$$);
 				if (!$functionsInTableMap$$) {
@@ -1447,19 +1456,20 @@
 				$functionsInTableMap$$.set($func$jscomp$13$$, $ret$jscomp$9$$);
 				return $ret$jscomp$9$$;
 			};
-			"writeI53ToI64 writeI53ToI64Clamped writeI53ToI64Signaling writeI53ToU64Clamped writeI53ToU64Signaling readI53FromI64 readI53FromU64 convertI32PairToI53 convertI32PairToI53Checked convertU32PairToI53 getTempRet0 setTempRet0 createNamedFunction zeroMemory withStackSave strError inetPton4 inetNtop4 inetPton6 inetNtop6 readSockaddr writeSockaddr runMainThreadEmAsm jstoi_q autoResumeAudioContext getDynCaller dynCall runtimeKeepalivePush runtimeKeepalivePop callUserCallback maybeExit asyncLoad asmjsMangle mmapAlloc HandleAllocator getUniqueRunDependency addRunDependency removeRunDependency addOnInit addOnPostCtor addOnPreMain addOnExit STACK_SIZE STACK_ALIGN POINTER_SIZE ASSERTIONS cwrap removeFunction intArrayFromString intArrayToString AsciiToString stringToAscii UTF16ToString stringToUTF16 lengthBytesUTF16 UTF32ToString stringToUTF32 lengthBytesUTF32 registerKeyEventCallback maybeCStringToJsString findEventTarget getBoundingClientRect fillMouseEventData registerMouseEventCallback registerWheelEventCallback registerUiEventCallback registerFocusEventCallback fillDeviceOrientationEventData registerDeviceOrientationEventCallback fillDeviceMotionEventData registerDeviceMotionEventCallback screenOrientation fillOrientationChangeEventData registerOrientationChangeEventCallback fillFullscreenChangeEventData registerFullscreenChangeEventCallback JSEvents_requestFullscreen JSEvents_resizeCanvasForFullscreen registerRestoreOldStyle hideEverythingExceptGivenElement restoreHiddenElements setLetterbox softFullscreenResizeWebGLRenderTarget doRequestFullscreen fillPointerlockChangeEventData registerPointerlockChangeEventCallback registerPointerlockErrorEventCallback requestPointerLock fillVisibilityChangeEventData registerVisibilityChangeEventCallback registerTouchEventCallback fillGamepadEventData registerGamepadEventCallback registerBeforeUnloadEventCallback fillBatteryEventData registerBatteryEventCallback setCanvasElementSize getCanvasElementSize getCallstack convertPCtoSourceLocation wasiRightsToMuslOFlags wasiOFlagsToMuslOFlags initRandomFill randomFill safeSetTimeout setImmediateWrapped safeRequestAnimationFrame clearImmediateWrapped registerPostMainLoop registerPreMainLoop getPromise makePromise idsToPromises makePromiseCallback ExceptionInfo findMatchingCatch Browser_asyncPrepareDataCounter arraySum addDays getSocketFromFD getSocketAddress heapObjectForWebGLType toTypedArrayIndex webgl_enable_ANGLE_instanced_arrays webgl_enable_OES_vertex_array_object webgl_enable_WEBGL_draw_buffers webgl_enable_WEBGL_multi_draw webgl_enable_EXT_polygon_offset_clamp webgl_enable_EXT_clip_control webgl_enable_WEBGL_polygon_mode emscriptenWebGLGet computeUnpackAlignedImageSize colorChannelsInGlTextureFormat emscriptenWebGLGetTexPixelData emscriptenWebGLGetUniform webglGetUniformLocation webglPrepareUniformLocationsBeforeFirstUse webglGetLeftBracePos emscriptenWebGLGetVertexAttrib __glGetActiveAttribOrUniform writeGLArray registerWebGlEventCallback runAndAbortIfError ALLOC_NORMAL ALLOC_STACK allocate writeStringToMemory writeAsciiToMemory allocateUTF8 allocateUTF8OnStack demangle stackTrace getNativeTypeSize".split(" ").forEach(function($sym$jscomp$2$$) {
+			"writeI53ToI64 writeI53ToI64Clamped writeI53ToI64Signaling writeI53ToU64Clamped writeI53ToU64Signaling readI53FromI64 readI53FromU64 convertI32PairToI53 convertI32PairToI53Checked convertU32PairToI53 getTempRet0 setTempRet0 createNamedFunction zeroMemory withStackSave strError inetPton4 inetNtop4 inetPton6 inetNtop6 readSockaddr writeSockaddr runMainThreadEmAsm jstoi_q autoResumeAudioContext getDynCaller dynCall runtimeKeepalivePush runtimeKeepalivePop callUserCallback maybeExit asyncLoad asmjsMangle mmapAlloc HandleAllocator getUniqueRunDependency addRunDependency removeRunDependency addOnInit addOnPostCtor addOnPreMain addOnExit STACK_SIZE STACK_ALIGN POINTER_SIZE ASSERTIONS removeFunction intArrayFromString intArrayToString AsciiToString stringToAscii UTF16ToString stringToUTF16 lengthBytesUTF16 UTF32ToString stringToUTF32 lengthBytesUTF32 registerKeyEventCallback maybeCStringToJsString findEventTarget getBoundingClientRect fillMouseEventData registerMouseEventCallback registerWheelEventCallback registerUiEventCallback registerFocusEventCallback fillDeviceOrientationEventData registerDeviceOrientationEventCallback fillDeviceMotionEventData registerDeviceMotionEventCallback screenOrientation fillOrientationChangeEventData registerOrientationChangeEventCallback fillFullscreenChangeEventData registerFullscreenChangeEventCallback JSEvents_requestFullscreen JSEvents_resizeCanvasForFullscreen registerRestoreOldStyle hideEverythingExceptGivenElement restoreHiddenElements setLetterbox softFullscreenResizeWebGLRenderTarget doRequestFullscreen fillPointerlockChangeEventData registerPointerlockChangeEventCallback registerPointerlockErrorEventCallback requestPointerLock fillVisibilityChangeEventData registerVisibilityChangeEventCallback registerTouchEventCallback fillGamepadEventData registerGamepadEventCallback registerBeforeUnloadEventCallback fillBatteryEventData registerBatteryEventCallback setCanvasElementSize getCanvasElementSize getCallstack convertPCtoSourceLocation wasiRightsToMuslOFlags wasiOFlagsToMuslOFlags initRandomFill randomFill safeSetTimeout setImmediateWrapped safeRequestAnimationFrame clearImmediateWrapped registerPostMainLoop registerPreMainLoop getPromise makePromise idsToPromises makePromiseCallback ExceptionInfo findMatchingCatch Browser_asyncPrepareDataCounter arraySum addDays getSocketFromFD getSocketAddress heapObjectForWebGLType toTypedArrayIndex webgl_enable_ANGLE_instanced_arrays webgl_enable_OES_vertex_array_object webgl_enable_WEBGL_draw_buffers webgl_enable_WEBGL_multi_draw webgl_enable_EXT_polygon_offset_clamp webgl_enable_EXT_clip_control webgl_enable_WEBGL_polygon_mode emscriptenWebGLGet computeUnpackAlignedImageSize colorChannelsInGlTextureFormat emscriptenWebGLGetTexPixelData emscriptenWebGLGetUniform webglGetUniformLocation webglPrepareUniformLocationsBeforeFirstUse webglGetLeftBracePos emscriptenWebGLGetVertexAttrib __glGetActiveAttribOrUniform writeGLArray registerWebGlEventCallback runAndAbortIfError ALLOC_NORMAL ALLOC_STACK allocate writeStringToMemory writeAsciiToMemory allocateUTF8 allocateUTF8OnStack demangle stackTrace getNativeTypeSize".split(" ").forEach(function($sym$jscomp$2$$) {
 				$unexportedRuntimeSymbol$$($sym$jscomp$2$$);
 			});
 			"run out err abort wasmExports HEAPF32 HEAPF64 HEAP8 HEAP16 HEAPU16 HEAP32 HEAPU32 HEAP64 HEAPU64 writeStackCookie checkStackCookie INT53_MAX INT53_MIN bigintToI53Checked stackSave stackRestore stackAlloc ptrToString exitJS getHeapMax growMemory ENV ERRNO_CODES DNS Protocols Sockets timers warnOnce readEmAsmArgsArray readEmAsmArgs runEmAsmFunction getExecutableName handleException keepRuntimeAlive alignMemory wasmTable wasmMemory noExitRuntime addOnPreRun addOnPostRun convertJsFunctionToWasm freeTableIndexes functionsInTableMap getEmptyTableSlot updateTableMap getFunctionAddress setValue getValue PATH PATH_FS UTF8Decoder UTF8ArrayToString UTF8ToString stringToUTF8Array stringToUTF8 lengthBytesUTF8 UTF16Decoder stringToNewUTF8 stringToUTF8OnStack writeArrayToMemory JSEvents specialHTMLTargets findCanvasEventTarget currentFullscreenStrategy restoreOldWindowedStyle jsStackTrace UNWIND_CACHE ExitStatus getEnvStrings checkWasiClock flush_NO_FILESYSTEM emSetImmediate emClearImmediate_deps emClearImmediate promiseMap uncaughtExceptionCount exceptionLast exceptionCaught Browser requestFullscreen requestFullScreen setCanvasSize getUserMedia createContext getPreloadedImageData__data wget MONTH_DAYS_REGULAR MONTH_DAYS_LEAP MONTH_DAYS_REGULAR_CUMULATIVE MONTH_DAYS_LEAP_CUMULATIVE isLeapYear ydayFromDate SYSCALLS tempFixedLengthArray miniTempWebGLFloatBuffers miniTempWebGLIntBuffers GL AL GLUT EGL GLEW IDBStore SDL SDL_gfx print printErr jstoi_s".split(" ").forEach($unexportedRuntimeSymbol$$);
-			var $ASM_CONSTS$$ = { 4867796: () => "undefined" !== typeof wasmOffsetConverter }, $_free$$ = $makeInvalidEarlyAccess$$("_free");
+			var $ASM_CONSTS$$ = { 4968396: () => "undefined" !== typeof wasmOffsetConverter }, $_fflush$$ = $makeInvalidEarlyAccess$$("_fflush"), $_free$$ = $makeInvalidEarlyAccess$$("_free");
 			$Module$$._trace_processor_rpc_init = $makeInvalidEarlyAccess$$("_trace_processor_rpc_init");
 			$Module$$._trace_processor_on_rpc_request = $makeInvalidEarlyAccess$$("_trace_processor_on_rpc_request");
-			var $_main$$ = $Module$$._main = $makeInvalidEarlyAccess$$("_main"), $_malloc$$ = $makeInvalidEarlyAccess$$("_malloc"), $_fflush$$ = $makeInvalidEarlyAccess$$("_fflush");
+			var $_main$$ = $Module$$._main = $makeInvalidEarlyAccess$$("_main"), $_malloc$$ = $makeInvalidEarlyAccess$$("_malloc");
 			$Module$$._SynqPerfettoParseAlloc = $makeInvalidEarlyAccess$$("_SynqPerfettoParseAlloc");
 			$Module$$._SynqPerfettoParseFree = $makeInvalidEarlyAccess$$("_SynqPerfettoParseFree");
 			$Module$$._SynqPerfettoParse = $makeInvalidEarlyAccess$$("_SynqPerfettoParse");
 			$Module$$._synq_extent_on_shift = $makeInvalidEarlyAccess$$("_synq_extent_on_shift");
 			$Module$$._SynqPerfettoGetToken = $makeInvalidEarlyAccess$$("_SynqPerfettoGetToken");
+			$Module$$._synq_extent_record_list_append = $makeInvalidEarlyAccess$$("_synq_extent_record_list_append");
 			$Module$$._synq_extent_on_reduce = $makeInvalidEarlyAccess$$("_synq_extent_on_reduce");
 			$Module$$._synq_extent_fold_below_into_top = $makeInvalidEarlyAccess$$("_synq_extent_fold_below_into_top");
 			$Module$$._SynqPerfettoParseInit = $makeInvalidEarlyAccess$$("_SynqPerfettoParseInit");
@@ -1748,22 +1758,22 @@
 				return $wasmExports$jscomp$2$$;
 			}
 			var $calledRun$$;
-			function $callMain$$($JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$ = []) {
+			function $callMain$$($JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$ = []) {
 				$assert$$("undefined" === typeof $onPreRuns$$ || 0 == $onPreRuns$$.length, "cannot call main when preRun functions remain to be called");
 				var $entryFunction$$ = $_main$$;
-				$JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$.unshift($thisProgram$$);
-				var $argc$$ = $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$.length, $argv$$ = $__emscripten_stack_alloc$$(4 * ($argc$$ + 1)), $argv_ptr$$ = $argv$$, $arg$jscomp$8$$;
-				for ($arg$jscomp$8$$ of $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$) $HEAPU32$$[$argv_ptr$$ >>> 2 >>> 0] = $stringToUTF8OnStack$$($arg$jscomp$8$$), $argv_ptr$$ += 4;
+				$JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$.unshift($thisProgram$$);
+				var $argc$$ = $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$.length, $argv$$ = $__emscripten_stack_alloc$$(4 * ($argc$$ + 1)), $argv_ptr$$ = $argv$$, $arg$jscomp$8$$;
+				for ($arg$jscomp$8$$ of $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$) $HEAPU32$$[$argv_ptr$$ >>> 2 >>> 0] = $stringToUTF8OnStack$$($arg$jscomp$8$$), $argv_ptr$$ += 4;
 				$HEAPU32$$[$argv_ptr$$ >>> 2 >>> 0] = 0;
 				try {
 					var $ret$jscomp$10$$ = $entryFunction$$($argc$$, $argv$$);
 					$exitJS$$($ret$jscomp$10$$, !0);
 					return $ret$jscomp$10$$;
 				} catch ($e$jscomp$11$$) {
-					$JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$ = $e$jscomp$11$$;
-					if ($JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$ instanceof $ExitStatus$$ || "unwind" == $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$) $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$ = $EXITSTATUS$$;
-					else throw $checkStackCookie$$(), $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$ instanceof WebAssembly.RuntimeError && 0 >= $_emscripten_stack_get_current$$() && $err$$("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 2097152)"), $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$;
-					return $JSCompiler_inline_result$jscomp$9_args$jscomp$6_e$jscomp$inline_77$$;
+					$JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$ = $e$jscomp$11$$;
+					if ($JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$ instanceof $ExitStatus$$ || "unwind" == $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$) $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$ = $EXITSTATUS$$;
+					else throw $checkStackCookie$$(), $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$ instanceof WebAssembly.RuntimeError && 0 >= $_emscripten_stack_get_current$$() && $err$$("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 2097152)"), $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$;
+					return $JSCompiler_inline_result$jscomp$9_args$jscomp$7_e$jscomp$inline_77$$;
 				}
 			}
 			function $checkUnflushedContent$$() {
@@ -1782,17 +1792,18 @@
 				function $receiveInstance$$($instance$jscomp$1_wasmExports$jscomp$inline_80$$) {
 					$wasmExports$$ = $instance$jscomp$1_wasmExports$jscomp$inline_80$$.exports;
 					$instance$jscomp$1_wasmExports$jscomp$inline_80$$ = $wasmExports$$ = $applySignatureConversions$$();
+					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.fflush, "missing Wasm export: fflush");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.free, "missing Wasm export: free");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.trace_processor_rpc_init, "missing Wasm export: trace_processor_rpc_init");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.trace_processor_on_rpc_request, "missing Wasm export: trace_processor_on_rpc_request");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.__main_argc_argv, "missing Wasm export: __main_argc_argv");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.malloc, "missing Wasm export: malloc");
-					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.fflush, "missing Wasm export: fflush");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.SynqPerfettoParseAlloc, "missing Wasm export: SynqPerfettoParseAlloc");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.SynqPerfettoParseFree, "missing Wasm export: SynqPerfettoParseFree");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.SynqPerfettoParse, "missing Wasm export: SynqPerfettoParse");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.synq_extent_on_shift, "missing Wasm export: synq_extent_on_shift");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.SynqPerfettoGetToken, "missing Wasm export: SynqPerfettoGetToken");
+					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.synq_extent_record_list_append, "missing Wasm export: synq_extent_record_list_append");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.synq_extent_on_reduce, "missing Wasm export: synq_extent_on_reduce");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.synq_extent_fold_below_into_top, "missing Wasm export: synq_extent_fold_below_into_top");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.SynqPerfettoParseInit, "missing Wasm export: SynqPerfettoParseInit");
@@ -1809,17 +1820,18 @@
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.emscripten_stack_get_current, "missing Wasm export: emscripten_stack_get_current");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.memory, "missing Wasm export: memory");
 					$assert$$("undefined" != typeof $instance$jscomp$1_wasmExports$jscomp$inline_80$$.__indirect_function_table, "missing Wasm export: __indirect_function_table");
+					$_fflush$$ = $createExportWrapper$$("fflush", 1);
 					$_free$$ = $createExportWrapper$$("free", 1);
 					$Module$$._trace_processor_rpc_init = $createExportWrapper$$("trace_processor_rpc_init", 2);
 					$Module$$._trace_processor_on_rpc_request = $createExportWrapper$$("trace_processor_on_rpc_request", 1);
 					$_main$$ = $Module$$._main = $createExportWrapper$$("__main_argc_argv", 2);
 					$_malloc$$ = $createExportWrapper$$("malloc", 1);
-					$_fflush$$ = $createExportWrapper$$("fflush", 1);
 					$Module$$._SynqPerfettoParseAlloc = $createExportWrapper$$("SynqPerfettoParseAlloc", 2);
 					$Module$$._SynqPerfettoParseFree = $createExportWrapper$$("SynqPerfettoParseFree", 2);
 					$Module$$._SynqPerfettoParse = $createExportWrapper$$("SynqPerfettoParse", 3);
 					$Module$$._synq_extent_on_shift = $createExportWrapper$$("synq_extent_on_shift", 3);
 					$Module$$._SynqPerfettoGetToken = $createExportWrapper$$("SynqPerfettoGetToken", 3);
+					$Module$$._synq_extent_record_list_append = $createExportWrapper$$("synq_extent_record_list_append", 3);
 					$Module$$._synq_extent_on_reduce = $createExportWrapper$$("synq_extent_on_reduce", 2);
 					$Module$$._synq_extent_fold_below_into_top = $createExportWrapper$$("synq_extent_fold_below_into_top", 1);
 					$Module$$._SynqPerfettoParseInit = $createExportWrapper$$("SynqPerfettoParseInit", 2);
@@ -1857,7 +1869,7 @@
 					return $receiveInstance$$($result$jscomp$2$$.instance);
 				}(await $instantiateAsync$$($info$$));
 			}();
-			(function($args$jscomp$7$$ = $arguments_$$) {
+			(function($args$jscomp$8$$ = $arguments_$$) {
 				function $doRun$$() {
 					$assert$$(!$calledRun$$);
 					$calledRun$$ = !0;
@@ -1871,7 +1883,7 @@
 						$readyPromiseResolve$$?.($Module$$);
 						$Module$$.onRuntimeInitialized?.();
 						$consumedModuleProp$$("onRuntimeInitialized");
-						$Module$$.noInitialRun || $callMain$$($args$jscomp$7$$);
+						$Module$$.noInitialRun || $callMain$$($args$jscomp$8$$);
 						$checkStackCookie$$();
 						if ($Module$$.postRun) for ("function" == typeof $Module$$.postRun && ($Module$$.postRun = [$Module$$.postRun]); $Module$$.postRun.length;) {
 							var $cb$jscomp$inline_103$$ = $Module$$.postRun.shift();
@@ -1950,11 +1962,12 @@
 	}
 	//#endregion
 	//#region ../../ui/src/engine/wasm_bridge.ts
-	var REQ_BUF_SIZE = 32 * 1024 * 1024;
+	var MAX_WRITE_SIZE = 34603008;
 	var WasmBridge = class {
 		aborted = false;
 		connection;
-		reqBufferAddr = 0;
+		onRpcRequest;
+		wrAddr = 0;
 		lastStderr = [];
 		messagePort;
 		useMemory64 = false;
@@ -1974,7 +1987,9 @@
 				}
 			});
 			const fn = connection.addFunction(this.onReply.bind(this), "vpi");
-			this.reqBufferAddr = this.wasmPtrCast(connection.ccall("trace_processor_rpc_init", "pointer", ["pointer", "number"], [fn, REQ_BUF_SIZE]));
+			const init = connection.cwrap("trace_processor_rpc_init", "pointer", ["pointer", "number"]);
+			this.wrAddr = this.wasmPtrCast(init(fn, MAX_WRITE_SIZE));
+			this.onRpcRequest = connection.cwrap("trace_processor_on_rpc_request", "pointer", ["number"]);
 			this.connection = connection;
 			port.onmessage = this.onMessage.bind(this);
 		}
@@ -1985,12 +2000,12 @@
 			const data = msg.data;
 			let wrSize = 0;
 			while (wrSize < data.length) {
-				const sliceLen = Math.min(data.length - wrSize, REQ_BUF_SIZE);
+				const sliceLen = Math.min(data.length - wrSize, MAX_WRITE_SIZE);
 				const dataSlice = data.subarray(wrSize, wrSize + sliceLen);
-				connection.HEAPU8.set(dataSlice, this.reqBufferAddr);
+				connection.HEAPU8.set(dataSlice, this.wrAddr);
 				wrSize += sliceLen;
 				try {
-					connection.ccall("trace_processor_on_rpc_request", "void", ["number"], [sliceLen]);
+					this.wrAddr = this.wasmPtrCast(ensureExists(this.onRpcRequest)(sliceLen));
 				} catch (err) {
 					this.aborted = true;
 					let abortReason = `${err}`;
@@ -2028,4 +2043,4 @@
 })();
 
 //# sourceMappingURL=engine_bundle.js.map
-;(self.__SOURCEMAPS=self.__SOURCEMAPS||{})['engine_bundle.js']={"version":3,"sources":["../../src/base/assert.ts","ui/tsc/gen/trace_processor_memory64.js","ui/tsc/gen/trace_processor.js","../../src/trace_processor/wasm_modules.ts","../../src/engine/wasm_bridge.ts","../../src/engine/index.ts"],"mappings":";;;;;;;;;;;;;;;;;;;;;;;;;;;AA+BA;AACE;AAGF;AAiBA;AACE;AAGA;AACF;;;;ACpDA;AACE;AAEF;AACE;AACE;AACA;AAGA;AACA;AACF;AACA;AACA;AAGA;AAC6F;AAAiE;AAAuE;AAA0D;AAE/R;AACE;AACA;AAGA;AAGA;AACA;AAGA;AACA;AAGF;AACF;AACA;AACA;AACA;AACA;AAEI;AACE;AACF;AAEA;AAGA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACF;AACF;AAIF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACA;AACA;AACE;AAAoH;AAAiB;AACnI;AACF;AAAC;AACH;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AAAkH;AAAiB;AACjI;AACA;AACA;AACF;AAAC;AACH;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AAEI;AACA;AACF;AAGF;AAGE;AAGE;AAGJ;AACF;AACA;AACE;AACE;AACA;AACF;AACE;AACF;AACF;AACA;AACE;AACA;AAEI;AACA;AACF;AACE;AACF;AAEF;AACF;AACA;AACE;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AAGF;AACE;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AAGA;AAGA;AACE;AACA;AACE;AACA;AAEO;AACL;AACA;AACA;AACF;AACF;AAGF;AACA;AACF;AACE;AACA;AACF;AAA0L;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AAAuC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AACzU;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACE;AAGA;AACA;AACF;AACE;AAGA;AACA;AACA;AACF;AACE;AAGA;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACF;AAGA;AACF;AACE;AACE;AACA;AACF;AACA;AACF;AACE;AACA;AAGA;AAEO;AAGP;AACF;AACE;AAGF;AACA;AACE;AACA;AACE;AACA;AAGA;AACA;AAEO;AAEA;AAGL;AAEF;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACF;AACA;AACE;AACE;AAAc;AAAiB;AAAoB;AAAU;AAAS;AAAuB;AAA2E;AAAoC;AAC5M;AAGA;AACA;AAGA;AACF;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAA0B;AAAM;AAAI;AAAE;AACpC;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AAAQ;AAA2B;AAAoB;AAAkB;AAC3E;AAAuB;AAAO;AAAO;AAAO;AAAO;AAAO;AAAK;AAC7D;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AAAc;AAA8B;AAC1C;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAC;AACD;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AACA;AACE;AACA;AACA;AAEI;AACA;AACA;AACA;AACA;AACA;AACF;AAEJ;AACA;AAGA;AAGS;AACL;AACE;AACA;AACF;AACE;AAGA;AACF;AACA;AACF;AAEF;AACE;AACF;AACE;AAGA;AACA;AAAmJ;AAAG;AAAI;AAAyG;AAA0L;AAE7b;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAC0D;AACxD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAAwD;AACzD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACA;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AAAsI;AAAK;AAAK;AAAK;AAAG;AACxJ;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AAAG;AAAsC;AACvC;AACA;AACF;AAAG;AACD;AACA;AACA;AACF;AAAG;AAAmD;AAA4C;AAA2D;AAC3J;AACA;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACA;AACF;AACA;AAGF;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGE;AAEF;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACF;AAAG;AAAgB;AACjB;AACF;AAAG;AACD;AACA;AACA;AACA;AAEO;AAGP;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AAGA;AACF;AACA;AACA;AACF;AAAG;AAAuB;AAC1B;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACA;AAGE;AAEF;AACF;AACF;AACA;AACE;AACA;AACE;AACF;AACA;AACE;AACF;AAEA;AACA;AACA;AACF;AACA;AAEE;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AAA0C;AAAoB;AAAqC;AACnG;AAEI;AACE;AACE;AACF;AACF;AACE;AACF;AACF;AAEF;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACF;AACF;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AACA;AACF;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACuF;AAAiB;AACpG;AACF;AAAC;AAKD;AACF;AAGA;AACE;AAGA;AACF;;;;;ACt7BA;AACE;AAEF;AACE;AACE;AACA;AAGA;AACA;AACF;AACA;AACA;AAGA;AAC6F;AAAiE;AAAuE;AAA0D;AAE/R;AACE;AACA;AAGA;AACA;AAGA;AACA;AAGF;AACF;AACA;AACA;AACA;AACA;AAEI;AACE;AACF;AAEA;AAGA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACF;AACF;AAIF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACA;AACA;AACE;AAAoH;AAAiB;AACnI;AACF;AAAC;AACH;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AAAkH;AAAiB;AACjI;AACA;AACA;AACF;AAAC;AACH;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AAEI;AACA;AACF;AAGF;AAGE;AAGE;AAGJ;AACF;AACA;AACE;AACE;AACA;AACF;AACE;AACF;AACF;AACA;AACE;AACA;AAEI;AACA;AACF;AACE;AACF;AAEF;AACF;AACA;AACE;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AAGF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AACA;AAGA;AAGA;AACE;AACA;AACE;AACA;AAEO;AACL;AACA;AACA;AACF;AACF;AAGF;AACA;AACF;AACE;AACA;AACF;AAAoC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AAAuC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AACnL;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACE;AAGA;AACA;AACF;AACE;AAGA;AACA;AACA;AACF;AACE;AAGA;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACF;AAGA;AACF;AACE;AACE;AACA;AACF;AACA;AACF;AACE;AACA;AAGA;AAEO;AAGP;AACF;AACE;AAGF;AACA;AACE;AACA;AAGA;AACA;AAEO;AAEA;AAGL;AAEF;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AAAc;AAAiB;AAAoB;AAAU;AAAS;AAAuB;AAA2E;AAAoC;AAC5M;AAGA;AACA;AAGA;AACF;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAA0B;AAAM;AAAI;AAAE;AACpC;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AAAQ;AAA2B;AAAoB;AAAkB;AAC3E;AAAuB;AAAO;AAAO;AAAO;AAAO;AAAO;AAAK;AAC7D;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AAAc;AACZ;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAC;AACD;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AACA;AACE;AACA;AACA;AAEI;AACA;AACA;AACA;AACA;AACF;AAEJ;AACA;AAGA;AAGS;AACL;AACE;AACA;AACF;AACE;AAGA;AACF;AACA;AACF;AAEF;AACE;AACF;AACE;AAGA;AACA;AAAmJ;AAAG;AAAI;AAAyG;AAA0L;AAE7b;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAC0D;AACxD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAAwD;AACzD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACA;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AAGA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AAAmI;AAAK;AAAK;AAAK;AAAG;AACrJ;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AAAG;AAAsC;AACvC;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAA4C;AAA2D;AACxG;AACA;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACA;AACF;AACA;AAGF;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGE;AAEF;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACF;AAAG;AAAgB;AACjB;AACF;AAAG;AACD;AACA;AACA;AACA;AAEO;AAGP;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AAGA;AACF;AACA;AACA;AACF;AAAG;AAAuB;AAC1B;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACA;AAGE;AAEF;AACF;AACF;AACA;AACE;AACA;AACE;AACF;AACA;AACE;AACF;AAEA;AACA;AACA;AACF;AACA;AAEE;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AAA0C;AAAoB;AAAqC;AACnG;AAEI;AACE;AACE;AACF;AACF;AACE;AACF;AACF;AAEF;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACF;AACF;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AACA;AACF;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACuF;AAAiB;AACpG;AACF;AAAC;AAKD;AACF;AAGA;AACE;AAGA;AACF;;;;;;AC54BA;AAMA;AACE;AAEA;AACE;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAClE;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAC9D;AACA;AACE;AACA;AACF;AACE;AACF;AACF;;;AC1BA;AAWA;AACE;AACA;AACA;AACA;AACA;AACA;AAMA;AAIE;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACA;AAQA;AAIA;AACF;AAEA;AACE;AAGA;AACA;AACA;AACA;AAIA;AACE;AACA;AACA;AACA;AACA;AACE;AAMF;AACE;AACA;AACA;AAGA;AACA;AACF;AACF;AACF;AAIA;AACE;AACA;AAIA;AACF;AAEA;AACE;AAEA;AACA;AAGF;AAOA;AACE;AASA;AACA;AACF;AACF;;;AC9IA;AACA;AAYA;AACE;AAIA;AACF","file":"engine_bundle.js"};
+;(self.__SOURCEMAPS=self.__SOURCEMAPS||{})['engine_bundle.js']={"version":3,"sources":["../../src/base/assert.ts","ui/tsc/gen/trace_processor_memory64.js","ui/tsc/gen/trace_processor.js","../../src/trace_processor/wasm_modules.ts","../../src/engine/wasm_bridge.ts","../../src/engine/index.ts"],"mappings":";;;;;;;;;;;;;;;;;;;;;;;;;;;AA+BA;AACE;AAGF;AAiBA;AACE;AAGA;AACF;;;;ACpDA;AACE;AAEF;AACE;AACE;AACA;AAGA;AACA;AACF;AACA;AACA;AAGA;AAC6F;AAAiE;AAAuE;AAA0D;AAE/R;AACE;AACA;AAGA;AAGA;AACA;AAGA;AACA;AAGF;AACF;AACA;AACA;AACA;AACA;AACE;AACE;AACE;AACF;AAEA;AAGA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACF;AACF;AAGF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACA;AACA;AACE;AAAoH;AAAiB;AACnI;AACF;AAAC;AACH;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AAAkH;AAAiB;AACjI;AACA;AACA;AACF;AAAC;AACH;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AAEI;AACA;AACF;AAGF;AAGE;AAGE;AAGJ;AACF;AACA;AACE;AACE;AACA;AACF;AACE;AACF;AACF;AACA;AACE;AACA;AAEI;AACA;AACF;AACE;AACF;AAEF;AACF;AACA;AACE;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AAGF;AACE;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AAGA;AAGA;AACE;AACA;AACE;AACA;AAEO;AACL;AACA;AACA;AACF;AACF;AAGF;AACA;AACF;AACE;AACA;AACF;AAA0L;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AAAuC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AACzU;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACE;AAGA;AACA;AACF;AACE;AAGA;AACA;AACA;AACF;AACE;AAGA;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACF;AAGA;AACF;AACE;AACE;AACA;AACF;AACA;AACF;AACE;AACA;AAGA;AAEO;AAGP;AACF;AACE;AAGF;AACA;AACE;AACA;AACE;AACA;AAGA;AACA;AAEO;AAEA;AAGL;AAEF;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACF;AACA;AACE;AACE;AAAc;AAAiB;AAAoB;AAAU;AAAS;AAAuB;AAA2E;AAAoC;AAC5M;AAGA;AACA;AAGA;AACF;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAA0B;AAAM;AAAI;AAAE;AACpC;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AAAc;AAA8B;AAC1C;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAC;AACD;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACE;AACA;AACF;AACF;AACE;AACA;AACA;AAAQ;AAA2B;AAAoB;AAAkB;AAC3E;AAAuB;AAAO;AAAO;AAAO;AAAO;AAAO;AAAK;AAC7D;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAKA;AACA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACA;AAEI;AACA;AACA;AACA;AACA;AACA;AACF;AAEJ;AACA;AAGA;AAGS;AACL;AACE;AACA;AACF;AACE;AAGA;AACF;AACA;AACF;AAEF;AACE;AACF;AACE;AAGA;AACA;AAAmJ;AAAG;AAAI;AAAyG;AAA0L;AAE7b;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAC0D;AACxD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAAwD;AACzD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACA;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AAGA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AAAsI;AAAK;AAAK;AAAK;AAAG;AACxJ;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AAAG;AAAsC;AACvC;AACA;AACF;AAAG;AACD;AACA;AACA;AACF;AAAG;AAAmD;AAA4C;AAA2D;AAC3J;AACA;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACA;AACF;AACA;AAGF;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGE;AAEF;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACF;AAAG;AAAgB;AACjB;AACF;AAAG;AACD;AACA;AACA;AACA;AAEO;AAGP;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AAGA;AACF;AACA;AACA;AACF;AAAG;AAAuB;AAC1B;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACA;AAGE;AAEF;AACF;AACF;AACA;AACE;AACA;AACE;AACF;AACA;AACE;AACF;AAEA;AACA;AACA;AACF;AACA;AAEE;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AAA0C;AAAoB;AAAqC;AACnG;AAEI;AACE;AACE;AACF;AACF;AACE;AACF;AACF;AAEF;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACF;AACF;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AACA;AACF;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACuF;AAAiB;AACpG;AACF;AAAC;AAKD;AACF;AAGA;AACE;AAGA;AACF;;;;;AC17BA;AACE;AAEF;AACE;AACE;AACA;AAGA;AACA;AACF;AACA;AACA;AAGA;AAC6F;AAAiE;AAAuE;AAA0D;AAE/R;AACE;AACA;AAGA;AACA;AAGA;AACA;AAGF;AACF;AACA;AACA;AACA;AACA;AACE;AACE;AACE;AACF;AAEA;AAGA;AACE;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACA;AACA;AAGA;AACF;AACF;AAGF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACA;AACA;AACE;AAAoH;AAAiB;AACnI;AACF;AAAC;AACH;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACE;AAAkH;AAAiB;AACjI;AACA;AACA;AACF;AAAC;AACH;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACE;AAEI;AACA;AACF;AAGF;AAGE;AAGE;AAGJ;AACF;AACA;AACE;AACE;AACA;AACF;AACE;AACF;AACF;AACA;AACE;AACA;AAEI;AACA;AACF;AACE;AACF;AAEF;AACF;AACA;AACE;AACA;AACE;AACA;AACF;AACF;AACA;AACE;AAGF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AACF;AACE;AACA;AACA;AAGA;AAGA;AACE;AACA;AACE;AACA;AAEO;AACL;AACA;AACA;AACF;AACF;AAGF;AACA;AACF;AACE;AACA;AACF;AAAoC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AAAuC;AAAG;AAAI;AAAI;AAAI;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAK;AAAG;AACnL;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACE;AAGA;AACF;AACE;AAGA;AACA;AACF;AACE;AAGA;AACA;AACA;AACF;AACE;AAGA;AACA;AACA;AACA;AACA;AACA;AACF;AACF;AACA;AACA;AACF;AAGA;AACF;AACE;AACE;AACA;AACF;AACA;AACF;AACE;AACA;AAGA;AAEO;AAGP;AACF;AACE;AAGF;AACA;AACE;AACA;AAGA;AACA;AAEO;AAEA;AAGL;AAEF;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACE;AACE;AAAc;AAAiB;AAAoB;AAAU;AAAS;AAAuB;AAA2E;AAAoC;AAC5M;AAGA;AACA;AAGA;AACF;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACA;AACF;AAA0B;AAAM;AAAI;AAAE;AACpC;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AACA;AACA;AACF;AACE;AAAc;AACZ;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACF;AAAC;AACD;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACE;AACA;AACF;AACF;AACE;AACA;AACA;AAAQ;AAA2B;AAAoB;AAAkB;AAC3E;AAAuB;AAAO;AAAO;AAAO;AAAO;AAAO;AAAK;AAC7D;AACA;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACE;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAKA;AACA;AACA;AACA;AACA;AACE;AACA;AACE;AACA;AACA;AAEI;AACA;AACA;AACA;AACA;AACF;AAEJ;AACA;AAGA;AAGS;AACL;AACE;AACA;AACF;AACE;AAGA;AACF;AACA;AACF;AAEF;AACE;AACF;AACE;AAGA;AACA;AAAmJ;AAAG;AAAI;AAAyG;AAA0L;AAE7b;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AACA;AACE;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAC0D;AACxD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAAwD;AACzD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACA;AACD;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACF;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AAGA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AAAmI;AAAK;AAAK;AAAK;AAAG;AACrJ;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACF;AAAG;AAAsC;AACvC;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AAA4C;AAA2D;AACxG;AACA;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACE;AACF;AACA;AACF;AACA;AAGF;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACA;AACA;AAGE;AAEF;AAGA;AAGA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACF;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACA;AACA;AAGA;AACA;AACF;AAAG;AAAgB;AACjB;AACF;AAAG;AACD;AACA;AACA;AACA;AAEO;AAGP;AACA;AACA;AACA;AACA;AACF;AAAG;AACD;AACF;AAAG;AACD;AACF;AAAG;AACD;AACA;AACF;AAAG;AACD;AACA;AACA;AACA;AACE;AACA;AACA;AAGA;AACF;AACA;AACA;AACF;AAAG;AAAuB;AAC1B;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AAGA;AACA;AACE;AACA;AACA;AACF;AACE;AACA;AAGE;AAEF;AACF;AACF;AACA;AACE;AACA;AACE;AACF;AACA;AACE;AACF;AAEA;AACA;AACA;AACF;AACA;AAEE;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACF;AACA;AAA0C;AAAoB;AAAqC;AACnG;AAEI;AACE;AACE;AACF;AACF;AACE;AACF;AACF;AAEF;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACE;AACE;AACA;AACA;AACA;AACE;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AACA;AAEI;AACA;AACF;AAEF;AACA;AACF;AACF;AACA;AACA;AACA;AAKA;AACA;AACA;AACE;AACA;AACF;AACA;AACF;AACA;AACE;AACA;AACF;AACA;AACuF;AAAiB;AACpG;AACF;AAAC;AAKD;AACF;AAGA;AACE;AAGA;AACF;;;;;;ACh5BA;AAMA;AACE;AAEA;AACE;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAClE;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAAM;AAC9D;AACA;AACE;AACA;AACF;AACE;AACF;AACF;;;AC3BA;AAYA;AACE;AACA;AAEA;AAEA;AACA;AACA;AACA;AAMA;AAIE;AACA;AACA;AAGA;AACE;AACA;AACA;AACA;AACA;AACE;AACA;AACA;AACF;AACF;AACA;AACA;AAKA;AACA;AAKA;AAIA;AACF;AAEA;AACE;AAGA;AACA;AACA;AACA;AAIA;AACE;AACA;AACA;AACA;AACA;AACE;AAGF;AACE;AACA;AACA;AAGA;AACA;AACF;AACF;AACF;AAIA;AACE;AACA;AAIA;AACF;AAEA;AACE;AAEA;AACA;AAGF;AAOA;AACE;AASA;AACA;AACF;AACF;;;ACjJA;AACA;AAYA;AACE;AAIA;AACF","file":"engine_bundle.js"};

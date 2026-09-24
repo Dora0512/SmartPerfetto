@@ -163,6 +163,12 @@ function makeTraceProcessorMock(tables: Record<string, number>) {
         durationMs: 1,
       };
     }
+    if (sql.includes("severity = 'data_loss'")) {
+      return {columns: ['name', 'idx', 'value', 'matching_rows'], rows: [], durationMs: 1};
+    }
+    if (sql.includes("name = 'trace_recovery_reason'")) {
+      return {columns: ['recovery_reason'], rows: [], durationMs: 1};
+    }
     throw new Error(`Unexpected bounded SQL in trace completeness test: ${sql}`);
   });
 
@@ -1025,6 +1031,133 @@ describe('probeTraceCompleteness', () => {
     } else {
       expect(dependencies.resolveTraceIdentity).not.toHaveBeenCalled();
     }
+  });
+
+  describe('data loss', () => {
+    function withBoundedResponses(
+      tps: any,
+      responses: {stats?: unknown; recovery?: unknown},
+    ): any {
+      const defaultQueryBounded = tps.queryBounded.getMockImplementation();
+      tps.queryBounded.mockImplementation(async (traceId: string, sql: string, options: any) => {
+        if (responses.stats !== undefined && sql.includes("severity = 'data_loss'")) {
+          if (responses.stats instanceof Error) throw responses.stats;
+          return responses.stats;
+        }
+        if (responses.recovery !== undefined && sql.includes("name = 'trace_recovery_reason'")) {
+          return responses.recovery;
+        }
+        return defaultQueryBounded!(traceId, sql, options);
+      });
+      return tps;
+    }
+    const STAT_COLUMNS = ['name', 'idx', 'value', 'matching_rows'];
+
+    it('reports a clean trace only when stats were read and show no loss', async () => {
+      const result = await probeWithManifestDependencies(
+        makeTraceProcessorMock(allCapabilityTables(3)), 'trace-1', readyDependencies());
+
+      expect(result.dataLoss).toEqual({status: 'none_detected'});
+    });
+
+    it('marks absence as not proof and keeps the bounded stats with their total', async () => {
+      const tps = withBoundedResponses(makeTraceProcessorMock(allCapabilityTables(3)), {
+        stats: {
+          columns: STAT_COLUMNS,
+          rows: [
+            ['long_trace_mode_bytes_overwritten', 0, 4096, 3],
+            ['ftrace_cpu_has_data_loss', 2, 1, 3],
+          ],
+          durationMs: 1,
+        },
+      });
+
+      const result = await probeWithManifestDependencies(tps, 'trace-1', readyDependencies());
+
+      expect(result.dataLoss).toEqual({
+        status: 'data_loss_detected',
+        absenceEvidence: 'not_proof',
+        lossStats: [
+          {name: 'long_trace_mode_bytes_overwritten', idx: 0, value: 4096},
+          {name: 'ftrace_cpu_has_data_loss', idx: 2, value: 1},
+        ],
+        lossStatRowCount: 3,
+      });
+      expect(tps.queryBounded).toHaveBeenCalledWith(
+        'trace-1',
+        expect.stringContaining('LIMIT 16'),
+        {...BOUNDED_OPTIONS, maxRows: 16, maxResponseBytes: 8192},
+      );
+      // Data loss qualifies evidence; it never moves a capability between buckets.
+      expect(legacySnapshot(result)).toEqual(expectedAllAvailableLegacy(result.diagnosedAt));
+    });
+
+    it('treats a recovered trace as lossy and sanitizes the trace-authored reason', async () => {
+      const tps = withBoundedResponses(makeTraceProcessorMock(allCapabilityTables(3)), {
+        recovery: {
+          columns: ['recovery_reason'],
+          rows: [[`  reboot\n${'x'.repeat(400)}`]],
+          durationMs: 1,
+        },
+      });
+
+      const result = await probeWithManifestDependencies(tps, 'trace-1', readyDependencies());
+
+      expect(result.dataLoss?.status).toBe('data_loss_detected');
+      expect(result.dataLoss?.absenceEvidence).toBe('not_proof');
+      expect(result.dataLoss?.lossStats).toBeUndefined();
+      expect(result.dataLoss?.recoveryReason).toMatch(/^reboot x+$/);
+      expect(result.dataLoss?.recoveryReason).toHaveLength(200);
+    });
+
+    it.each([
+      ['query failure', new Error('rpc down')],
+      ['RPC error', {columns: STAT_COLUMNS, rows: [], durationMs: 1, error: 'no such table: stats'}],
+      ['unexpected columns', {columns: ['name', 'value'], rows: [], durationMs: 1}],
+      ['non-positive value', {columns: STAT_COLUMNS, rows: [['traced_buf_patches_failed', 0, 0, 1]], durationMs: 1}],
+      ['unsafe stat name', {columns: STAT_COLUMNS, rows: [['DROP TABLE', null, 1, 1]], durationMs: 1}],
+    ])('reports unknown rather than clean on %s', async (_label, stats) => {
+      const tps = withBoundedResponses(makeTraceProcessorMock(allCapabilityTables(3)), {stats});
+
+      const result = await probeWithManifestDependencies(tps, 'trace-1', readyDependencies());
+
+      expect(result.dataLoss).toEqual({status: 'unknown'});
+    });
+
+    it('keeps a recovered trace lossy when its stats cannot be read', async () => {
+      const tps = withBoundedResponses(makeTraceProcessorMock(allCapabilityTables(3)), {
+        stats: new Error('rpc down'),
+        recovery: {columns: ['recovery_reason'], rows: [['device_reboot']], durationMs: 1},
+      });
+
+      const result = await probeWithManifestDependencies(tps, 'trace-1', readyDependencies());
+
+      expect(result.dataLoss).toEqual({
+        status: 'data_loss_detected',
+        absenceEvidence: 'not_proof',
+        recoveryReason: 'device_reboot',
+      });
+    });
+
+    it('hands each production cache hit its own copy of the loss stats', async () => {
+      const {tps} = await makeProductionCacheFixture();
+      withBoundedResponses(tps, {
+        stats: {
+          columns: STAT_COLUMNS,
+          rows: [['traced_buf_patches_failed', 1, 7, 1]],
+          durationMs: 1,
+        },
+      });
+
+      const first = await probeTraceCompleteness(tps, 'trace-1', 'STANDARD');
+      first.dataLoss!.lossStats![0].value = 0;
+      const second = await probeTraceCompleteness(tps, 'trace-1', 'STANDARD');
+
+      expect(schemaProbeCount(tps)).toBe(1);
+      expect(second.dataLoss?.lossStats).toEqual([
+        {name: 'traced_buf_patches_failed', idx: 1, value: 7},
+      ]);
+    });
   });
 
   it('uses production defaults for an existing three-argument invocation', async () => {

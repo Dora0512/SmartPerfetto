@@ -7,6 +7,8 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import Database from 'better-sqlite3';
 import {describe, it, expect} from '@jest/globals';
+import {completeAndroidInputEventsFixture} from '../../../../tests/helpers/androidInputEventsFixture';
+import {withStepFragments} from '../../../../tests/helpers/skillFragmentSql';
 
 // Execute maintained SQL fragments in the legacy named fixtures as well.
 function createScopedSqlFixture(): Database.Database {
@@ -70,7 +72,7 @@ describe('scrolling_analysis skill schema', () => {
   };
 
   const renderScrollingSql = (stepId: string, packageName = 'com.example.app') =>
-    String(getStep(stepId).sql)
+    withStepFragments(String(getStep(stepId).sql), getStep(stepId).sql_fragments)
       .split('${package}').join(packageName)
       .split('${start_ts}').join('NULL')
       .split('${end_ts}').join('NULL')
@@ -692,6 +694,7 @@ describe('scrolling_analysis skill schema', () => {
       `);
 
       db.exec("ALTER TABLE android_input_events ADD COLUMN upid INTEGER; UPDATE android_input_events SET upid = CASE process_name WHEN 'com.example.app' THEN 1 WHEN 'com.example.app:remote' THEN 2 ELSE 3 END");
+      completeAndroidInputEventsFixture(db);
       const row = db.prepare(renderScrollingSql('input_data_check')).get() as {
         total_input_events: number;
         target_processes: number;
@@ -741,6 +744,7 @@ describe('scrolling_analysis skill schema', () => {
       }
 
       db.exec("ALTER TABLE android_input_events ADD COLUMN upid INTEGER; UPDATE android_input_events SET upid = CASE process_name WHEN 'com.example.app' THEN 1 WHEN 'com.example.app:remote' THEN 2 ELSE 3 END");
+      completeAndroidInputEventsFixture(db);
       const row = db.prepare(renderScrollingSql('input_latency_summary')).get() as {
         target_process: string;
         total_input_events: number;
@@ -2007,10 +2011,13 @@ describe('scrolling_analysis skill schema', () => {
 
 describe('scrolling exact UPID SQL semantics', () => {
   const source = yaml.load(fs.readFileSync(path.join(process.cwd(), 'skills/composite/scrolling_analysis.skill.yaml'), 'utf8')) as any;
-  const render = (stepId: string, upid: number) => String(source.steps.find((step: any) => step.id === stepId).sql)
-    .split('${__process_scope.upid}').join(String(upid))
-    .split('${package}').join('com.example.app')
-    .split('${start_ts}').join('NULL').split('${end_ts}').join('NULL');
+  const render = (stepId: string, upid: number) => {
+    const step = source.steps.find((item: any) => item.id === stepId);
+    return withStepFragments(String(step.sql), step.sql_fragments)
+      .split('${__process_scope.upid}').join(String(upid))
+      .split('${package}').join('com.example.app')
+      .split('${start_ts}').join('NULL').split('${end_ts}').join('NULL');
+  };
 
   it('does not count same-name restarts, children or similar prefixes as exact input events', () => {
     const db = new Database(':memory:');
@@ -2022,6 +2029,7 @@ describe('scrolling exact UPID SQL semantics', () => {
           (43,'com.example.app',100,10,90,'MOVE',1),
           (44,'com.example.app:child',100,10,90,'MOVE',1),
           (45,'com.example.application',100,10,90,'MOVE',1);`);
+      completeAndroidInputEventsFixture(db);
       expect(db.prepare(render('input_data_check', 42)).get()).toMatchObject({ total_input_events: 1, target_processes: 1 });
     } finally { db.close(); }
   });

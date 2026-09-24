@@ -50,7 +50,7 @@
     "generator_version": 1,
     "seed": "scheduler-cpu-contention-v1",
     "output": "Trace/.generated/constructed/scheduler-cpu-contention/trace.pftrace",
-    "runtime_revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897"
+    "runtime_revision": "99234d73fe356bf7edf6b2cb7afcf2a9eefc5368"
   },
   "coverage": {
     "skills": [
@@ -239,6 +239,8 @@
         "required_columns": [
           "cluster",
           "core_count",
+          "active_core_count",
+          "awake_ms",
           "running_ms",
           "total_capacity_ms",
           "load_pct",

@@ -1247,10 +1247,11 @@ steps:
     process_scope:
       role: target
       binding: native_upid
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH scoped_events AS (
         SELECT *
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE (${__process_scope.upid} IS NULL OR upid = ${__process_scope.upid})
           AND (
           ${__process_scope.upid} IS NOT NULL OR '${package}' = ''
@@ -1356,6 +1357,7 @@ steps:
       binding: native_upid
       context_fields:
         global_context: [frame_budget_ms]
+    sql_fragments: [fragments/android_input_events_normalized.sql]
     sql: |
       WITH
       vsync_intervals AS (
@@ -1387,7 +1389,7 @@ steps:
       ),
       scoped_events AS (
         SELECT *
-        FROM android_input_events
+        FROM android_input_events_normalized
         WHERE (${__process_scope.upid} IS NULL OR upid = ${__process_scope.upid})
           AND (
           ${__process_scope.upid} IS NOT NULL OR '${package}' = ''
@@ -2753,6 +2755,7 @@ steps:
     name: "掉帧列表（含根因分类）"
     optional: true
     sql_fragments:
+      - fragments/android_input_events_normalized.sql
       - fragments/system_cpu_frequency_spans.sql
       - fragments/system_sched_spans.sql
       - fragments/system_thread_state_spans.sql
@@ -3898,7 +3901,7 @@ steps:
           ROUND(MAX(ie.end_to_end_latency_dur) / 1e6, 2) as input_e2e_ms,
           SUM(CASE WHEN ie.is_speculative_frame = 1 THEN 1 ELSE 0 END) as input_speculative_events
         FROM jank_frame_list fl
-        JOIN android_input_events ie ON ie.upid = fl.upid
+        JOIN android_input_events_normalized ie ON ie.upid = fl.upid
           AND fl.timeline_frame_id IS NOT NULL
           AND ie.frame_id = fl.timeline_frame_id
         GROUP BY fl.frame_key, fl.frame_start
@@ -3983,7 +3986,7 @@ steps:
             printf('%d', ie.dispatch_ts) as input_ts,
             ROW_NUMBER() OVER (PARTITION BY fl.frame_key ORDER BY ie.handling_latency_dur DESC) as rn
           FROM jank_frame_list fl
-          JOIN android_input_events ie ON ie.upid = fl.upid
+          JOIN android_input_events_normalized ie ON ie.upid = fl.upid
             AND fl.timeline_frame_id IS NOT NULL
             AND ie.frame_id = fl.timeline_frame_id
         )
