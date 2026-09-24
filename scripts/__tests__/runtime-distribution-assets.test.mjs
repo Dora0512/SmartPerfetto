@@ -527,6 +527,8 @@ function loadNpmPublishWorkflow() {
 
 // Runs one registry step of npm-publish.yml with `npm view` replaying the
 // queued responses in order (repeating the last) and `sleep` only recording.
+// Both are shell functions defined ahead of the step, so no PATH lookup can
+// reach the real npm, the public registry, or a real sleep.
 function runRegistryStep(jobName, findStep, responses) {
   const workflow = loadNpmPublishWorkflow();
   const job = workflow.jobs[jobName];
@@ -535,32 +537,26 @@ function runRegistryStep(jobName, findStep, responses) {
 
   const dir = mkdtempSync(join(tmpdir(), 'npm-registry-step-'));
   try {
-    const bin = join(dir, 'bin');
     const replies = join(dir, 'replies');
-    mkdirSync(bin);
     mkdirSync(replies);
     responses.forEach(({status, stdout = '', stderr = ''}, index) => {
       writeFileSync(join(replies, `${index}.out`), stdout);
       writeFileSync(join(replies, `${index}.err`), stderr);
       writeFileSync(join(replies, `${index}.status`), String(status));
     });
-    writeFileSync(
-      join(bin, 'npm'),
-      `#!/bin/sh
-n=$(cat "${dir}/count" 2>/dev/null || echo 0)
-echo $((n + 1)) > "${dir}/count"
-echo "$*" >> "${dir}/argv.log"
-[ "$n" -lt ${responses.length} ] || n=${responses.length - 1}
-cat "${replies}/$n.out"
-cat "${replies}/$n.err" >&2
-exit "$(cat "${replies}/$n.status")"
-`,
-      {mode: 0o755},
-    );
-    writeFileSync(join(bin, 'sleep'), `#!/bin/sh\necho "$1" >> "${dir}/sleep.log"\n`, {
-      mode: 0o755,
-    });
-    writeFileSync(join(dir, 'step.sh'), step.run);
+    const fakes = `npm() {
+  local n
+  n=$(cat "${dir}/count" 2>/dev/null || echo 0)
+  echo $((n + 1)) > "${dir}/count"
+  echo "$*" >> "${dir}/argv.log"
+  [ "$n" -lt ${responses.length} ] || n=${responses.length - 1}
+  cat "${replies}/$n.out"
+  cat "${replies}/$n.err" >&2
+  return "$(cat "${replies}/$n.status")"
+}
+sleep() { echo "$1" >> "${dir}/sleep.log"; }
+`;
+    writeFileSync(join(dir, 'step.sh'), fakes + step.run);
     writeFileSync(join(dir, 'github-output'), '');
     // GitHub runs a `run:` block without an explicit shell as `bash -e {0}`.
     const result = spawnSync('bash', ['-e', join(dir, 'step.sh')], {
@@ -571,7 +567,7 @@ exit "$(cat "${replies}/$n.status")"
         GITHUB_OUTPUT: join(dir, 'github-output'),
         GITHUB_RUN_ID: '4242',
         PACKAGE_INTEGRITY: WAIT_INTEGRITY,
-        PATH: `${bin}:${process.env.PATH}`,
+        PATH: process.env.PATH,
         RUNNER_TEMP: dir,
         VERSION: '9.9.9',
       },
@@ -601,6 +597,10 @@ const runPublishPrecheck = (responses) => runRegistryStep(
   responses,
 );
 
+// The registry steps run on ubuntu-24.04 only; Windows may resolve `bash` to WSL.
+const REGISTRY_STEP_TEST = {
+  skip: process.platform === 'win32' && 'npm-publish.yml runs these steps on Linux',
+};
 const WAIT_INTEGRITY = 'sha512-expected==';
 const E404 = {
   status: 1,
@@ -613,7 +613,7 @@ const MATCHING_OUTPUTS = [
 ];
 const UNRECOGNISED_OUTPUTS = ['{}\n', '[]\n', '["a","b"]\n', ''];
 
-test('npm registry wait backs off until the matching integrity appears', () => {
+test('npm registry wait backs off until the matching integrity appears', REGISTRY_STEP_TEST, () => {
   const result = runRegistryWait([
     E404,
     E404,
@@ -628,7 +628,7 @@ test('npm registry wait backs off until the matching integrity appears', () => {
   assert.match(result.stderr, /ECONNRESET/);
 });
 
-test('npm registry reads accept npm 11 and npm 12 integrity output', () => {
+test('npm registry reads accept npm 11 and npm 12 integrity output', REGISTRY_STEP_TEST, () => {
   for (const stdout of MATCHING_OUTPUTS) {
     const wait = runRegistryWait([{status: 0, stdout}]);
     assert.equal(wait.status, 0, wait.stderr);
@@ -639,7 +639,7 @@ test('npm registry reads accept npm 11 and npm 12 integrity output', () => {
   }
 });
 
-test('npm registry reads fail on a different published integrity', () => {
+test('npm registry reads fail on a different published integrity', REGISTRY_STEP_TEST, () => {
   for (const stdout of ['"sha512-other=="\n', '["sha512-other=="]\n']) {
     const wait = runRegistryWait([E404, {status: 0, stdout}]);
     assert.equal(wait.status, 1);
@@ -653,7 +653,7 @@ test('npm registry reads fail on a different published integrity', () => {
   }
 });
 
-test('npm registry reads fail closed on unrecognised npm view output', () => {
+test('npm registry reads fail closed on unrecognised npm view output', REGISTRY_STEP_TEST, () => {
   for (const stdout of UNRECOGNISED_OUTPUTS) {
     const wait = runRegistryWait([{status: 0, stdout}]);
     assert.equal(wait.status, 1, `wait accepted ${JSON.stringify(stdout)}`);
@@ -664,7 +664,7 @@ test('npm registry reads fail closed on unrecognised npm view output', () => {
   }
 });
 
-test('npm publish pre-check publishes only an unknown version', () => {
+test('npm publish pre-check publishes only an unknown version', REGISTRY_STEP_TEST, () => {
   const missing = runPublishPrecheck([E404]);
   assert.equal(missing.status, 0, missing.stderr);
   assert.deepEqual(missing.githubOutput, ['already_published=false']);
@@ -675,7 +675,7 @@ test('npm publish pre-check publishes only an unknown version', () => {
   assert.match(broken.stderr, /E403/);
 });
 
-test('npm registry wait is bounded by its sleep budget', () => {
+test('npm registry wait is bounded by its sleep budget', REGISTRY_STEP_TEST, () => {
   const result = runRegistryWait([E404]);
   const budget = Number(loadNpmPublishWorkflow().jobs.propagation.env.REGISTRY_WAIT_SECONDS);
   assert.equal(result.status, 1);

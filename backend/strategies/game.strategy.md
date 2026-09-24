@@ -108,7 +108,7 @@ plan_template:
 
 **Phase 1 — 游戏帧率分析（1 次调用）：**
 ```
-invoke_skill("game_fps_analysis", { process_name: "<游戏进程名>" })
+invoke_skill("game_fps_analysis", { package: "<游戏包名>" })
 ```
 返回：帧率统计、帧间隔分布、卡顿帧列表。
 

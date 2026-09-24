@@ -346,21 +346,28 @@ function extractFromJoinTables(maskedSql: string): string[] {
   return tables;
 }
 
+/**
+ * Lower-cased names read in FROM/JOIN position that the query does not define
+ * itself (CTEs, CREATE statements); subqueries and table functions are skipped.
+ */
+export function extractExternalTableReferences(sql: string): string[] {
+  const masked = maskCommentsAndStrings(sql);
+  const local = localSqlSymbolsFromMasked(masked);
+  return [...new Set(extractFromJoinTables(masked))].filter(table => !local.has(table));
+}
+
 export function extractLocalSqlSymbols(sql: string): string[] {
-  const maskedSql = maskCommentsAndStrings(sql);
-  const local = new Set<string>();
+  return [...localSqlSymbolsFromMasked(maskCommentsAndStrings(sql))].sort();
+}
 
-  for (const symbol of extractPersistentLocalSqlSymbolsFromMasked(maskedSql)) {
-    local.add(symbol);
+function localSqlSymbolsFromMasked(maskedSql: string): Set<string> {
+  const local = new Set(extractPersistentLocalSqlSymbolsFromMasked(maskedSql));
+  for (const regex of [WITH_FIRST_LOCAL_REGEX, WITH_CHAIN_LOCAL_REGEX]) {
+    for (const match of maskedSql.matchAll(regex)) {
+      local.add(unquoteIdentifier(match[1]).toLowerCase());
+    }
   }
-  for (const match of maskedSql.matchAll(WITH_FIRST_LOCAL_REGEX)) {
-    local.add(unquoteIdentifier(match[1]).toLowerCase());
-  }
-  for (const match of maskedSql.matchAll(WITH_CHAIN_LOCAL_REGEX)) {
-    local.add(unquoteIdentifier(match[1]).toLowerCase());
-  }
-
-  return [...local].sort();
+  return local;
 }
 
 function extractPersistentLocalSqlSymbols(sql: string): string[] {

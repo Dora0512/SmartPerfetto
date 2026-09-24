@@ -336,7 +336,6 @@ describe('adaptive routing persistence seams', () => {
     });
     expect(without.mode).not.toHaveProperty('adaptiveRouting');
 
-    const receipt = direct();
     const withRouting = createAnalysisRunSpec({
       query: 'fact',
       sessionId: 'session-routing',
@@ -346,10 +345,16 @@ describe('adaptive routing persistence seams', () => {
       sceneType: 'general',
       outputLanguage: 'en',
       resolvedMode: 'quick',
-      adaptiveRouting: receipt,
+      turnIntent: {
+        schemaVersion: 1, status: 'resolved', source: 'semantic', taskKind: 'fact',
+        sceneId: 'general', scope: 'bounded_question', recommendedComplexity: 'quick',
+        deliverable: 'answer', evidenceAccess: 'read_new', registryFingerprint: 'r'.repeat(64),
+      },
     });
-    expect(withRouting.mode.adaptiveRouting).toEqual(receipt);
-    expect(recordAdaptiveRouting).toHaveBeenCalledWith(receipt);
+    expect(withRouting.mode.adaptiveRouting).toMatchObject({
+      stage: 'preflight', requestedMode: 'auto', resolvedMode: 'quick', classifierSource: 'ai',
+    });
+    expect(recordAdaptiveRouting).toHaveBeenCalledWith(withRouting.mode.adaptiveRouting);
   });
 
   it('projects routing into quick and final analysis receipts', () => {

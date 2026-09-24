@@ -7,7 +7,7 @@ import type {AnalysisOptions} from '../agent/core/orchestratorTypes';
 import type {DataEnvelope} from '../types/dataContract';
 import type {AdaptiveRoutingReceiptV1} from '../types/adaptiveRouting';
 import type {RunManifestBuilder} from '../services/selfEvolution/runManifestBuilder';
-import type {RuntimeQuickModeResolution} from './quickModeResolution';
+import type {AnalysisTurnIntent} from './analysisTurnIntent';
 import {
   routeAdaptiveEvidencePostEvidence,
   routeAdaptiveEvidencePreflight,
@@ -52,51 +52,33 @@ function privateContext(options: AnalysisOptions): boolean {
   return codeAware || (options.knowledgeSourceIds?.length ?? 0) > 0;
 }
 
-export function buildAdaptiveRoutingForModeDecision(input: {
+/**
+ * The shadow preflight receipt for a run, from the same typed intent and
+ * resolved budget mode the runtime acts on. Recorded for every run so that
+ * post-evidence routing and admission measurement have a starting point; it
+ * never changes the mode.
+ */
+export function buildAdaptiveRoutingForTurnIntent(input: {
   options: AnalysisOptions;
   resolvedMode: 'quick' | 'full';
-  classifierSource: AdaptiveRoutingReceiptV1['classifierSource'];
-  quickAcknowledgementDirectAnswer: boolean;
-  directEvidenceAvailable: boolean;
-  outputCap?: number;
+  turnIntent: AnalysisTurnIntent;
 }): AdaptiveRoutingReceiptV1 {
+  const requestedMode = input.options.analysisMode ?? 'auto';
+  const classifierSource: AdaptiveRoutingReceiptV1['classifierSource'] =
+    requestedMode !== 'auto'
+      ? 'user_explicit'
+      : input.turnIntent.source === 'semantic'
+        ? 'ai'
+        : input.turnIntent.source === 'product' ? 'hard_rule' : 'runtime';
   return buildAdaptiveRoutingPreflight({
-    requestedMode: input.options.analysisMode ?? 'auto',
+    requestedMode,
     resolvedMode: input.resolvedMode,
-    classifierSource: input.classifierSource,
-    quickAcknowledgementDirectAnswer:
-      input.quickAcknowledgementDirectAnswer,
-    directEvidenceAvailable: input.directEvidenceAvailable,
+    classifierSource,
+    quickAcknowledgementDirectAnswer: input.turnIntent.taskKind === 'acknowledgement',
+    // No runtime answers from pre-collected evidence without a model turn.
+    directEvidenceAvailable: false,
     hasReferenceTrace: Boolean(input.options.referenceTraceId),
     privateContext: privateContext(input.options),
-    ...(input.outputCap === undefined ? {} : {outputCap: input.outputCap}),
-  });
-}
-
-export function buildAdaptiveRoutingForQuickResolution(input: {
-  options: AnalysisOptions;
-  resolution: RuntimeQuickModeResolution;
-  outputCap?: number;
-}): AdaptiveRoutingReceiptV1 {
-  const source: AdaptiveRoutingReceiptV1['classifierSource'] =
-    input.resolution.requestedMode !== 'auto'
-      ? 'user_explicit'
-      : input.resolution.localReason
-        ? 'hard_rule'
-        : 'runtime';
-  return buildAdaptiveRoutingForModeDecision({
-    options: input.options,
-    resolvedMode: input.resolution.quickMode ? 'quick' : 'full',
-    classifierSource: source,
-    quickAcknowledgementDirectAnswer:
-      input.resolution.quickAcknowledgementDirectAnswer,
-    directEvidenceAvailable: Boolean(
-      input.resolution.quickFocusAppPreEvidence
-      || input.resolution.quickProcessIdentityPreEvidence
-      || input.resolution.quickTraceFactPreEvidence
-      || input.resolution.quickScrollingTriagePreEvidence,
-    ),
-    ...(input.outputCap === undefined ? {} : {outputCap: input.outputCap}),
   });
 }
 

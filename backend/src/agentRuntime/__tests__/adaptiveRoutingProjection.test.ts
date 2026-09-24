@@ -12,6 +12,7 @@ import {
   buildAdaptiveRoutingPreflight,
   recordAdaptiveRoutingPostEvidenceBestEffort,
 } from '../adaptiveRoutingProjection';
+import type {AnalysisTurnIntent} from '../analysisTurnIntent';
 import type {RuntimeSelection} from '../runtimeSelection';
 import {buildQuickDirectAcknowledgementAnalysisResult} from '../quickDirectResult';
 import {resolveQuickTurnBudget} from '../quickBudget';
@@ -249,6 +250,76 @@ describe('adaptive routing runtime projection', () => {
     expect(recordRuntime).toHaveBeenLastCalledWith(expect.objectContaining({
       model: 'runtime-acknowledgement',
     }));
+  });
+
+  it('records a shadow preflight receipt from the typed intent of every run', () => {
+    const intent = (overrides: Partial<AnalysisTurnIntent> = {}): AnalysisTurnIntent => ({
+      schemaVersion: 1,
+      status: 'resolved',
+      source: 'semantic',
+      taskKind: 'investigation',
+      sceneId: 'general',
+      scope: 'bounded_question',
+      recommendedComplexity: 'quick',
+      deliverable: 'answer',
+      evidenceAccess: 'read_new',
+      registryFingerprint: 'r'.repeat(64),
+      ...overrides,
+    });
+    const run = (
+      analysisMode: 'auto' | 'fast' | 'full',
+      resolvedMode: 'quick' | 'full',
+      turnIntent: AnalysisTurnIntent,
+    ) => {
+      const builder = new RunManifestBuilder({
+        runId: `run-${analysisMode}-${turnIntent.source}`,
+        sessionId: 'session-a',
+        scope: {tenantId: 'local', workspaceId: 'local'},
+        runtime: 'openai-agents-sdk',
+        providerId: null,
+        outputLanguage: 'en',
+        analysisMode,
+        resolvedMode,
+      });
+      createAnalysisRunSpec({
+        query: 'Why is it slow?',
+        sessionId: 'session-a',
+        traceId: 'trace-a',
+        options: {analysisMode, runManifestAttributionSink: builder as unknown as RunManifestAttributionSink},
+        runtimeSelection: selection,
+        sceneType: 'general',
+        outputLanguage: 'en',
+        resolvedMode,
+        turnIntent,
+      });
+      return builder;
+    };
+
+    const semantic = run('auto', 'quick', intent());
+    expect(semantic.currentAdaptiveRouting).toMatchObject({
+      stage: 'preflight',
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      classifierSource: 'ai',
+      reasons: ['quick_semantic_explanation'],
+      shadow: true,
+    });
+    // Post-evidence recording needs this receipt; without it every run was a no-op.
+    expect(recordAdaptiveRoutingPostEvidenceBestEffort({
+      builder: semantic, result: result(), dataEnvelopes: [],
+    })).toBe(true);
+    expect(semantic.currentAdaptiveRouting?.stage).toBe('post_evidence');
+
+    expect(run('full', 'full', intent()).currentAdaptiveRouting).toMatchObject({
+      classifierSource: 'user_explicit',
+      obligations: ['complete_report'],
+    });
+    expect(run('auto', 'full', intent({source: 'product', recommendedComplexity: 'full', scope: 'scene_wide'}))
+      .currentAdaptiveRouting?.classifierSource).toBe('hard_rule');
+    expect(run('auto', 'quick', intent({status: 'unavailable', source: 'fallback'}))
+      .currentAdaptiveRouting?.classifierSource).toBe('runtime');
+    expect(run('auto', 'quick', intent({taskKind: 'acknowledgement', evidenceAccess: 'existing_only'}))
+      .currentAdaptiveRouting?.reasons).toEqual(['acknowledgement']);
   });
 
   it('keeps best-effort post routing failures from blocking manifest sealing', () => {

@@ -32,7 +32,7 @@ export const TRIGGERS = Object.freeze([
   'backend/src/types/identityContract.ts',
   'backend/src/types/perfettoSql.ts',
   'backend/src/types/multiTraceComparison.ts',
-  'backend/src/data/perfettoSchema.ts',
+  'backend/src/services/sqlValidator.ts',
   'backend/data/perfettoStdlibSymbols.json',
   'backend/data/perfettoSqlDocs.json',
   'perfetto',

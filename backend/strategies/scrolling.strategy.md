@@ -322,10 +322,10 @@ plan_template:
 
 **Phase 1 — 概览 + 掉帧列表 + 批量根因分类（1 次调用）：**
 
-如果 `process_name` 来自自动焦点检测、或用户/trace 证据提示进程名与包名/线程名/layer 不一致，先执行 **Phase 1.6 进程身份交叉确认**，再调用本阶段的 `scrolling_analysis`。
+如果目标包名（下面的 `package`）来自自动焦点检测、或用户/trace 证据提示进程名与包名/线程名/layer 不一致，先执行 **Phase 1.6 进程身份交叉确认**，再调用本阶段的 `scrolling_analysis`。
 
 ```
-invoke_skill("scrolling_analysis", { start_ts: "<trace_start>", end_ts: "<trace_end>", process_name: "<resolver.recommended_process_name_param 或用户明确指定的包名>" })
+invoke_skill("scrolling_analysis", { start_ts: "<trace_start>", end_ts: "<trace_end>", package: "<resolver.recommended_process_name_param 或用户明确指定的包名>" })
 ```
 - 建议传入 start_ts 和 end_ts 以获得更精确的结果
 - 如果不知道 trace 时间范围，先用 SQL 查询：
@@ -587,7 +587,7 @@ invoke_skill("jank_frame_detail", {
   end_ts: "<帧的end_ts>",
   jank_type: "<帧的jank_type>",
   jank_responsibility: "<帧的jank_responsibility>",
-  process_name: "<包名>"
+  package: "<包名>"
 })
 ```
 
@@ -750,7 +750,7 @@ LIMIT 20
 - `frame_timeline_unattributed` 直接报告 FrameTimeline 的 Unknown Jank 与当前证据边界；不能写成噪声、假帧或不可感知，也不因占比高自动追加逐帧工具。
 - `APP` / `HIDDEN` / `UNKNOWN` 只有在用户要求底层原因、trace 具备相应线程证据且当前 SQL 未能解释时，才选 1 个最严重代表帧调用：
 ```
-invoke_skill("jank_frame_detail", { start_ts: "<帧的start_ts>", end_ts: "<帧的end_ts>", process_name: "<包名>" })
+invoke_skill("jank_frame_detail", { start_ts: "<帧的start_ts>", end_ts: "<帧的end_ts>", package: "<包名>" })
 ```
 - 没有可补齐证据时直接说明边界，不得固定跑 top 5，也不得为了完成流程调用工具。
 <!-- /strategy-detail -->

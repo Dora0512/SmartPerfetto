@@ -23,7 +23,7 @@ import {
 import {parseM6DraftProposal} from './proposalContract';
 import {TraceProcessorCpuSampler} from './traceProcessorCpuSampler';
 
-export const PROPOSAL_SQL_REGRESSION_VERSION = '3';
+export const PROPOSAL_SQL_REGRESSION_VERSION = '4';
 export const PROPOSAL_SQL_GUARDRAIL_FINGERPRINT = canonicalContentHash({
   sqlValidator: 'SQLValidator',
   sqlGuardrails: 'DEFAULT_VALIDATE_SQL_GUARDRAIL_RULES',

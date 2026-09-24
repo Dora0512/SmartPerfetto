@@ -294,7 +294,7 @@ LIMIT 20
 
 | 瓶颈段 | 深钻动作 |
 |-------|---------|
-| App frame build 超时 | `invoke_skill("jank_frame_detail", { start_ts, end_ts, process_name })` 查看主线程热点 |
+| App frame build 超时 | `invoke_skill("jank_frame_detail", { start_ts, end_ts, package })` 查看主线程热点 |
 | Render thread 超时 | 检查 GPU 频率：`invoke_skill("gpu_analysis")` |
 | SF composition 超时 | `invoke_skill("surfaceflinger_analysis")` 查看合成策略和 layer 数 |
 | Input dispatch 超时 | 检查 system_server CPU 占用和 InputDispatcher 线程状态 |

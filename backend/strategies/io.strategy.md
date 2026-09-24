@@ -165,8 +165,8 @@ invoke_skill("io_pressure")
 
 ```
 analyze_wait_chain({ process_name: "<包名>", main_thread: true, start_ts, end_ts })
-invoke_skill("main_thread_file_io_in_range", { start_ts, end_ts, process_name: "<包名>" })
-invoke_skill("page_fault_in_range", { start_ts, end_ts, process_name: "<包名>" })
+invoke_skill("main_thread_file_io_in_range", { start_ts, end_ts, package: "<包名>" })
+invoke_skill("page_fault_in_range", { start_ts, end_ts, package: "<包名>" })
 ```
 
 输出时先写清楚证据属于哪一类：

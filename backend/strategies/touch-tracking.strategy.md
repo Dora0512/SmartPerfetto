@@ -93,7 +93,7 @@ plan_template:
 **Phase 1 — 逐帧 Input-to-Display 延迟测量：**
 
 ```
-invoke_skill("input_to_frame_latency", { process_name: "<包名>" })
+invoke_skill("input_to_frame_latency", { package: "<包名>" })
 ```
 返回：每个 MOVE 事件的 5 维延迟分解（dispatch/handling/ack/e2e）+ 帧内分解（frame_dur/frame_to_present），以及统计指标（均值、P50、P90、P99、抖动）和 is_speculative 帧关联置信度。
 
@@ -155,7 +155,7 @@ ORDER BY input_ts
 跟手延迟的一个关键因素是 **input sampling 与 VSync 的相位关系**。
 
 ```
-invoke_skill("vsync_phase_alignment", { process_name: "<包名>" })
+invoke_skill("vsync_phase_alignment", { package: "<包名>" })
 ```
 
 该 Skill 测量：
