@@ -38,7 +38,7 @@ import {
   resolveRunManifestAttributionSink,
 } from '../services/selfEvolution/runManifestLifecycle';
 import type {AdaptiveRoutingReceiptV1} from '../types/adaptiveRouting';
-import {parseAdaptiveRoutingReceipt} from './adaptiveEvidenceRouter';
+import {buildAdaptiveRoutingForTurnIntent} from './adaptiveRoutingProjection';
 import type {AnalysisTurnIntent} from './analysisTurnIntent';
 import type {AnalysisHistoryTurn} from './analysisHistory';
 
@@ -307,7 +307,6 @@ export interface CreateAnalysisRunSpecInput {
   /** Complete provider configuration selected for this run, independent of budget. */
   resolvedModel?: string;
   budget?: RuntimeBudgetInputs;
-  adaptiveRouting?: AdaptiveRoutingReceiptV1;
 }
 
 function compactAuthorizationIds(ids: string[] | undefined, label: string, maxItems: number): string[] {
@@ -392,19 +391,20 @@ export function createAnalysisRunSpec(input: CreateAnalysisRunSpecInput): Analys
         : []),
     ],
   });
-  const adaptiveRouting = input.adaptiveRouting === undefined
-    ? undefined
-    : parseAdaptiveRoutingReceipt(input.adaptiveRouting);
-  if (
-    adaptiveRouting
-    && (
-      adaptiveRouting.requestedMode !== (options.analysisMode ?? 'auto')
-      || adaptiveRouting.resolvedMode !== input.resolvedMode
-    )
-  ) {
-    throw new Error('analysis_run_spec_adaptive_routing_mode_mismatch');
+  const adaptiveRouting = input.turnIntent && input.resolvedMode
+    ? buildAdaptiveRoutingForTurnIntent({
+      options,
+      resolvedMode: input.resolvedMode,
+      turnIntent: input.turnIntent,
+    })
+    : undefined;
+  if (adaptiveRouting) {
+    try {
+      sink?.recordAdaptiveRouting?.(adaptiveRouting);
+    } catch {
+      // The shadow receipt is telemetry; it must never fail the run.
+    }
   }
-  if (adaptiveRouting) sink?.recordAdaptiveRouting?.(adaptiveRouting);
 
   return {
     ...(input.turnIntent ? {turnIntent: input.turnIntent} : {}),
