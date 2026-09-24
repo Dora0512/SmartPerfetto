@@ -343,16 +343,54 @@ export function validateSkillDefinitionsInProcess(
   };
 }
 
+export interface StrategySkillCall {
+  skillId: string;
+  /** Top-level keys of a flat `{...}` argument literal; empty when the call has none. */
+  argKeys: string[];
+  line: number;
+}
+
+// Argument grammar matches the Perfetto-Skills exporter (`SKILL_CALL` /
+// `object_keys` in tools/export_from_smartperfetto.py). Names stay broader than
+// its `\w+` so a malformed name is reported missing instead of skipped.
+const STRATEGY_SKILL_CALL = /\binvoke_skill\(\s*(["'])([^"'\n]+)\1(?:\s*,\s*(\{[^{}]*\}))?/g;
+
+function objectKeys(literal: string): string[] {
+  const unquoted = literal.replace(/"[^"]*"|'[^']*'/g, '""');
+  return [...new Set([...unquoted.matchAll(/[{,]\s*(\w+)\s*(?=[:,}])/g)].map(key => key[1]))];
+}
+
+export function extractStrategySkillCalls(content: string): StrategySkillCall[] {
+  const calls: StrategySkillCall[] = [];
+  let line = 1;
+  let scanned = 0;
+  for (const match of content.matchAll(STRATEGY_SKILL_CALL)) {
+    for (; scanned < match.index; scanned++) if (content[scanned] === '\n') line++;
+    calls.push({skillId: match[2], argKeys: match[3] ? objectKeys(match[3]) : [], line});
+  }
+  return calls;
+}
+
+/**
+ * Keys a strategy example passes that the Skill does not declare as inputs.
+ *
+ * Deliberately stricter than `invoke_skill`, which also admits process-identity
+ * aliases through the identity gate: that rewrite only binds after a verified
+ * resolution, and the exported portable runner binds declared inputs only, so
+ * an example written with an alias runs unscoped there.
+ */
+export function undeclaredStrategySkillCallParams(
+  call: StrategySkillCall,
+  skill: Pick<SkillDefinition, 'inputs'>,
+): string[] {
+  const declared = new Set((skill.inputs ?? []).map(input => input.name));
+  return call.argKeys.filter(key => !declared.has(key)).sort();
+}
+
 export function extractReferencedSkillIdsFromStrategyText(
   content: string,
 ): Set<string> {
-  const referenced = new Set<string>();
-  const invokeSkillPattern = /invoke_skill\(\"([^\"]+)\"/g;
-  let match: RegExpExecArray | null;
-  while ((match = invokeSkillPattern.exec(content)) !== null) {
-    referenced.add(match[1]);
-  }
-  return referenced;
+  return new Set(extractStrategySkillCalls(content).map(call => call.skillId));
 }
 
 export function validateStrategyDefinitionsInProcess(input: {

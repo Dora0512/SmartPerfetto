@@ -4,6 +4,9 @@
 
 import type {SkillDefinition} from '../../skillEngine/types';
 import {
+  extractReferencedSkillIdsFromStrategyText,
+  extractStrategySkillCalls,
+  undeclaredStrategySkillCallParams,
   validateStrategyDefinitionsInProcess,
   validateSkillDefinitionsInProcess,
 } from '../inProcessValidator';
@@ -185,5 +188,36 @@ describe('in-process effective Skill validator', () => {
         scene: 'general',
       }),
     ]));
+  });
+});
+
+describe('strategy invoke_skill examples', () => {
+  const text = [
+    'Run `invoke_skill("jank_frame_detail", { start_ts, end_ts, process_name: "<包名, 或 a:b>" })` first.',
+    "invoke_skill('pipeline_key_slices_overlay', {",
+    '  slice_names: "\'DrawFrame\',\'syncFrameState\'",',
+    '  package: <package hint>',
+    '})',
+    'invoke_skill("cpu_analysis") then invoke_skill("bad-name")',
+  ].join('\n');
+
+  it('parses names, flat argument keys and lines like the portable exporter', () => {
+    expect(extractStrategySkillCalls(text)).toEqual([
+      {skillId: 'jank_frame_detail', argKeys: ['start_ts', 'end_ts', 'process_name'], line: 1},
+      {skillId: 'pipeline_key_slices_overlay', argKeys: ['slice_names', 'package'], line: 2},
+      {skillId: 'cpu_analysis', argKeys: [], line: 6},
+      {skillId: 'bad-name', argKeys: [], line: 6},
+    ]);
+    expect([...extractReferencedSkillIdsFromStrategyText(text)]).toEqual([
+      'jank_frame_detail', 'pipeline_key_slices_overlay', 'cpu_analysis', 'bad-name',
+    ]);
+  });
+
+  it('rejects identity aliases the Skill accepts only through the identity gate', () => {
+    const [call] = extractStrategySkillCalls(text);
+    const inputs = ['start_ts', 'end_ts', 'package'].map(name => ({name, type: 'string' as const, required: false}));
+    expect(undeclaredStrategySkillCallParams(call, {inputs})).toEqual(['process_name']);
+    expect(undeclaredStrategySkillCallParams(call, {})).toEqual(['end_ts', 'process_name', 'start_ts']);
+    expect(undeclaredStrategySkillCallParams({skillId: 'cpu_analysis', argKeys: [], line: 6}, {})).toEqual([]);
   });
 });

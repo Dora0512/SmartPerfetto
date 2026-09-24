@@ -112,7 +112,7 @@ plan_template:
 |---|---|
 | ANR / 卡死 / 主线程无响应 | `invoke_skill("anr_analysis")`；有具体事件后 `invoke_skill("anr_detail", ...)` |
 | 内存增长 / 疑似泄漏 | `invoke_skill("memory_growth_detector", { package: "<包名>" })` |
-| LMK / OOM adj | `invoke_skill("lmk_kill_attribution")` + `invoke_skill("oom_adjuster_score_timeline", { package: "<包名>" })` |
+| LMK / OOM adj | `invoke_skill("lmk_kill_attribution")` + `invoke_skill("oom_adjuster_score_timeline", { process_name: "<包名>" })` |
 | Native heap / heapprofd | `invoke_skill("native_heap_breakdown")` |
 
 **Phase 2 — 交叉验证：**

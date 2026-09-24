@@ -25,7 +25,8 @@ import {
   validateSkillDisplayContract,
 } from '../../services/skillEngine/displayContractValidator';
 import {
-  extractReferencedSkillIdsFromStrategyText,
+  extractStrategySkillCalls,
+  undeclaredStrategySkillCallParams,
   validateSkillDefinitionInProcess,
 } from '../../services/selfEvolution/inProcessValidator';
 import {
@@ -1073,7 +1074,8 @@ export function validateStrategyFrontmatter(
 
 /**
  * Validate strategy files: check that all invoke_skill("xxx") references
- * point to skills that exist in the skill registry.
+ * point to skills that exist in the skill registry, and that each example's
+ * argument keys are inputs the named Skill declares.
  *
  * Returns the number of strategy validation errors (0 = all good).
  */
@@ -1083,8 +1085,8 @@ function validateStrategySkillReferences(): number {
     return 0;
   }
 
-  // Build skill name set from YAML files on disk (no runtime loader needed)
-  const skillNames = new Set<string>();
+  // Build the skill input registry from YAML files on disk (no runtime loader needed)
+  const skills = new Map<string, Pick<SkillDefinition, 'inputs'>>();
   const skillDirs = ['atomic', 'composite', 'deep', 'system', 'comparison', 'modules', 'pipelines'];
   for (const dir of skillDirs) {
     const dirPath = path.join(SKILLS_DIR, dir);
@@ -1094,13 +1096,13 @@ function validateStrategySkillReferences(): number {
       try {
         const content = fs.readFileSync(file, 'utf-8');
         const skill = yaml.load(content) as any;
-        if (skill?.name) skillNames.add(skill.name);
+        if (skill?.name) skills.set(skill.name, {inputs: skill.inputs});
       } catch { /* skip unparseable files */ }
     }
   }
 
   console.log(colors.bold('\nStrategy → Skill Reference Validation\n'));
-  console.log(`Skill registry: ${skillNames.size} skills loaded from YAML.\n`);
+  console.log(`Skill registry: ${skills.size} skills loaded from YAML.\n`);
 
   // Parse strategy files for invoke_skill("xxx") references and cross-file frontmatter contracts.
   const strategyFiles = fs.readdirSync(STRATEGIES_DIR)
@@ -1112,6 +1114,7 @@ function validateStrategySkillReferences(): number {
   }
 
   let totalMissing = 0;
+  let totalUndeclaredParams = 0;
   let totalFrontmatterErrors = 0;
   const strategyContents = new Map<string, string>();
   const knownScenes = new Set<string>();
@@ -1142,20 +1145,30 @@ function validateStrategySkillReferences(): number {
     const content = strategyContents.get(file) || '';
     const frontmatterErrors = validateStrategyFrontmatter(content, file, frontmatterValidationContext);
 
-    // Extract all unique skill names through the shared in-process validator.
-    const referencedSkills =
-      extractReferencedSkillIdsFromStrategyText(content);
+    // Extract skill calls through the shared in-process validator.
+    const calls = extractStrategySkillCalls(content);
+    const referencedSkills = new Set(calls.map(call => call.skillId));
 
-    const missing = [...referencedSkills].filter(name => !skillNames.has(name));
-    if (missing.length > 0 || frontmatterErrors.length > 0) {
+    const missing = [...referencedSkills].filter(name => !skills.has(name));
+    const undeclaredParams = calls.flatMap(call => {
+      const skill = skills.get(call.skillId);
+      if (!skill) return [];
+      const undeclared = undeclaredStrategySkillCallParams(call, skill);
+      return undeclared.length === 0 ? [] : [
+        `line ${call.line}: invoke_skill("${call.skillId}") passes ${undeclared.join(', ')}, ` +
+        `not declared in its inputs [${(skill.inputs ?? []).map(input => input.name).join(', ')}]`,
+      ];
+    });
+    if (missing.length > 0 || undeclaredParams.length > 0 || frontmatterErrors.length > 0) {
       console.log(`${colors.red('FAIL')} ${file}`);
       for (const name of missing) {
         console.log(`  ${colors.red('ERROR:')} invoke_skill("${name}") — skill not found in registry`);
       }
-      for (const error of frontmatterErrors) {
+      for (const error of [...undeclaredParams, ...frontmatterErrors]) {
         console.log(`  ${colors.red('ERROR:')} ${error}`);
       }
       totalMissing += missing.length;
+      totalUndeclaredParams += undeclaredParams.length;
       totalFrontmatterErrors += frontmatterErrors.length;
       continue;
     }
@@ -1170,10 +1183,12 @@ function validateStrategySkillReferences(): number {
 
   console.log(colors.bold('\nStrategy Validation Summary:'));
   console.log(`  Strategy files: ${strategyFiles.length}`);
-  console.log(`  Missing skills: ${totalMissing > 0 ? colors.red(String(totalMissing)) : colors.green('0')}`);
-  console.log(`  Contract/frontmatter errors: ${totalFrontmatterErrors > 0 ? colors.red(String(totalFrontmatterErrors)) : colors.green('0')}`);
+  const count = (n: number) => n > 0 ? colors.red(String(n)) : colors.green('0');
+  console.log(`  Missing skills: ${count(totalMissing)}`);
+  console.log(`  Undeclared skill params: ${count(totalUndeclaredParams)}`);
+  console.log(`  Contract/frontmatter errors: ${count(totalFrontmatterErrors)}`);
 
-  return totalMissing + totalFrontmatterErrors;
+  return totalMissing + totalUndeclaredParams + totalFrontmatterErrors;
 }
 
 /**
